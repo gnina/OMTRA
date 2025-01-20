@@ -141,3 +141,19 @@ The unique identifier for a moleule in the database will be its smiles string. N
 
 # TODO
 A first pass implementation is available in `process_pharmit_data.py`
+
+# Strategy for processing the full dataset
+
+A master script will spawn a worker process. Each worker process will chew through a single data directory. The worker will:
+1. read molecules, query database, convert to tensors
+2. in chunks, pickle tensors to disk
+3. simultaneously record the size of each chunk in a separate location
+
+Then, a second script will:
+1. read chunk sizes
+2. create an index of chunk files + their sizes
+3. construct zarr store that can hold all the data
+4. spawn worker processed. each worker process will be handed a list of chunks and where those chunks will be written into the zarr array
+5. each worker will:
+    1. read chunk from disk
+    2. write chunk to zarr store at pre-specified location
