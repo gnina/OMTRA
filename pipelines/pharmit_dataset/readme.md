@@ -157,3 +157,13 @@ Then, a second script will:
 5. each worker will:
     1. read chunk from disk
     2. write chunk to zarr store at pre-specified location
+
+Other considerations:
+- should subprocesses being writing stdout/stderr to files? otherwise how can we catch errors?
+
+# How much data is there?
+
+There are about 20 `/dataXX` directories. 
+
+A `dataXX/conformers` directory contains about 50k subdirectories
+A `dataXX/conformers/0` directory contains about 400 conformer files
