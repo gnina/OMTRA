@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 import gzip
 from rdkit import Chem
-import MySQLdb
+import pymysql
 import itertools
 
 # TODO: this script should actually take as input just a hydra config 
@@ -14,7 +14,7 @@ def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
 
     # temporary default path for development
-    p.add_argument('--conf_file', type=Path, default='../tmp_conformer_inspection/100.sdf.gz')
+    p.add_argument('--conf_file', type=Path, default='/home/icd3/OMTRA/pipelines/pharmit_dataset/tmp_conformer_inspection/100.sdf.gz')
     p.add_argument('--skip_query', action='store_true', help='Skip querying the database for names')
 
     args = p.parse_args()
@@ -48,17 +48,49 @@ def extract_pharmacophore_data(mol):
 
     return parsed_data
 
+import re
+
+
+
+
 class NameFinder():
 
     def __init__(self):
-        self.conn = MySQLdb.connect(host="localhost", user="pharmit", db="conformers")
+        self.conn = pymysql.connect(
+            host="localhost",
+            user="pharmit", 
+            db="conformers",)
+            # password="",
+            # unix_socket="/var/run/mysqld/mysqld.sock")
         self.cursor = self.conn.cursor()
 
     def query(self, smiles: str):
-        self.cursor.execute("SELECT name FROM names WHERE smile = %s", (smiles,))
-        names = self.cursor.fetchall()
-        names = list(itertools.chain.from_iterable(names)) 
-        return names
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT name FROM names WHERE smile = %s", (smiles,))
+            names = cursor.fetchall()
+        names = list(itertools.chain.from_iterable(names))
+        return self.extract_prefixes(names)
+    
+    def extract_prefixes(self, names):
+        """
+        Extracts prefixes from a list of names where the prefix consists of 
+        all characters at the start of the string that are not numbers or special characters.
+        
+        Args:
+            names (list of str): A list of strings representing molecule names.
+            
+        Returns:
+            list of str: A list of prefixes extracted from the names.
+        """
+        prefixes = set()
+        for name in names:
+            # Use a regex to match all letters at the start of the string
+            match = re.match(r'^[A-Za-z]+', name)
+            if match:
+                prefixes.add(match.group(0))
+            else:
+                continue
+        return list(prefixes)
 
 if __name__ == '__main__':
     args = parse_args()
