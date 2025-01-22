@@ -138,27 +138,26 @@ def read_mol_from_conf_file(conf_file):
             raise ValueError(f"Failed to parse a molecule from {conf_file}")
     return mol
 
+def crawl_conformer_files(db_dir: Path):
+    for data_dir in db_dir.iterdir():
+        conformers_dir = data_dir / 'conformers'
+        for conformer_subdir in conformers_dir.iterdir():
+            for conformer_file in conformer_subdir.iterdir():
+                yield conformer_file
+
+
 if __name__ == '__main__':
     args = parse_args()
 
     mol_tensorizer = MoleculeTensorizer(atom_type_map=args.atom_type_map)
     name_finder = NameFinder(spoof_db=args.spoof_db)
 
-    # TODO: turn into a generator instead of a list because we don't want to load all the conformer files into memory in practice
-    conformer_files = []
-    for data_dir in args.db_dir.iterdir():
-        conformers_dir = data_dir / 'conformers'
-        for conformer_subdir in conformers_dir.iterdir():
-            for conformer_file in conformer_subdir.iterdir():
-                conformer_files.append(conformer_file)
-
-    for conformer_file in conformer_files:
+    for conformer_file in crawl_conformer_files(args.db_dir):
         mol = read_mol_from_conf_file(conformer_file)
         smiles = Chem.MolToSmiles(mol)
         names = name_finder.query(smiles)
         pharmacophore_data = extract_pharmacophore_data(mol)
         xae_mol = mol_tensorizer.featurize_molecules([mol])
-
 
     # TODO: convert pharmacophore and names into tensors
     # TODO: process molecules in batches; 
