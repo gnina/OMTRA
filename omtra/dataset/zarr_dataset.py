@@ -10,12 +10,12 @@ class ZarrDataset(ABC, torch.utils.data.Dataset):
 
     """Base class for single datasets. Specifically a dataset that is stored in a zarr store. Supports caching of chunks to minimize disk access."""
 
-    def __init__(self, zarr_store_path: str, cache_size: int = 1024 * 1024):
+    def __init__(self, zarr_store_path: str, n_chunks_cache: float = 4.25):
         super().__init__()
 
         self.store = zarr.storage.LocalStore(zarr_store_path)
         self.root = zarr.open(store=self.store, mode='r')
-        self.cache_size = cache_size
+        self.n_chunks_cache = n_chunks_cache
         self.build_cached_chunk_fetchers()
         
 
@@ -29,11 +29,17 @@ class ZarrDataset(ABC, torch.utils.data.Dataset):
         
     def build_cached_chunk_fetchers(self):
         self.chunk_fetchers = {}
+        # self.chunks_accessed = defaultdict(set) # for debugging
+
         for array_name in self.array_keys:
+
+            approx_chunk_size = self.root[array_name].nbytes / self.root[array_name].nchunks
+            cache_size = int(self.n_chunks_cache*approx_chunk_size)
             
             # TODO: array-dependent cache size
-            @functools.lru_cache(self.cache_size)
+            @functools.lru_cache(cache_size)
             def fetch_chunk(chunk_id, array_name=array_name): # we assume all arrays are chunked only along the first dimension 
+                # self.chunks_accessed[array_name].add(chunk_id)
                 chunk_size = self.root[array_name].chunks[0]
                 chunk_start_idx = chunk_id * chunk_size
                 chunk_end_idx = chunk_start_idx + chunk_size

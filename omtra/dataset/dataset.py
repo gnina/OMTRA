@@ -38,6 +38,7 @@ class PharmitDataset(ZarrDataset):
         e = self.slice_array('edge_data/e', node_start_idx, node_end_idx)
         edge_idxs = self.slice_array('edge_data/edge_index', edge_start_idx, edge_end_idx)
 
+        # TODO: converse to dense representation
         # TODO: convert to DGL graph
         # TODO: build general graph construction code that works across datasets (take from PharmacoFlow)
 
