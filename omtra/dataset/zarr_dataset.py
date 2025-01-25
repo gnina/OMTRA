@@ -23,6 +23,10 @@ class ZarrDataset(ABC, torch.utils.data.Dataset):
     def __len__(self):
         pass
 
+    @abstractmethod
+    def __getitem__(self, idx):
+        pass
+
     @functools.cached_property
     def array_keys(self):
         return list_zarr_arrays(self.root)
