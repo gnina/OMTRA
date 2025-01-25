@@ -23,25 +23,15 @@ class MultiMultiSet(torch.utils.data.Dataset):
 
 class BaseOmtraDataset(ABC, torch.utils.data.Dataset):
 
+    """Base class for single datasets. Specifically a dataset that is stored in a zarr store. Supports caching of chunks to minimize disk access."""
+
     def __init__(self, zarr_store_path: str, cache_size: int = 1024 * 1024):
         super().__init__()
 
         self.store = zarr.storage.LocalStore(zarr_store_path)
         self.root = zarr.open(store=self.store, mode='r')
         self.cache_size = cache_size
-
         self.build_cached_chunk_fetchers()
-
-
-        # by assuming some default structure to our zarr data, we can directly infer the number of examples in the dataset
-        # actually this is bad - this may be constricting, easier to just let __len__ be abstract and have the user implement it
-        # example_group_name = list(root.groups())[0][0]
-        # example_group = root[example_group_name]
-        # try:
-        #     lookup_key = [ array_name for array_name in example_group.array_keys() if 'lookup' in array_name][0]
-        # except IndexError:
-        #     raise ValueError('Zarr groups must have instance-specific lookup arrays with "lookup" in the name')
-        # n_examples = example_group[lookup_key].shape[0]
         
 
     @abstractmethod
@@ -52,7 +42,6 @@ class BaseOmtraDataset(ABC, torch.utils.data.Dataset):
     def array_keys(self):
         return list_zarr_arrays(self.root)
         
-
     def build_cached_chunk_fetchers(self):
         self.chunk_fetchers = {}
         for array_name in self.array_keys:
@@ -68,6 +57,7 @@ class BaseOmtraDataset(ABC, torch.utils.data.Dataset):
             self.chunk_fetchers[array_name] = fetch_chunk
 
     def slice_array(self, array_name, start_idx, end_idx=None):
+        """Slice data from a zarr array but utilize chunk caching to minimize disk access."""
 
         if end_idx is None:
             end_idx = start_idx+1
