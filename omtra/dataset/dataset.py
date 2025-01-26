@@ -4,6 +4,9 @@ from abc import ABC, abstractmethod
 class OMTRADataset(ABC, torch.utils.data.Dataset):
     """Base class for single datasets."""
 
+    def __init__(self):
+        super().__init__()
+
     @classmethod
     @abstractmethod
     def name(cls):
