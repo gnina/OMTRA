@@ -4,6 +4,15 @@ set -e # this will stop the script on first error
 # get the name of the current conda environment
 ENV_NAME=$(basename "$CONDA_PREFIX")
 
+# Check if running in base environment
+if [[ "$ENV_NAME" == "base" || "$ENV_NAME" == "miniforge3" ]]; then
+    echo "WARNING: This script should not be run in the base environment."
+    echo "Please create and activate a new environment first: E.g.:"
+    echo "$ mamba create -n omtra python=3.11"
+    echo "$ mamba activate omtra"
+    exit 1
+fi
+
 # print the name of the current conda environment to the terminal
 echo "Building omtra into the environment '$ENV_NAME'"
 
