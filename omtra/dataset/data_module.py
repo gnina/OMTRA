@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader
 from typing import List, Dict
 import dgl
 
-from omtra.dataset.multitask import MultiMultiSet
+from omtra.dataset.multitask import MultitaskDataSet
 
 
 class MultiTaskDataModule(pl.LightningDataModule):
@@ -11,8 +11,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
     def __init__(
         self, 
         tasks: List[dict], 
-        dataset_paths: Dict[str, str],
-        dataset_config: dict, 
+        multitask_dataset_config: dict, 
         prior_config: dict, 
         batch_size: int, 
         num_workers: int = 0, 
@@ -21,8 +20,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
     ):
         super().__init__()
         self.tasks = tasks
-        self.dataset_paths = dataset_paths
-        self.dataset_config = dataset_config
+        self.multitask_dataset_config = multitask_dataset_config
         self.distributed = distributed
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -37,10 +35,9 @@ class MultiTaskDataModule(pl.LightningDataModule):
             self.val_dataset = self.load_dataset('val')
 
     def load_dataset(self, split: str):
-        return MultiMultiSet(split, 
+        return MultitaskDataSet(split, 
                              tasks=self.tasks,
-                             dataset_paths=self.dataset_paths,
-                             **self.dataset_config)
+                             **self.multitask_dataset_config)
     
     def train_dataloader(self):
         # TODO: we definitely need a custom dataloader here due to multitasks, adaptive batching, etc.
