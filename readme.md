@@ -6,6 +6,8 @@ A multi-task generative model for small-molecule structure-based drug design.
 
 For now:
 ```bash
+git clone https://github.com/gnina/OMTRA.git
+cd OMTRA
 mamba create -n omtra python=3.11
 mamba activate omtra
 chmod +x build_env.sh
