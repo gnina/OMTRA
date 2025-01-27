@@ -1,0 +1,19 @@
+defaults:
+  - _self_
+  - model: default
+  - trainer: default
+  - data: multitask
+
+seed: 42
+
+# specify tasks for training
+# TODO: in future we might need support for disjoint train and val tasks (to measure generalizability?)
+tasks:
+  - name: "conformer_gen"
+    probability: 0.6
+  - name: "pharmacophore_gen"
+    probability: 0.4
+
+# global overrides
+batch_size: 32
+num_workers: 4
