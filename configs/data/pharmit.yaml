@@ -1,4 +1,0 @@
-_target_: omtra.dataset.pharmit.PharmitDataset
-name: "pharmit"
-zarr_store_path: ${paths.data_dir}/pharmit_processed
-graphs_per_chunk: 1000

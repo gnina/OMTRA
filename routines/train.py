@@ -13,9 +13,10 @@ def train(cfg: DictConfig):
     # set seed everywhere (pytorch, numpy, python)
     pl.seed_everything(cfg.seed, workers=True)
 
-    print(f"⚛ Instantiating datamodule <{cfg.data._target_}>")
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
+    print(f"⚛ Instantiating datamodule <{cfg.task_group.data._target_}>")
+    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.task_group.data)
 
+    datamodule.setup(stage='fit')
     # TODO: Implmenet other instantiation logic
 
 

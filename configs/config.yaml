@@ -1,19 +1,15 @@
 defaults:
+# we just need three things to train on: a model, a trainer and a group of tasks
   - _self_
   - model: default
   - trainer: default
-  - data: multitask
+  - task_group: docking
 
 seed: 42
-
-# specify tasks for training
-# TODO: in future we might need support for disjoint train and val tasks (to measure generalizability?)
-tasks:
-  - name: "conformer_gen"
-    probability: 0.6
-  - name: "pharmacophore_gen"
-    probability: 0.4
 
 # global overrides
 batch_size: 32
 num_workers: 4
+
+paths:
+  data_dir: /dummy_path/
