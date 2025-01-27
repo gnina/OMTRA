@@ -1,0 +1,5 @@
+# example of a individual dataset
+_target_: omtra.dataset.dataset.OMTRADataset
+
+zarr_store_path: ${paths.data_dir}/OMTRADataset
+graphs_per_chunk: 1000
