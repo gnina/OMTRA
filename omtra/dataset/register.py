@@ -1,7 +1,9 @@
 from omtra.dataset.pharmit import PharmitDataset
+from omtra.dataset.plinder import PlinderDataset
 
 supported_datasets = [
     PharmitDataset,
+    PlinderDataset
 ]
 
 dataset_names = [cls_obj.name for cls_obj in supported_datasets]

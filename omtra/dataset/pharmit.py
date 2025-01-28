@@ -20,7 +20,7 @@ class PharmitDataset(ZarrDataset):
         return 'pharmit'
 
     def __len__(self):
-        return self.root['node_data']['node_lookup'].shape[0]
+        return self.root['lig/node/graph_lookup'].shape[0]
 
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
@@ -78,3 +78,17 @@ class PharmitDataset(ZarrDataset):
         g = build_complex_graph(node_data=g_node_data, edge_idxs=g_edge_idxs, edge_data=g_edge_data)
 
         return g
+    
+    def retrieve_graph_chunks(self):
+        n_graphs = len(self)
+        n_even_chunks, n_graphs_in_last_chunk = divmod(n_graphs, self.graphs_per_chunk)
+
+        n_chunks = n_even_chunks + int(n_graphs_in_last_chunk > 0)
+
+        # construct a tensor containing the index ranges for each chunk
+        chunk_index = torch.zeros(n_chunks, 2, dtype=torch.int64)
+        chunk_index[:, 0] = self.graphs_per_chunk*torch.arange(n_chunks)
+        chunk_index[:-1, 1] = chunk_index[1:, 0]
+        chunk_index[-1, 1] = n_graphs
+
+        return chunk_index

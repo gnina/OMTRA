@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import dgl
 from typing import List, Dict
+from copy import deepcopy
 
 from omtra.dataset.register import dataset_name_to_class
 from omtra.tasks.register import task_name_to_class
@@ -38,12 +39,8 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
         """
 
-        # initialize the datasets we need
+        # get the names of the datasets we'll be using
         self.dataset_names = list(single_dataset_configs.keys())
-        dataset_classes = [dataset_name_to_class[dataset_name] for dataset_name in self.dataset_names]
-        self.datasets = {
-            dataset_name: dataset_class(**single_dataset_configs[dataset_name]) for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes)
-        }
 
         # retrieve the tasks we need and their marginal probabilities p(task)
         self.task_names = []
@@ -75,6 +72,32 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         p_dataset_task = p_dataset_task * p_task.unsqueeze(1)
         p_dataset_task = p_dataset_task / p_dataset_task.sum() # just make sure it sums to 1
         self.p_dataset_task = p_dataset_task
+
+
+        # initialize dataset classes
+        dataset_classes = [dataset_name_to_class[dataset_name] for dataset_name in self.dataset_names]
+        for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes):
+            single_dataset_config = deepcopy(single_dataset_configs[dataset_name])
+
+            # this is super-duper clunky but we have to do it for now
+            # if we are using the plinder dataset and we are doing a mixture of tasks that use and dont use the apo state
+            # then we're going to need two separate chunk trackers in the sampler class, and as a result we need to double the cache size
+
+            # get the tasks associated with this dataset
+            task_idxs = p_dataset_task[:, self.dataset_names.index(dataset_name)].nonzero(as_tuple=True)[0]
+            tasks = [self.tasks[self.task_names[task_idx]] for task_idx in task_idxs]
+
+            
+            if dataset_name == 'plinder':
+                task_uses_apo = [task.uses_apo for task in tasks] 
+                has_tasks_using_apo = any(task_uses_apo)
+                has_tasks_not_using_apo = not all(task_uses_apo)
+                if has_tasks_using_apo and has_tasks_not_using_apo:
+                    single_dataset_config['n_chunks_cache'] = 7
+
+        self.datasets = {
+            dataset_name: dataset_class(**single_dataset_configs[dataset_name]) for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes)
+        }
 
 
     def __len__(self):

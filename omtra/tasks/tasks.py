@@ -30,6 +30,13 @@ class Task:
         present_modality_idxs = torch.where(present_modality_mask)[0]
         return [canonical_modality_order[i] for i in present_modality_idxs]
     
+    @functools.cached_property
+    def uses_apo(self):
+        # TODO: this logic is subject to change if we ever decide to do apo sampling as a task
+        # because then there would be a task where the intial protein state is noise but we still require the apo state (it would be the target)
+        # but i think sampling apo states is not a very useful task for the application of sbdd
+        return self.protein_state_t0 == 'apo'
+    
 ##
 # tasks with ligand only
 ##

@@ -22,11 +22,7 @@ class ZarrDataset(OMTRADataset):
         
 
     @abstractmethod
-    def __len__(self):
-        pass
-
-    @abstractmethod
-    def __getitem__(self, idx):
+    def retrieve_graph_chunks(self):
         pass
 
     @functools.cached_property
