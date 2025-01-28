@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import biotite.structure as struc
@@ -7,7 +8,6 @@ import biotite.structure.io.pdb as pdb
 import numpy as np
 from biotite.structure.io.pdbx import CIFFile, get_structure
 from omtra.data.xae_ligand import MoleculeTensorizer
-from pathlib import Path
 from plinder.core import PlinderSystem
 from rdkit import Chem
 
@@ -56,25 +56,33 @@ class PDBWriter:
 
 class StructureProcessor:
     def __init__(
-        self, atom_map: List[str], pocket_cutoff: float = 5.0, n_cpus: int = 1, raw_data: str = '/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2' 
+        self,
+        atom_map: List[str],
+        pocket_cutoff: float = 5.0,
+        n_cpus: int = 1,
+        raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
     ):
         self.atom_map = atom_map
         self.pocket_cutoff = pocket_cutoff
         self.tensorizer = MoleculeTensorizer(atom_map=atom_map, n_cpus=n_cpus)
         self.raw_data = Path(raw_data)
 
-    def load_structure(self, path: str, chain_mapping: Optional[Dict[str, str]] = None) -> struc.AtomArray:
+    def load_structure(
+        self, path: str, chain_mapping: Optional[Dict[str, str]] = None
+    ) -> struc.AtomArray:
         cif_file = CIFFile.read(path)
         structure = get_structure(
             cif_file, model=1, use_author_fields=False, include_bonds=True
         )
-        
+
         if chain_mapping is not None:
-            chain_ids = [chain_mapping.get(chain, chain) for chain in structure.chain_id]
+            chain_ids = [
+                chain_mapping.get(chain, chain) for chain in structure.chain_id
+            ]
             structure.chain_id = chain_ids
-        
+
         raw_cif = Path(path).relative_to(self.raw_data)
-            
+
         return structure[structure.res_name != "HOH"], raw_cif
 
     def process_structure(
@@ -91,22 +99,21 @@ class StructureProcessor:
 
     def process_ligands(self, ligand_paths: List[str]) -> Dict[str, LigandData]:
         ligand_mols = [Chem.SDMolSupplier(path)[0] for path in ligand_paths]
-        (
-            positions,
-            atom_types,
-            atom_charges,
-            bond_types,
-            bond_idxs,
-            _,
-        ) = self.tensorizer.featurize_molecules(ligand_mols)
+        (positions, atom_types, atom_charges, bond_types, bond_idxs, _, failed_idxs) = (
+            self.tensorizer.featurize_molecules(ligand_mols)
+        )
+
+        ligand_paths = [
+            path for i, path in enumerate(ligand_paths) if i not in failed_idxs
+        ]
 
         ligands_data = {}
         for i, path in enumerate(ligand_paths):
             raw_sdf = Path(path).relative_to(self.raw_data)
-            ligand_key = os.path.splitext(os.path.basename(path))[0]
+            ligand_key = Path(path).stem
 
             ligands_data[ligand_key] = LigandData(
-                sdf=str(raw_sdf), 
+                sdf=str(raw_sdf),
                 coords=positions[i],
                 atom_types=atom_types[i],
                 atom_charges=atom_charges[i],
@@ -154,9 +161,14 @@ class StructureProcessor:
 
 
 class SystemProcessor:
-    def __init__(self, atom_map: List[str], pocket_cutoff: float = 5.0, raw_data: str = '/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2'):
+    def __init__(
+        self,
+        atom_map: List[str],
+        pocket_cutoff: float = 5.0,
+        raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
+    ):
         self.structure_processor = StructureProcessor(
-            atom_map, pocket_cutoff=pocket_cutoff, raw_data=raw_data 
+            atom_map, pocket_cutoff=pocket_cutoff, raw_data=raw_data
         )
         self.pdb_writer = None
 
@@ -175,7 +187,13 @@ class SystemProcessor:
         ]
 
         superposed_apo_paths = [
-            str(Path(path).parent / "apo" / system_id / Path(path).stem / "superposed.cif") 
+            str(
+                Path(path).parent
+                / "apo"
+                / system_id
+                / Path(path).stem
+                / "superposed.cif"
+            )
             for path in apo_paths
         ]
 
@@ -204,7 +222,9 @@ class SystemProcessor:
             self.pdb_writer = PDBWriter(chain_mapping)
 
         # Process receptor
-        receptor, cif = self.structure_processor.load_structure(receptor_path, chain_mapping)
+        receptor, cif = self.structure_processor.load_structure(
+            receptor_path, chain_mapping
+        )
         receptor_data = self.structure_processor.process_structure(receptor, cif)
 
         # Process ligands
