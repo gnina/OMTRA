@@ -53,10 +53,10 @@ class PDBWriter:
 
 
 class StructureProcessor:
-    def __init__(self, atom_map: List[str], pocket_cutoff: float = 5.0):
+    def __init__(self, atom_map: List[str], pocket_cutoff: float = 5.0, n_cpus: int = 1):
         self.atom_map = atom_map
         self.pocket_cutoff = pocket_cutoff
-        self.tensorizer = MoleculeTensorizer(atom_map=atom_map, n_cpus=1)
+        self.tensorizer = MoleculeTensorizer(atom_map=atom_map, n_cpus=n_cpus)
 
     def load_structure(self, path: str) -> struc.AtomArray:
         cif_file = CIFFile.read(path)
@@ -65,13 +65,18 @@ class StructureProcessor:
         )
         return structure[structure.res_name != "HOH"]
 
-    def process_structure(self, structure: struc.AtomArray) -> StructureData:
+    def process_structure(self, structure: struc.AtomArray, chain_mapping: Optional[Dict[str, str]] = None) -> StructureData:
+        if chain_mapping is not None:
+            chain_ids = [chain_mapping.get(chain, chain) for chain in structure.chain_id]
+        else:
+            chain_ids = structure.chain_id
+
         return StructureData(
             coords=structure.coord,
             atom_names=structure.atom_name,
             res_ids=structure.res_id,
             res_names=structure.res_name,
-            chain_ids=structure.chain_id,
+            chain_ids=chain_ids,
         )
 
     def process_ligands(self, ligand_paths: List[str]) -> Dict[str, LigandData]:
@@ -182,7 +187,7 @@ class SystemProcessor:
 
         # Process receptor
         receptor = self.structure_processor.load_structure(receptor_path)
-        receptor_data = self.structure_processor.process_structure(receptor)
+        receptor_data = self.structure_processor.process_structure(receptor, chain_mapping)
 
         # Process ligands
         ligands_data = self.structure_processor.process_ligands(ligand_paths)
@@ -205,7 +210,8 @@ class SystemProcessor:
         apo_structures = {}
         if apo_paths:
             for apo_path in apo_paths:
-                apo_key = os.path.basename(os.path.dirname(apo_path))
+                filename = os.path.basename(apo_path)
+                apo_key = os.path.splitext(filename)[0]
                 apo_struct = self.structure_processor.load_structure(apo_path)
                 apo_structures[apo_key] = self.structure_processor.process_structure(
                     apo_struct
