@@ -1,0 +1,15 @@
+defaults:
+# we just need three things to train on: a model, a trainer and a group of tasks
+  - _self_
+  - model: default
+  - trainer: default
+  - task_group: docking
+
+seed: 42
+
+# global overrides
+batch_size: 32
+num_workers: 4
+
+paths:
+  data_dir: /dummy_path/

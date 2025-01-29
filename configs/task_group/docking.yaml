@@ -1,0 +1,21 @@
+# example of a task group where we can have all tasks related to docking in one place
+defaults:
+  - _self_
+
+  # Load the multitask data config from configs/task_group/data/multitask.yaml
+  - data: multitask
+  # Merge pharmit.yaml directly into the single_dataset_configs dict (which is used for MultiTaskDataModule)
+  - data@data.multitask_dataset_config.single_dataset_configs.pharmit: pharmit
+  - data@data.multitask_dataset_config.single_dataset_configs.omtradataset: omtradataset
+
+tasks:
+  - name: "UnconditionalLigandDocking"
+    probability: 0.6
+  - name: "ApoConditionedLigandDocking"
+    probability: 0.4
+
+dataset_task_coupling:
+  UnconditionalLigandDocking:
+    - [pharmit, 1.0]
+  ApoConditionedLigandDocking:
+    - [pharmit, omtradataset, 1.0]

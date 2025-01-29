@@ -1,0 +1,5 @@
+# example of a individual dataset
+_target_: omtra.dataset.pharmit.PharmitDataset
+
+zarr_store_path: ${paths.data_dir}/pharmit_processed
+graphs_per_chunk: 1000
