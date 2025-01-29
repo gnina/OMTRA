@@ -6,12 +6,13 @@ from copy import deepcopy
 
 from omtra.dataset.register import dataset_name_to_class
 from omtra.tasks.register import task_name_to_class
+from omtra.tasks.tasks import Task
 
 class MultitaskDataSet(torch.utils.data.Dataset):
 
     """A dataset capable of serving up samples from multiple zarr datasets."""
 
-    def __init__(self, split: str, tasks: List[dict], single_dataset_configs: Dict[str, dict], dataset_task_coupling: dict):
+    def __init__(self, split: str, task_inputs: List[dict], single_dataset_configs: Dict[str, dict], dataset_task_coupling: dict):
         """
         Describing the nature of the inputs, for now:
 
@@ -45,16 +46,13 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         # retrieve the tasks we need and their marginal probabilities p(task)
         self.task_names = []
         p_task = []
-        for task_dict in tasks:
+        for task_dict in task_inputs:
             self.task_names.append(task_dict['name'])
             p_task.append(task_dict['probability'])
         
         p_task = torch.tensor(p_task)
         p_task = p_task / p_task.sum()
-        task_classes = [task_name_to_class[task_name] for task_name in self.task_names]
-        self.tasks = {
-            task_name: task_class() for task_name, task_class in zip(self.task_names, task_classes)
-        }
+        self.tasks: List[Task] = [task_name_to_class[task_name] for task_name in self.task_names]
 
         assert set(dataset_task_coupling.keys()) == set(self.task_names), "The keys of dataset_task_coupling must be the same as the task names in tasks"
 
@@ -84,12 +82,13 @@ class MultitaskDataSet(torch.utils.data.Dataset):
             # then we're going to need two separate chunk trackers in the sampler class, and as a result we need to double the cache size
 
             # get the tasks associated with this dataset
-            task_idxs = p_dataset_task[:, self.dataset_names.index(dataset_name)].nonzero(as_tuple=True)[0]
-            tasks = [self.tasks[self.task_names[task_idx]] for task_idx in task_idxs]
+
 
             
             if dataset_name == 'plinder':
-                task_uses_apo = [task.uses_apo for task in tasks] 
+                task_idxs_for_this_dataset = p_dataset_task[:, self.dataset_names.index(dataset_name)].nonzero(as_tuple=True)[0]
+                tasks_for_this_dataset_ = [ self.tasks[task_idx] for task_idx in task_idxs_for_this_dataset ]
+                task_uses_apo = [task.uses_apo for task in tasks_for_this_dataset_] 
                 has_tasks_using_apo = any(task_uses_apo)
                 has_tasks_not_using_apo = not all(task_uses_apo)
                 if has_tasks_using_apo and has_tasks_not_using_apo:

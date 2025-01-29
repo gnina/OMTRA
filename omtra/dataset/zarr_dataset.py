@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 
 from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.dataset.dataset import OMTRADataset
+from omtra.tasks.tasks import Task
 
 class ZarrDataset(OMTRADataset):
 
@@ -86,3 +87,12 @@ class ZarrDataset(OMTRADataset):
         if single_idx:
             data = data.squeeze()
         return data
+    
+    @abstractmethod
+    def get_num_nodes(self, task: Task, start_idx: int, end_idx: int):
+        pass
+
+    @abstractmethod
+    def get_num_edges(self, task: Task, start_idx: int, end_idx: int):
+        pass
+    

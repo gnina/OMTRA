@@ -37,7 +37,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
 
     def load_dataset(self, split: str):
         return MultitaskDataSet(split, 
-                             tasks=self.tasks,
+                             task_inputs=self.tasks,
                              **self.multitask_dataset_config)
     
     def train_dataloader(self):
