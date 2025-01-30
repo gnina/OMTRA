@@ -63,7 +63,7 @@ class MoleculeTensorizer():
         all_bond_types = [bond for i, bond in enumerate(all_bond_types) if i not in failed_idxs]
         all_bond_idxs = [idx for i, idx in enumerate(all_bond_idxs) if i not in failed_idxs]
 
-        return all_positions, all_atom_types, all_atom_charges, all_bond_types, all_bond_idxs, num_failed
+        return all_positions, all_atom_types, all_atom_charges, all_bond_types, all_bond_idxs, num_failed, failed_idxs
 
 
 

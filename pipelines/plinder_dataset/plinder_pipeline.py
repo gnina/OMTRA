@@ -7,7 +7,7 @@ import biotite.structure as struc
 import biotite.structure.io.pdb as pdb
 import numpy as np
 from biotite.structure.io.pdbx import CIFFile, get_structure
-from omtra.data.xae_ligand import MoleculeTensorizer
+from omtra.data.xace_ligand import MoleculeTensorizer
 from plinder.core import PlinderSystem
 from rdkit import Chem
 
