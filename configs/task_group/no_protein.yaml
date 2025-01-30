@@ -1,0 +1,24 @@
+# This could be a task group where all the tasks are listed
+defaults:
+  - _self_
+
+  # Load the multitask data config from configs/task_group/data/multitask.yaml
+  - data: multitask
+  # Merge pharmit.yaml directly into the single_dataset_configs dict (which is used for MultiTaskDataModule)
+  - data@data.multitask_dataset_config.single_dataset_configs.pharmit: pharmit
+
+tasks:
+  - name: denovo_ligand
+    probability: 0.33
+  - name: denovo_ligand_pharmacophore
+    probability: 0.33
+  - name: ligand_conformer
+    probability: 0.33
+
+dataset_task_coupling:
+  denovo_ligand:
+    - [pharmit, 1.0]
+  denovo_ligand_pharmacophore:
+    - [pharmit, 1.0]
+  ligand_conformer:
+    - [pharmit, 1.0]
