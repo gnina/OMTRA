@@ -1,0 +1,5 @@
+# example of a individual dataset
+# these areguments will be unpacked into omtra.dataset.pharmit.PharmitDataset; but we need precise control over when this happens, so no using the _target_ key
+
+processed_data_dir: ${omtra_root:}/data/pharmit/
+graphs_per_chunk: 1000
