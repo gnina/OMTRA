@@ -82,9 +82,6 @@ class MultitaskDataSet(torch.utils.data.Dataset):
             # then we're going to need two separate chunk trackers in the sampler class, and as a result we need to double the cache size
 
             # get the tasks associated with this dataset
-
-
-            
             if dataset_name == 'plinder':
                 task_idxs_for_this_dataset = p_dataset_task[:, self.dataset_names.index(dataset_name)].nonzero(as_tuple=True)[0]
                 tasks_for_this_dataset_ = [ self.tasks[task_idx] for task_idx in task_idxs_for_this_dataset ]

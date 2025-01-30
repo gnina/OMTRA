@@ -6,6 +6,7 @@ defaults:
   - data: multitask
   # Merge pharmit.yaml directly into the single_dataset_configs dict (which is used for MultiTaskDataModule)
   - data@data.multitask_dataset_config.single_dataset_configs.pharmit: pharmit
+  - data@data.multitask_dataset_config.single_dataset_configs.plinder: plinder
 
 tasks:
   - name: "LigandConformer"
@@ -18,11 +19,12 @@ tasks:
     probability: 0.2
 
 dataset_task_coupling:
-  LigandConformer:
-    - [pharmit, 1.0]
-  ProteinPharmacophore:
-    - [pharmit, 1.0]
+  ligand_conformer:
+    - [pharmit, 0.5]
+    - [plinder, 0.5]
+  protein_pharamcophore:
+    - [plinder, 1.0]
   unconditional_ligand_docking:
-    - [pharmit, 1.0]
+    - [pli, 1.0]
   apo_conditioned_denovo_ligand:
     - [pharmit, 1.0]

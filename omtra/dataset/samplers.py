@@ -88,6 +88,7 @@ class MultiTaskSampler(Sampler):
 
             # TODO: broadcast or gather the task_idx and dataset_idx to all ranks
 
+            # get chunk tracker
             chunk_tracker_idx = self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)]
             chunk_tracker: ChunkTracker = self.chunk_trackers[chunk_tracker_idx]
 
