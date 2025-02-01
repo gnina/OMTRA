@@ -9,6 +9,7 @@ from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
+from omtra.data.graph import edge_builders
 
 class PharmitDataset(ZarrDataset):
     def __init__(self, 
@@ -31,6 +32,9 @@ class PharmitDataset(ZarrDataset):
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
         task_class: Task = task_name_to_class[task_name]
+
+        # check if this task includes pharmacophore data
+        include_pharmacophore = 'pharmacophore' in task_class.modalities_present
 
         # slice lig node data
         xace_ligand = []
@@ -72,7 +76,6 @@ class PharmitDataset(ZarrDataset):
         }
 
         # if this task includes pharmacophore data, then we need to slice and add that data to the graph
-        include_pharmacophore = 'pharmacophore' in task_class.modalities_present
         if include_pharmacophore:
             start_idx, end_idx = self.slice_array('pharm/node/graph_lookup', idx)
             pharm_x = self.slice_array('pharm/node/x', start_idx, end_idx)
@@ -80,6 +83,11 @@ class PharmitDataset(ZarrDataset):
             pharm_x = torch.from_numpy(pharm_x)
             pharm_a = torch.from_numpy(pharm_a)
             g_node_data['pharm'] =  {'x': pharm_x, 'a': pharm_a}
+
+            assert self.graph_config['pharm_to_pharm']['type'] == 'complete', 'the following code assumes complete pharm-pharm graph'
+            g_edge_idxs['pharm_to_pharm'] = edge_builders.complete_graph(pharm_x)
+
+        # for now, we assume lig-pharm edges are built on the fly
 
         g = build_complex_graph(node_data=g_node_data, edge_idxs=g_edge_idxs, edge_data=g_edge_data)
 
@@ -104,7 +112,7 @@ class PharmitDataset(ZarrDataset):
 
         return chunk_index
     
-    def get_num_nodes(self, task: Task, start_idx, end_idx):
+    def get_num_nodes(self, task: Task, start_idx, end_idx, per_ntype=False):
         # here, unlike in other places, start_idx and end_idx are 
         # indexes into the graph_lookup array, not a node/edge data array
 
@@ -117,6 +125,9 @@ class PharmitDataset(ZarrDataset):
             graph_lookup = self.slice_array(f'{ntype}/node/graph_lookup', start_idx, end_idx)
             node_counts.append(graph_lookup[:, 1] - graph_lookup[:, 0])
 
+        if per_ntype:
+            return node_types, node_counts
+
         node_counts = np.stack(node_counts, axis=0).sum(axis=0)
         node_counts = torch.from_numpy(node_counts)
         return node_counts
@@ -125,16 +136,44 @@ class PharmitDataset(ZarrDataset):
         # here, unlike in other places, start_idx and end_idx are 
         # indexes into the graph_lookup array, not a node/edge data array
 
-        raise NotImplementedError('This function is not implemented yet! whats here was written by chatgpt lol')
-        # TODO: implement this, requires decisions, or perhaps access to graph config information to infer # edges per graph
-        # for lig-lig edges its easy
-        # for pharm-pharm and lig-pharm edges, we have not yet decided how to handle them
-        edge_types = ['lig_to_lig']
-        edge_counts = []
-        for etype in edge_types:
-            graph_lookup = self.slice_array(f'{etype}/graph_lookup', start_idx, end_idx)
-            edge_counts.append(graph_lookup[:, 1] - graph_lookup[:, 0])
+        # get number of nodes in each graph, per node type
+        node_types, n_nodes_per_type = self.get_num_nodes(task, start_idx, end_idx, per_ntype=True)
 
-        edge_counts = np.stack(edge_counts, axis=0).sum(axis=0)
-        edge_counts = torch.from_numpy(edge_counts)
-        return edge_counts
+        # evaluate same-ntype edges
+        n_edges_total = torch.zeros(end_idx - start_idx, dtype=torch.int64)
+        for ntype, n_nodes in zip(node_types, n_nodes_per_type):
+            etype = f'{ntype}_to_{ntype}'
+            graph_type = self.graph_config[etype]['type']
+            if graph_type == 'complete':
+                n_edges = n_nodes*(n_nodes-1)
+            elif graph_type == 'knn':
+                k = self.graph_config[etype].k
+                n_edges = k*n_nodes
+            elif graph_type == 'radius':
+                raise NotImplementedError('havent come up with an approximate n edges for radius graph')
+            else:
+                raise ValueError(f'unsupported graph type: {graph_type}')
+            n_edges_total += n_edges
+            
+
+
+
+
+        # cover cross-ntype edges
+        # there are many problems in how we do this; the user needs to specify configs
+        # exactly right or we could end up miscounting edges here, so...tbd
+        if len(node_types) == 2:
+            assert 'lig_to_pharm' in self.graph_config.symmetric_etypes
+            if self.graph_config['lig_to_pharm']['type'] == 'complete':
+                n_edges_total += n_nodes_per_type[0]*n_nodes_per_type[1]
+            elif self.graph_config['lig_to_pharm']['type'] == 'knn':
+                k = self.graph_config['lig_to_pharm'].k
+                n_edges_total += k*n_nodes_per_type[0] + k*n_nodes_per_type[1]
+            
+        
+        # from graph type, infer number of lig_lig edges
+        # if pharmacophore is present do the same for pharm-pharm edges
+        # also if pharmacophore are present, then lig-pharm edges are present
+        # determine the type of lig-pharm edges and then infer the number of lig-pharm edges
+        # sum # edges across all edge types
+        pass

@@ -13,6 +13,10 @@ def to_canonical_etype(etype: str):
     src_ntype, dst_ntype = etype.split('_to_')
     return (src_ntype, etype, dst_ntype)
 
+def get_inv_edge_type(etype: str):
+    src_ntype, dst_ntype = etype.split('_to_')
+    return f"{dst_ntype}_to_{src_ntype}"
+
 
 # TODO: if protein structure changes during generation, then we would need to do knn-random graph computation on the fly, which we don't know how to do yet
 # TODO: in general, protein structure edges need to be computed on the fly
@@ -26,7 +30,6 @@ def build_complex_graph(
     node_data: Dict[str, Dict[str, torch.Tensor]],
     edge_idxs: Dict[str, torch.Tensor],
     edge_data: Dict[str, Dict[str, torch.Tensor]],
-    graph_config: dict = {}, # specifies how edges should be constructed
 ):
     
     # check that all node types are valid
