@@ -47,6 +47,7 @@ class MoleculeTensorizer():
                 all_bond_types.append(bond_types)
                 all_bond_idxs.append(bond_idxs)
 
+    
         # find molecules that failed to featurize and count them
         num_failed = 0
         failed_idxs = []
@@ -61,8 +62,8 @@ class MoleculeTensorizer():
         all_atom_charges = [charge for i, charge in enumerate(all_atom_charges) if i not in failed_idxs]
         all_bond_types = [bond for i, bond in enumerate(all_bond_types) if i not in failed_idxs]
         all_bond_idxs = [idx for i, idx in enumerate(all_bond_idxs) if i not in failed_idxs]
-
-        return all_positions, all_atom_types, all_atom_charges, all_bond_types, all_bond_idxs, num_failed
+        
+        return all_positions, all_atom_types, all_atom_charges, all_bond_types, all_bond_idxs, num_failed, failed_idxs
 
 
 
@@ -71,9 +72,9 @@ def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expli
 
     # kekulize the molecule
     try:
-        Chem.Kekulize(molecule)
-    except Chem.KekulizeException as e:
-        print(f"Kekulization failed for molecule {molecule.GetProp('_Name')}", flush=True)
+        Chem.SanitizeMol(molecule)
+    except Chem.SanitizationException as e:
+        print(f"Sanitization failed for molecule {molecule.GetProp('_Name')}", flush=True)
         return None, None, None, None, None
 
     # if explicit_hydrogens is False, remove all hydrogens from the molecule
@@ -112,5 +113,5 @@ def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expli
     # and also make more informed decisions
     atom_charges = atom_charges.astype(np.int32)
     edge_attr = bond_types.astype(np.int32)
-
+    
     return positions, atom_types, atom_charges, edge_attr, edge_index, 
