@@ -14,6 +14,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self, 
         tasks: List[dict], 
         multitask_dataset_config: DictConfig, 
+        graph_config: DictConfig,
         prior_config: dict, 
         batch_size: int, 
         num_workers: int = 0, 
@@ -37,8 +38,10 @@ class MultiTaskDataModule(pl.LightningDataModule):
             self.val_dataset = self.load_dataset('val')
 
     def load_dataset(self, split: str):
+        # TODO: tasks should just be absored into multitask_dataset_config
         return MultitaskDataSet(split, 
                              tasks=self.tasks,
+                             graph_config=self.graph_config,
                              **self.multitask_dataset_config)
     
     def train_dataloader(self):

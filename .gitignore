@@ -1,4 +1,5 @@
 pipelines/pharmit_dataset/pharmit_small/
+data/pharmit_dev/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

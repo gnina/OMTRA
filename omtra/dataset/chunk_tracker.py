@@ -10,7 +10,7 @@ class ChunkTracker:
                  *args, **kwargs):
         
         self.dataset = dataset
-        self.nodes_per_batch = nodes_per_batch
+        self.nodes_per_batch = nodes_per_batch # maximum number of nodes in a batch
 
 
         # chunk index is an (n_graph_chunks, 2) array containing the start and end indices of each chunk

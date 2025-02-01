@@ -4,6 +4,7 @@ defaults:
   - model: default
   - trainer: default
   - task_group: no_protein
+  - graph: default
 
 seed: 42
 

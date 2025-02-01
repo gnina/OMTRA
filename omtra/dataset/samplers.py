@@ -1,3 +1,4 @@
+
 import torch
 from torch.utils.data import Sampler, DistributedSampler
 from typing import Dict, List
@@ -10,13 +11,14 @@ from omtra.tasks.tasks import Task
 class MultiTaskSampler(Sampler):
 
     def __init__(self, multi_dataset: MultitaskDataSet, batch_size):
-        super().__init__(multi_dataset)
+        super().__init__()
         self.multi_dataset = multi_dataset
         self.batch_size = batch_size
         
 
         self.task_names = multi_dataset.task_names
         self.tasks: List[Task] = multi_dataset.tasks
+        self.datasets = multi_dataset.datasets
         self.dataset_names = multi_dataset.dataset_names
         self.p_dataset_task = multi_dataset.p_dataset_task
 
@@ -47,7 +49,10 @@ class MultiTaskSampler(Sampler):
             if dataset_name == 'pharmit':
                 # create a single chunk tracker for all tasks
                 chunk_tracker_idx = len(self.chunk_trackers)
-                self.chunk_trackers[chunk_tracker_idx] = ChunkTracker(self.datasets[dataset_name])
+                self.chunk_trackers[chunk_tracker_idx] = ChunkTracker(
+                    dataset=self.datasets[dataset_name],
+                    nodes_per_batch=self.batch_size
+                    )
                 for task_idx in task_idxs:
                     self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
 

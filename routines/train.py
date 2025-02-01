@@ -19,10 +19,17 @@ def train(cfg: DictConfig):
     pl.seed_everything(cfg.seed, workers=True)
 
     print(f"⚛ Instantiating datamodule <{cfg.task_group.data._target_}>")
-    datamodule: MultiTaskDataModule = hydra.utils.instantiate(cfg.task_group.data)
+    datamodule: MultiTaskDataModule = hydra.utils.instantiate(
+        cfg.task_group.data, 
+        graph_config=cfg.graph)
 
     datamodule.setup(stage='fit')
-    # TODO: Implmenet other instantiation logic
+    # TODO: load dataloader
+    # TODO: turn datamodule instantiation and dataloader test into unit tests
+    dataloader = datamodule.train_dataloader()
+    n_batches = 2
+    for _ in range(n_batches):
+        batch = next(iter(dataloader))
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="config")

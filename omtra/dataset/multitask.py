@@ -3,6 +3,7 @@ import numpy as np
 import dgl
 from typing import List, Dict
 from copy import deepcopy
+from omegaconf import DictConfig
 
 from omtra.dataset.register import dataset_name_to_class
 from omtra.tasks.register import task_name_to_class
@@ -12,7 +13,10 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
     """A dataset capable of serving up samples from multiple zarr datasets."""
 
-    def __init__(self, split: str, tasks: List[dict], single_dataset_configs: Dict[str, dict], dataset_task_coupling: dict):
+    def __init__(self, split: str, tasks: List[dict], 
+                 single_dataset_configs: Dict[str, dict], 
+                 dataset_task_coupling: dict,
+                 graph_config: DictConfig):
         """
         Describing the nature of the inputs, for now:
 
@@ -39,6 +43,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                 - if a dataset is specified in single_dataset_configs but not included in p(dataset|task) here, then we will assume p(dataset|task) = 0
 
         """
+        self.graph_config = graph_config
 
         # get the names of the datasets we'll be using
         self.dataset_names = list(single_dataset_configs.keys())
@@ -92,7 +97,10 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                 if has_tasks_using_apo and has_tasks_not_using_apo:
                     single_dataset_config['n_chunks_cache'] = 7
 
-            self.datasets[dataset_name] = dataset_class(split=split, **single_dataset_config)
+            self.datasets[dataset_name] = dataset_class(
+                split=split, 
+                graph_config=self.graph_config,
+                **single_dataset_config)
 
 
     def __len__(self):

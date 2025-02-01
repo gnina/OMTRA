@@ -1,0 +1,17 @@
+# configs/graph/hetero.yaml
+
+
+# For a heterogeneous graph, we often have different edge types
+# among different node types. Here, each entry in `edges` describes:
+#   - name of the edge type (key)
+#   - how edges are constructed (type)
+#   - relevant parameters for that constructor.
+  
+edges:             # parameter for KNN edges
+  lig_to_lig:
+    type: complete
+  pharm_to_pharm:
+    type: complete
+  lig_to_pharm:
+    type: radius
+    cutoff: 6                

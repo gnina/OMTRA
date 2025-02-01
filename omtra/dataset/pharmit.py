@@ -1,6 +1,7 @@
 import dgl
 import torch
 import numpy as np
+from omegaconf import DictConfig
 
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.data.graph import build_complex_graph
@@ -13,10 +14,12 @@ class PharmitDataset(ZarrDataset):
     def __init__(self, 
                  split: str,
                  processed_data_dir: str,
-                 graphs_per_chunk: int
+                 graphs_per_chunk: int,
+                 graph_config: DictConfig,
     ):
         super().__init__(split, processed_data_dir)
         self.graphs_per_chunk = graphs_per_chunk
+        self.graph_config = graph_config
 
     @classproperty
     def name(cls):
