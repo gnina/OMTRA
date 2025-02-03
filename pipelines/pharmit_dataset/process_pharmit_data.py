@@ -37,6 +37,8 @@ def parse_args():
 
     p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
 
+    p.add_argument('--batch_size', type=int, default=50, help='Number of conformer files to batch togther.')
+
     args = p.parse_args()
     return args
 
@@ -161,20 +163,21 @@ class NameFinder():
 
         file_to_smile = {Path(file): None for file in conformer_files}  # Dictionary to map conformer file to smile
 
-        try:
-            with self.conn.cursor() as cursor:
-                query = "SELECT sdfloc, smile FROM structures WHERE sdfloc IN %s"
-                cursor.execute(query, (tuple(str(file) for file in conformer_files),))
-                results = cursor.fetchall()
+        # failure will be different than a mysqlerror; there just wont be an entry if the file is not in the database
+        with self.conn.cursor() as cursor:
+            query = "SELECT sdfloc, smile FROM structures WHERE sdfloc IN %s"
+            cursor.execute(query, (tuple(str(file) for file in conformer_files),))
+            results = cursor.fetchall()
 
-            for sdfloc, smile in results:
-                file_smile_map[Path(sdfloc)] = smile  # Update with successfull queries
+        for sdfloc, smile in results:
+            file_to_smile[Path(sdfloc)] = smile  # Update with successfull queries
 
-        except pymysql.MySQLError as e: # Indicate error in finding SMILE using conformer file
-            print(f"Database query failed: {e}")
+        failed_idxs = []
+        for i, file in enumerate(conformer_files):
+            if file_to_smile[Path(file)] is None:
+                failed_idxs.append(i)
         
-        failed_idxs = [conformer_files.index(file) for file in file_to_smile if file_to_smile[file] is None]  # Get the indices of failed file in conformer_files
-        smiles = [smile for file, smile in file_to_smile.items() if smile is not None] # Remove None entries 
+        smiles = [smile for smile in file_to_smile.values() if smile is not None] # Remove None entries 
 
         return smiles, failed_idxs
     
@@ -243,8 +246,6 @@ def minimize_molecule(molecule: Chem.rdchem.Mol):
     except Exception as e:
         print("Failed to get force field:", e)
         return None
-    
-    before_energy = ff.CalcEnergy()
 
     # documentation for this function call, incase we want to play with number of minimization steps or record whether it was successful: https://www.rdkit.org/docs/source/rdkit.ForceField.rdForceField.html#rdkit.ForceField.rdForceField.ForceField.Minimize
     try:
@@ -252,8 +253,6 @@ def minimize_molecule(molecule: Chem.rdchem.Mol):
     except Exception as e:
         print("Failed to minimize molecule")
         return None
-
-    after_energy = ff.CalcEnergy()
 
     # Get the minimized positions for molecule with H's
     cpos = lig_H.GetConformer().GetPositions()
@@ -264,10 +263,6 @@ def minimize_molecule(molecule: Chem.rdchem.Mol):
     for (i,xyz) in enumerate(cpos[-lig.GetNumAtoms():]):
         conf.SetAtomPosition(i,xyz)
     
-    # compute rmsd between original and minimized ligand
-    rmsd = compute_rmsd(lig, lig_H)
-    print('rmsd:', rmsd)
-    print('Energy before:', before_energy, ', Energy after:', after_energy)
     return lig
 
 
@@ -533,6 +528,8 @@ if __name__ == '__main__':
             for i in range(len(ligand[0])):
                 bonds.append([ligand[0][i], ligand[1][i]])
             new_bond_idxs.append(np.array(bonds))
+
+            # this could be done in numpy one-liner, but why are we even doing it?
         
         # Format and save tensors to disk
         zarr_store = save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm, [np.array([])])
