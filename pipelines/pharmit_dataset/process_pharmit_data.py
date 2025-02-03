@@ -30,7 +30,9 @@ def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
 
     # temporary default path for development
-    p.add_argument('--db_dir', type=Path, default='/net/galaxy/home/koes/icd3/moldiff/OMTRA/pipelines/pharmit_dataset/pharmit_small') # OLD: './pharmit_small/'
+    # don't hard-code a path here. just make a symbolic link to my pharmit_small directory in the same place in your repo,
+    # or run the code with --db_dir=/path/to/pharmit_small
+    p.add_argument('--db_dir', type=Path, default='./pharmit_small/') # OLD: './pharmit_small/'
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
     p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
@@ -448,7 +450,7 @@ def save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types
 if __name__ == '__main__':
     args = parse_args()
     mol_tensorizer = MoleculeTensorizer(atom_map=args.atom_type_map)
-    name_finder = NameFinder(spoof_db=True) # args.spoof_db
+    name_finder = NameFinder(spoof_db=args.spoof_db) 
 
     # Known counterions: https://www.sciencedirect.com/topics/chemistry/counterion#:~:text=About%2070%25%20of%20the%20counter,most%20common%20cation%20is%20Na%2B.
     counterions = ['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn']
