@@ -307,22 +307,22 @@ def get_pharmacophore_data(conformer_files):
         
         # Read generated data into numpy arrays
         if ph['points']:
-            coords = np.array([(p['x'],p['y'],p['z']) for p in ph['points'] if p['enabled']])
-            type = np.array([ph_type_to_idx[p['name']] for p in ph['points'] if p['enabled']])
+            x_pharm.append(np.array([(p['x'],p['y'],p['z']) for p in ph['points'] if p['enabled']]))
+            a_pharm.append(np.array([ph_type_to_idx[p['name']] for p in ph['points'] if p['enabled']]))
         else:
-            # failed to get data --> store index
+            # Failed to get data --> store index
             failed_pharm_idxs.append(i)
         
-        return x_pharm, a_pharm, failed_pharm_idxs
+    return x_pharm, a_pharm, failed_pharm_idxs
 
 
-def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_idxs, databases=[np.array([])], x_pharm=[np.array([])], a_pharm=[np.array([])]):
+def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm=[np.array([])], a_pharm=[np.array([])], databases=[np.array([])]):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
-    batch_num_db_nodes = np.array([x.shape[0] for x in databases])
-    batch_num_pharm_nodes = np.array([x.shape[0] for x in x_pharm])
     batch_num_edges = np.array([eidxs.shape[0] for eidxs in bond_idxs])
+    batch_num_pharm_nodes = np.array([x.shape[0] for x in x_pharm])
+    batch_num_db_nodes = np.array([x.shape[0] for x in databases]) 
 
     # concatenate all the data together
     x = np.concatenate(positions, axis=0)
@@ -330,11 +330,9 @@ def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_i
     c = np.concatenate(atom_charges, axis=0)
     e = np.concatenate(bond_types, axis=0)
     edge_index = np.concatenate(bond_idxs, axis=0)
-    
-    db = np.concatenate(databases, axis=0)
-
     x_pharm = np.concatenate(x_pharm, axis=0)
     a_pharm = np.concatenate(a_pharm, axis=0)
+    db = np.concatenate(databases, axis=0)
 
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's node features
     node_lookup = build_lookup_table(batch_num_nodes)
@@ -342,24 +340,24 @@ def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_i
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's edge features
     edge_lookup = build_lookup_table(batch_num_edges)
 
-    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's database locations
-    db_lookup = build_lookup_table(batch_num_db_nodes)
-
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
     pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
+
+    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's database locations
+    db_lookup = build_lookup_table(batch_num_db_nodes)
 
     print("Shape of x:", x.shape)
     print("Shape of a:", a.shape)
     print("Shape of c:", c.shape)
     print("Shape of e:", e.shape)
     print("Shape of edge_index:", edge_index.shape)
-    print("Shape of db:", db.shape)
     print("Shape of x_pharm:", x_pharm.shape)
     print("Shape of a_pharm:", a_pharm.shape)
+    print("Shape of db:", db.shape)
     print("Shape of node_lookup:", node_lookup.shape)
     print("Shape of edge_lookup:", edge_lookup.shape)
-    print("Shape of db_lookup:", db_lookup.shape)
     print("Shape of pharm_node_lookup:", pharm_node_lookup.shape)
+    print("Shape of db_lookup:", db_lookup.shape)
 
 
     graphs_per_chunk = 50 # very important parameter
@@ -390,15 +388,15 @@ def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_i
     mean_lig_nodes_per_graph = int(np.mean(batch_num_nodes))
     mean_ll_edges_per_graph = int(np.mean(batch_num_edges))
     """
-    mean_db_nodes_per_graph = int(np.mean(batch_num_db_nodes))
     mean_pharm_nodes_per_graph = int(np.mean([x.shape[0] for x in x_pharm]))
+    mean_db_nodes_per_graph = int(np.mean(batch_num_db_nodes))
     """
 
     nodes_per_chunk = graphs_per_chunk * mean_lig_nodes_per_graph
     ll_edges_per_chunk = graphs_per_chunk * mean_ll_edges_per_graph
     """
-    db_node_per_chunk = graphs_per_chunk * mean_db_nodes_per_graph
     pharm_nodes_per_chunk = graphs_per_chunk * mean_pharm_nodes_per_graph
+    db_node_per_chunk = graphs_per_chunk * mean_db_nodes_per_graph
     """
 
     # create arrays for node data
@@ -411,14 +409,14 @@ def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_i
     lig_edge_data.create_array('edge_index', shape=edge_index.shape, chunks=(ll_edges_per_chunk, 2), dtype=edge_index.dtype)
 
     """
-    # create arrays for database data
-    db_node_data.create_array('db', shape=sb.shape, chunks=(db_nodes_per_chunk, 13), dtpe=db.dtype)  # TODO: edit to include actual dimension of array
-    db_node_data.create_array('graph_lookup', shape=db_node_lookup.shape, chunks=db_node_lookup.shape, dtype=db_node_lookup.dtype)
-
     # create arrays for pharmacophore node data
     pharm_node_data.create_array('x', shape=x_pharm.shape, chunks=(pharm_nodes_per_chunk, 3), dtype=x_pharm.dtype)
     pharm_node_data.create_array('a', shape=a_pharm.shape, chunks=(pharm_nodes_per_chunk,), dtype=a_pharm.dtype)
     pharm_node_data.create_array('graph_lookup', shape=pharm_node_lookup.shape, chunks=pharm_node_lookup.shape, dtype=pharm_node_lookup.dtype)
+
+    # create arrays for database data
+    db_node_data.create_array('db', shape=sb.shape, chunks=(db_nodes_per_chunk, 13), dtpe=db.dtype)  # TODO: edit to include actual dimension of array
+    db_node_data.create_array('graph_lookup', shape=db_node_lookup.shape, chunks=db_node_lookup.shape, dtype=db_node_lookup.dtype)
     """
 
     # because node_lookup and edge_lookup are relatively small, we may get away with not chunking them
@@ -436,12 +434,12 @@ def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_i
     lig_edge_data['graph_lookup'][:] = edge_lookup
 
     """
-    db_node_data['db'][:] = db
-    db_node_data['graph_lookup'][:] = db_lookup
-
     pharm_node_data['x'][:] = x_pharm
     pharm_node_data['a'][:] = a_pharm
     pharm_node_data['graph_lookup'][:] = pharm_node_lookup
+
+    db_node_data['db'][:] = db
+    db_node_data['graph_lookup'][:] = db_lookup
     """
 
     print(root.tree())
@@ -461,9 +459,9 @@ if __name__ == '__main__':
     for conformer_files in batch_generator(crawl_conformer_files(args.db_dir), batch_size):
         chunks += 1
 
-        # RDKit Mol objects
+        # Get RDKit Mol objects
         mols = [read_mol_from_conf_file(file) for file in conformer_files]
-        # find molecules that failed to featurize and count them
+        # Find molecules that failed to featurize and count them
         failed_mol_idxs = []
         for i in range(len(mols)):
             if mols[i] is None:
@@ -473,9 +471,10 @@ if __name__ == '__main__':
             print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
             mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
             conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
-    
 
-        smiles, failed_smiles_idxs = name_finder.query_smiles_from_file_batch(conformer_files) # (BATCHED) SMILES representations
+
+        # (BATCHED) SMILES representations
+        smiles, failed_smiles_idxs = name_finder.query_smiles_from_file_batch(conformer_files)
         # Remove molecules that couldn't get SMILES data
         if len(failed_smiles_idxs) > 0:
             print("SMILEs for", len(failed_smiles_idxs), "conformer files could not be found, removing")
@@ -483,30 +482,34 @@ if __name__ == '__main__':
             conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_smiles_idxs]
 
 
-        names, failed_names_idxs = name_finder.query_name_batch(smiles)  # (BATCHED) Database source
+        # (BATCHED) Database source
+        names, failed_names_idxs = name_finder.query_name_batch(smiles)
         # Remove molecules that couldn't get database data
         if len(failed_names_idxs) > 0:
             print("Database sources for", len(failed_names_idxs), "could not be found, removing")
             mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
             conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
-            smiles = [smile for i, smile in enumerate(smiles) if i not in failed_names_idxs]
 
+
+        # Get pharmacophore data
+        x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files)
+        # Remove ligands where pharmacophore generation failed
+        if len(failed_pharm_idxs) > 0 :
+            print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
+            mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
+            names = [name for i, name in enumerate(names) if i not in failed_pharm_idxs]
+            
         
+        # Get XACE data
         positions, atom_types, atom_charges, bond_types, bond_idxs, num_xace_failed, failed_xace_idxs = mol_tensorizer.featurize_molecules(mols) # (BATCHED) Tensor representation of molecules
         # Remove molecules that failed to get xace data
         if len(failed_xace_idxs) > 0:
             print("XACE date for,", num_xace_failed, "molecules could not be found, removing")
             mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_xace_idxs]
-            smiles = [smile for i, smile in enumerate(smiles) if i not in failed_xace_idxs]
             names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
+            x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
+            a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
         
-
-
-        x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files)
-        if len(failed_pharm_idxs) > 0 :
-            print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
-
 
         # TODO: Tensorize database name (Somayeh)
         # TODO: Generate pharmacore data using pharmit & convert to tensors (Nate)
@@ -522,22 +525,9 @@ if __name__ == '__main__':
         
 
         # Format and save tensors to disk
-        save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, new_bond_idxs)
+        save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm)
         print(f"Processed batch {chunks}, memory cleared")
 
-    
-
-    """
-    for conformer_file in crawl_conformer_files(args.db_dir):
-        mol = read_mol_from_conf_file(conformer_file)   # RDKit Mol object
-        smiles = name_finder.query_smiles_from_file(conformer_file) # (BATCH) SMILES representation.
-        names = name_finder.query_name(smiles)  # Molecule name
-        pharmacophore_data = extract_pharmacophore_data(mol)
-        xae_mol = mol_tensorizer.featurize_molecules([mol])
-        # TODO: if pharmacophore data is not found, generatate it using pharmit
-        if pharmacophore_data is None:
-            print(f"Failed to parse pharmacophore data for {smiles}")
-    """
 
     # TODO: convert pharmacophore and names into tensors
     # TODO: can you combine the conformer_file -> smiles -> names into one query rather than two? one query that is batched?
