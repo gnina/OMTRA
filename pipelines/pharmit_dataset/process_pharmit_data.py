@@ -18,7 +18,7 @@ import subprocess
 import json
 
 
-from omtra.data.xae_ligand import MoleculeTensorizer
+from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.utils.graph import build_lookup_table
 

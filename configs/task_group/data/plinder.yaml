@@ -1,0 +1,2 @@
+processed_data_dir: ${omtra_root:}/data/plinder/
+graphs_per_chunk: 1000
