@@ -13,7 +13,7 @@ import zarr
 import time
 import os
 
-from omtra.data.xae_ligand import MoleculeTensorizer
+from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
 from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
 from tempfile import TemporaryDirectory
@@ -317,7 +317,7 @@ def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
     return all_x_pharm, all_a_pharm, failed_pharm_idxs
 
 
-def save_chunk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
+def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
@@ -347,6 +347,7 @@ def save_chunk(output_file, positions, atom_types, atom_charges, bond_types, bon
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's database locations
     db_node_lookup = build_lookup_table(batch_num_db_nodes)
 
+    """
     print("Shape of x:", x.shape)
     print("Shape of a:", a.shape)
     print("Shape of c:", c.shape)
@@ -359,6 +360,7 @@ def save_chunk(output_file, positions, atom_types, atom_charges, bond_types, bon
     print("Shape of edge_lookup:", edge_lookup.shape)
     print("Shape of pharm_node_lookup:", pharm_node_lookup.shape)
     print("Shape of db_node_lookup:", db_node_lookup.shape)
+    """
     
     # Create data dictionary
     chunk_data_dict ={ 
@@ -370,7 +372,7 @@ def save_chunk(output_file, positions, atom_types, atom_charges, bond_types, bon
         'lig_edge_idx': edge_index,
         'edge_lookup': edge_lookup,
         'pharm_x': x_pharm,
-        'pharm_a': pharm_a,
+        'pharm_a': a_pharm,
         'pharm_lookup': pharm_node_lookup,
         'database': db,
         'database_lookup': db_node_lookup
@@ -396,8 +398,8 @@ if __name__ == '__main__':
 
     # TODO: Should output directory be an argument?
     # Create directory ligand_data_MONTHDAYYEAR_TIME to store chunks of tensors
-    date_str = time.strftime("%m%d%Y", time.localtime(current_time))  # MonthDayYear
     current_time = time.time()
+    date_str = time.strftime("%m%d%Y", time.localtime(current_time))  # MonthDayYear
     time_str = str(int(current_time * 1000))[-6:]  # Last 6 digits of time in milliseconds
     output_dir = f"ligand_data_{date_str}_{time_str}"
     os.makedirs(output_dir, exist_ok=True)
@@ -460,7 +462,7 @@ if __name__ == '__main__':
         positions, atom_types, atom_charges, bond_types, bond_idxs, num_xace_failed, failed_xace_idxs = mol_tensorizer.featurize_molecules(mols) # (BATCHED) Tensor representation of molecules
         # Remove molecules that failed to get xace data
         if len(failed_xace_idxs) > 0:
-            print("XACE date for,", num_xace_failed, "molecules could not be found, removing")
+            print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
             mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
             names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
             x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
@@ -483,8 +485,8 @@ if __name__ == '__main__':
         
 
         # Format and save tensors to disk
-        output_file = f"{output_dir}/data_chunk_{chunk}.npz"
-        save_chubk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm, [np.array([])]) # TODO: Replace last arg to database one-hot encodings
+        output_file = f"{output_dir}/data_chunk_{chunks}.npz"
+        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm, [np.array([])]) # TODO: Replace last arg to database one-hot encodings
         
         # Record number of molecules in data chunk file to txt file
         with open(chunk_info_file, "a") as f:
@@ -494,10 +496,7 @@ if __name__ == '__main__':
         print(f"Processed batch {chunks}")
         print("––––––––––––––––––––––––––––––––––––––––––––––––")
 
-        
-
-
-
+    
 
     # TODO: convert pharmacophore and names into tensors
     # TODO: can you combine the conformer_file -> smiles -> names into one query rather than two? one query that is batched?
