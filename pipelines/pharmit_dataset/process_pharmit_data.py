@@ -8,19 +8,16 @@ import re
 
 from rdkit.Chem import AllChem as Chem
 import numpy as np
-import gc
-import csv
-import os
 from collections import defaultdict
 import zarr
 import time
-import subprocess
-import json
-
+import os
 
 from omtra.data.xae_ligand import MoleculeTensorizer
-from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.utils.graph import build_lookup_table
+from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
+from tempfile import TemporaryDirectory
+
 
 # TODO: this script should actually take as input just a hydra config 
 # - but Ramith is setting up our hydra stuff yet, and we don't 
@@ -35,6 +32,8 @@ def parse_args():
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
     p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
+
+    p.add_argument('--batch_size', type=int, default=50, help='Number of conformer files to batch togther.')
 
     args = p.parse_args()
     return args
@@ -263,10 +262,6 @@ def minimize_molecule(molecule: Chem.rdchem.Mol):
     for (i,xyz) in enumerate(cpos[-lig.GetNumAtoms():]):
         conf.SetAtomPosition(i,xyz)
     
-    # compute rmsd between original and minimized ligand
-    rmsd = compute_rmsd(lig, lig_H)
-    print('rmsd:', rmsd)
-    print('Energy before:', before_energy, ', Energy after:', after_energy)
     return lig
 
 
@@ -286,12 +281,9 @@ def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
     
 
 
-def get_pharmacophore_data(conformer_files):
-    tmp = 'pharmacophores'
-    phfile = os.path.join(tmp,"ph.json") # File to save pharmacophore data temporarily
-    x_pharm = []
-    a_pharm = []
-    failed_pharm_idxs = []
+def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
+
+    # TODO: this should not be hard coded!!!!
     ph_type_to_idx = {'Aromatic': 0,
     'HydrogenDonor': 1,
     'HydrogenAcceptor':2,
@@ -299,31 +291,33 @@ def get_pharmacophore_data(conformer_files):
     'NegativeIon':4,
     'PositiveIon':5}
 
-    for i in range(len(conformer_files)):
-        file = conformer_files[i]
-        
-        # Get pharmacophore data
-        cmd = f'./pharmit pharma -in {file} -out {phfile}'   # command for pharmit to get pharmacophore data
-        subprocess.check_call(cmd,shell=True)
+    # create a temporary directory if one is not provided
+    delete_tmp_dir = False
+    if tmp_path is None:
+        delete_tmp_dir = True
+        tmp_dir = TemporaryDirectory()
+        tmp_path = Path(tmp_dir.name)
 
-        #some files have another json object in them - only take first
-        #in actuality, it is a bug with how pharmit/openbabel is dealing
-        #with gzipped sdf files that causes only one molecule to be read
-        decoder = json.JSONDecoder()
-        ph = decoder.raw_decode(open(phfile).read())[0]
-        
-        # Read generated data into numpy arrays
-        if ph['points']:
-            x_pharm.append(np.array([(p['x'],p['y'],p['z']) for p in ph['points'] if p['enabled']]))
-            a_pharm.append(np.array([ph_type_to_idx[p['name']] for p in ph['points'] if p['enabled']]))
-        else:
-            # Failed to get data --> store index
-            failed_pharm_idxs.append(i)
-        
-    return x_pharm, a_pharm, failed_pharm_idxs
+    # collect all pharmacophore data
+    all_x_pharm = []
+    all_a_pharm = []
+    failed_pharm_idxs = []
+    for idx, conf_file in enumerate(conformer_files):
+        x_pharm, a_pharm = get_lig_only_pharmacophore(conf_file, tmp_path, ph_type_to_idx)
+        if x_pharm is None:
+            failed_pharm_idxs.append(idx)
+            continue
+        all_x_pharm.append(x_pharm)
+        all_a_pharm.append(a_pharm)
+
+    # delete temporary directory if it was created
+    if delete_tmp_dir:
+        tmp_dir.cleanup()
+
+    return all_x_pharm, all_a_pharm, failed_pharm_idxs
 
 
-def save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
+def save_chunk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
@@ -365,84 +359,26 @@ def save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types
     print("Shape of edge_lookup:", edge_lookup.shape)
     print("Shape of pharm_node_lookup:", pharm_node_lookup.shape)
     print("Shape of db_node_lookup:", db_node_lookup.shape)
-
-
-    graphs_per_chunk = 50 # very important parameter
-    id = str(int(time.time() * 1000))[-8:]
-    filename = f"test_ligand_dataset_{id}.zarr"
-    store = zarr.storage.LocalStore(f"{outdir}/{filename}")
-
-    # Create a root group
-    root = zarr.group(store=store)
-
-    ntypes = ['lig', 'db', 'pharm']
-
-    ntype_groups = {}
-    for ntype in ntypes:
-        ntype_groups[ntype] = root.create_group(ntype)
-
-
-    lig_node = ntype_groups['lig'].create_group('node')
-    lig_edge_data = ntype_groups['lig'].create_group('edge')
-
-    pharm_node_data = ntype_groups['pharm'].create_group('node')
-    db_node_data = ntype_groups['db'].create_group('node')
-
-    # Store tensors under different keys with specified chunk sizes
-
-    # some simple heuristics to decide chunk sizes for node and edge data
-    mean_lig_nodes_per_graph = int(np.mean(batch_num_nodes))
-    mean_ll_edges_per_graph = int(np.mean(batch_num_edges))
-    mean_pharm_nodes_per_graph = int(np.mean([x.shape[0] for x in x_pharm]))
-    mean_db_nodes_per_graph = int(np.mean(batch_num_db_nodes))
-
-    nodes_per_chunk = graphs_per_chunk * mean_lig_nodes_per_graph
-    ll_edges_per_chunk = graphs_per_chunk * mean_ll_edges_per_graph 
-    pharm_nodes_per_chunk = graphs_per_chunk * mean_pharm_nodes_per_graph
-    db_nodes_per_chunk = graphs_per_chunk * mean_db_nodes_per_graph
-
-    # create arrays for node data
-    lig_node.create_array('x', shape=x.shape, chunks=(nodes_per_chunk, 3), dtype=x.dtype)
-    lig_node.create_array('a', shape=a.shape, chunks=(nodes_per_chunk,), dtype=a.dtype)
-    lig_node.create_array('c', shape=c.shape, chunks=(nodes_per_chunk,), dtype=c.dtype)
     
-    # create arrays for edge data
-    lig_edge_data.create_array('e', shape=e.shape, chunks=(ll_edges_per_chunk,), dtype=e.dtype)
-    lig_edge_data.create_array('edge_index', shape=edge_index.shape, chunks=(ll_edges_per_chunk, 2), dtype=edge_index.dtype)
+    # Create data dictionary
+    chunk_data_dict ={ 
+        'lig_x': x,
+        'lig_a': a,
+        'lig_c': c,
+        'node_lookup': node_lookup,
+        'lig_e': e,
+        'lig_edge_idx': edge_index,
+        'edge_lookup': edge_lookup,
+        'pharm_x': x_pharm,
+        'pharm_a': pharm_a,
+        'pharm_lookup': pharm_node_lookup,
+        'database': db,
+        'database_lookup': db_node_lookup
+    }
 
-    # create arrays for pharmacophore node data
-    pharm_node_data.create_array('x', shape=x_pharm.shape, chunks=(pharm_nodes_per_chunk, 3), dtype=x_pharm.dtype)
-    pharm_node_data.create_array('a', shape=a_pharm.shape, chunks=(pharm_nodes_per_chunk,), dtype=a_pharm.dtype)
-    pharm_node_data.create_array('graph_lookup', shape=pharm_node_lookup.shape, chunks=pharm_node_lookup.shape, dtype=pharm_node_lookup.dtype)
-
-    # create arrays for database data
-    db_node_data.create_array('db', shape=db.shape, chunks=(db_nodes_per_chunk,), dtype=db.dtype)  # TODO: edit to include actual dimension of array
-    db_node_data.create_array('graph_lookup', shape=db_node_lookup.shape, chunks=db_node_lookup.shape, dtype=db_node_lookup.dtype)
-
-    # because node_lookup and edge_lookup are relatively small, we may get away with not chunking them
-    lig_node.create_array('graph_lookup', shape=node_lookup.shape, chunks=node_lookup.shape, dtype=node_lookup.dtype)
-    lig_edge_data.create_array('graph_lookup', shape=edge_lookup.shape, chunks=edge_lookup.shape, dtype=edge_lookup.dtype)
-
-    # write data to the arrays
-    lig_node['x'][:] = x
-    lig_node['a'][:] = a
-    lig_node['c'][:] = c
-    lig_node['graph_lookup'][:] = node_lookup
-
-    lig_edge_data['e'][:] = e
-    lig_edge_data['edge_index'][:] = edge_index
-    lig_edge_data['graph_lookup'][:] = edge_lookup
-
-    pharm_node_data['x'][:] = x_pharm
-    pharm_node_data['a'][:] = a_pharm
-    pharm_node_data['graph_lookup'][:] = pharm_node_lookup
-    
-    db_node_data['db'][:] = db
-    db_node_data['graph_lookup'][:] = db_node_lookup
-    
-
-    print(root.tree())
-    return filename
+    # Save dictionary to npz file
+    with open(output_file, 'wb') as f:
+        np.savez(f, chunk_data_dict)
 
 
 
@@ -454,13 +390,25 @@ if __name__ == '__main__':
     # Known counterions: https://www.sciencedirect.com/topics/chemistry/counterion#:~:text=About%2070%25%20of%20the%20counter,most%20common%20cation%20is%20Na%2B.
     counterions = ['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn']
 
-    outdir = 'pharmit_data'
-    id = str(int(time.time() * 1000))[-8:]
-    chunk_data = f"{outdir}/data_{id}.txt"
-
-    batch_size = 1000    # Batch size for queries and processing to disk (memory clearing)
+    batch_size = args.batch_size # Batch size for queries and processing to disk (memory clearing)
     chunks = 0
-    
+
+
+    # TODO: Should output directory be an argument?
+    # Create directory ligand_data_MONTHDAYYEAR_TIME to store chunks of tensors
+    date_str = time.strftime("%m%d%Y", time.localtime(current_time))  # MonthDayYear
+    current_time = time.time()
+    time_str = str(int(current_time * 1000))[-6:]  # Last 6 digits of time in milliseconds
+    output_dir = f"ligand_data_{date_str}_{time_str}"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # File to store number of molecules in each data chunk file
+    chunk_info_file = f"{output_dir}/chunk_info.txt"
+    with open(chunk_info_file, 'w') as f:
+        # Write a line to the file
+        f.write('Filename, Num Mols\n')
+
+
     for conformer_files in batch_generator(crawl_conformer_files(args.db_dir), batch_size):
         chunks += 1
 
@@ -521,8 +469,8 @@ if __name__ == '__main__':
 
 
         # TODO: Tensorize database name (Somayeh)
-        # INPUT: List of
-        # OUTPUT: List of numpy arrays of encodings 
+        # INPUT: List of database sources
+        # OUTPUT: List of numpy arrays of one-hot encodings 
 
 
         # Change bond ID representation
@@ -533,15 +481,20 @@ if __name__ == '__main__':
                 bonds.append([ligand[0][i], ligand[1][i]])
             new_bond_idxs.append(np.array(bonds))
         
+
         # Format and save tensors to disk
-        zarr_store = save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm, [np.array([])])
+        output_file = f"{output_dir}/data_chunk_{chunk}.npz"
+        save_chubk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm, [np.array([])]) # TODO: Replace last arg to database one-hot encodings
+        
+        # Record number of molecules in data chunk file to txt file
+        with open(chunk_info_file, "a") as f:
+            line = f"{output_file}, {len(mols)} \n"
+            f.write(line)
+        
         print(f"Processed batch {chunks}")
         print("––––––––––––––––––––––––––––––––––––––––––––––––")
 
-        # Record number of molecules in zarr store to txt file
-        with open(chunk_data, "a") as file:
-            line = f"{zarr_store} \t {len(mols)} \n"
-            file.write(line)
+        
 
 
 
