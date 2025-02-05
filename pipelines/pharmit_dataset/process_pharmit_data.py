@@ -5,6 +5,7 @@ from rdkit import Chem
 import pymysql
 import itertools
 import re
+import numpy as np
 
 from rdkit.Chem import AllChem as Chem
 import numpy as np
@@ -313,9 +314,36 @@ def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
         tmp_dir.cleanup()
 
     return all_x_pharm, all_a_pharm, failed_pharm_idxs
+    
+    # Define the list of databases
+DATABASES = ["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"]    
+def generate_library_tensor(names, databases=DATABASES):
+    """
+    Generates a binary tensor indicating whether each molecule belongs to any of the specified libraries.
+
+    Args:
+        names (list of list of str): A list of lists containing the database names for each molecule.
+        databases (list of str): A list of database names to check against.
+
+    Returns:
+        np.ndarray: A binary tensor of shape (num_mols, num_libraries) where each element is 1 if the molecule belongs to the library, otherwise 0.
+    """
 
 
-def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
+    num_mols = len(names)
+    num_libraries = len(databases)
+    
+    # Initialize the binary tensor with zeros
+    library_tensor = np.zeros((num_mols, num_libraries), dtype=int)
+    
+    for i, molecule_names in enumerate(names):
+        for j, db in enumerate(databases):
+            if db in molecule_names:
+                library_tensor[i, j] = 1
+    
+    return library_tensor
+    
+def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases, library_tensor):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
@@ -345,6 +373,8 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's database locations
     db_node_lookup = build_lookup_table(batch_num_db_nodes)
 
+    library_lookup = build_lookup_table(np.array([library_tensor.shape[0]]))
+
     """
     print("Shape of x:", x.shape)
     print("Shape of a:", a.shape)
@@ -373,7 +403,9 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
         'pharm_a': a_pharm,
         'pharm_lookup': pharm_node_lookup,
         'database': db,
-        'database_lookup': db_node_lookup
+        'database_lookup': db_node_lookup,
+        'library_lookup': library_lookup
+        
     }
 
     # Save dictionary to npz file
@@ -465,7 +497,8 @@ if __name__ == '__main__':
             names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
             x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
             a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
-        
+
+        library_tensor = generate_library_tensor(names)
         # TODO: Tensorize database name (Somayeh)
         # INPUT: List of database sources
         # OUTPUT: List of numpy arrays of one-hot encodings 
@@ -473,7 +506,7 @@ if __name__ == '__main__':
 
         # Format and save tensors to disk
         output_file = f"{output_dir}/data_chunk_{chunks}.npz"
-        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, [np.array([])]) # TODO: Replace last arg to database one-hot encodings
+        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, [np.array([])], library_tensor) # TODO: Replace last arg to database one-hot encodings
         
         # Record number of molecules in data chunk file to txt file
         with open(chunk_info_file, "a") as f:
