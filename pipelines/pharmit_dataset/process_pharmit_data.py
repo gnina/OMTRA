@@ -370,7 +370,7 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's database locations
     db_node_lookup = build_lookup_table(batch_num_db_nodes)
 
-    library_lookup = build_lookup_table(np.array([library_tensor.shape[0]]))
+    library_lookup = build_lookup_table(np.array([1] * library_tensor.shape[0]))
 
     """
     print("Shape of x:", x.shape)
@@ -401,6 +401,7 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
         'pharm_lookup': pharm_node_lookup,
         'database': db,
         'database_lookup': db_node_lookup,
+        'library_tensor': library_tensor,
         'library_lookup': library_lookup
         
     }
@@ -506,7 +507,7 @@ if __name__ == '__main__':
 
         # Format and save tensors to disk
         output_file = f"{output_dir}/data_chunk_{chunks}.npz"
-        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, [np.array([])], library_tensor) # TODO: Replace last arg to database one-hot encodings
+        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, library_tensor) # TODO: Replace last arg to database one-hot encodings
         
         # Record number of molecules in data chunk file to txt file
         with open(chunk_info_file, "a") as f:
