@@ -313,30 +313,6 @@ def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
         tmp_dir.cleanup()
 
     return all_x_pharm, all_a_pharm, failed_pharm_idxs
-    # create a temporary directory if one is not provided
-    delete_tmp_dir = False
-    if tmp_path is None:
-        delete_tmp_dir = True
-        tmp_dir = TemporaryDirectory()
-        tmp_path = Path(tmp_dir.name)
-
-    # collect all pharmacophore data
-    all_x_pharm = []
-    all_a_pharm = []
-    failed_pharm_idxs = []
-    for idx, conf_file in enumerate(conformer_files):
-        x_pharm, a_pharm = get_lig_only_pharmacophore(conf_file, tmp_path, ph_type_to_idx)
-        if x_pharm is None:
-            failed_pharm_idxs.append(idx)
-            continue
-        all_x_pharm.append(x_pharm)
-        all_a_pharm.append(a_pharm)
-
-    # delete temporary directory if it was created
-    if delete_tmp_dir:
-        tmp_dir.cleanup()
-
-    return all_x_pharm, all_a_pharm, failed_pharm_idxs
 
 
 def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
@@ -494,15 +470,6 @@ if __name__ == '__main__':
         # INPUT: List of database sources
         # OUTPUT: List of numpy arrays of one-hot encodings 
 
-
-        # Change bond ID representation
-        new_bond_idxs = []
-        for ligand in bond_idxs:
-            bonds = []
-            for i in range(len(ligand[0])):
-                bonds.append([ligand[0][i], ligand[1][i]])
-            new_bond_idxs.append(np.array(bonds))
-        
 
         # Format and save tensors to disk
         output_file = f"{output_dir}/data_chunk_{chunks}.npz"
