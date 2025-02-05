@@ -342,7 +342,7 @@ def generate_library_tensor(names, databases=DATABASES):
     
     return library_tensor
     
-def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, library_tensor):
+def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases, library_tensor):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
@@ -509,7 +509,7 @@ if __name__ == '__main__':
 
         # Format and save tensors to disk
         output_file = f"{output_dir}/data_chunk_{chunks}.npz"
-        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, library_tensor) # TODO: Replace last arg to database one-hot encodings
+        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases, library_tensor) # TODO: Replace last arg to database one-hot encodings
         
         # Record number of molecules in data chunk file to txt file
         with open(chunk_info_file, "a") as f:
