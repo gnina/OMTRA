@@ -473,7 +473,7 @@ if __name__ == '__main__':
 
         # Format and save tensors to disk
         output_file = f"{output_dir}/data_chunk_{chunks}.npz"
-        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm, [np.array([])]) # TODO: Replace last arg to database one-hot encodings
+        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, [np.array([])]) # TODO: Replace last arg to database one-hot encodings
         
         # Record number of molecules in data chunk file to txt file
         with open(chunk_info_file, "a") as f:
