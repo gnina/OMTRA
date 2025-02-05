@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from tqdm import tqdm
 from collections import defaultdict
-from pipelines.plinder_dataset.plinder_pipeline import SystemProcessor, StructureData, LigandData
+from omtra_pipelines.plinder_dataset.plinder_pipeline import SystemProcessor, StructureData, LigandData
 
 class PlinderZarrConverter:
     def __init__(
