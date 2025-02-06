@@ -23,6 +23,7 @@ from tempfile import TemporaryDirectory
 # yet know what the config for this dataset processing component will look like
 # so for now just argparse, and once its written it'll be easy/concrete to 
 # port into a hydra config
+ 
 def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
 
@@ -38,6 +39,7 @@ def parse_args():
     p.add_argument('--batch_size', type=int, default=50, help='Number of conformer files to batch togther.')
     p.add_argument('--pharm_types', type=list, default=['Aromatic','HydrogenDonor','HydrogenAcceptor','Hydrophobic','NegativeIon','PositiveIon'], help='Pharmacophore center types.')
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
+    p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
 
     args = p.parse_args()
     return args
@@ -308,8 +310,30 @@ def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
         tmp_dir.cleanup()
 
     return all_x_pharm, all_a_pharm, failed_pharm_idxs
+    
+def generate_library_tensor(names):
+    """
+    Generates a binary tensor indicating whether each molecule belongs to any of the specified libraries.
 
+    Args:
+        names (list of list of str): A list of lists containing the database names for each molecule.
 
+    Returns:
+        np.ndarray: A binary tensor of shape (num_mols, num_libraries) where each element is 1 if the molecule belongs to the library, otherwise 0.
+    """
+    num_mols = len(names)
+    num_libraries = len(args.databases)
+    
+    # Initialize the binary tensor with zeros
+    library_tensor = np.zeros((num_mols, num_libraries), dtype=int)
+    
+    for i, molecule_names in enumerate(names):
+        for j, db in enumerate(args.databases):
+            if db in molecule_names:
+                library_tensor[i, j] = 1
+    
+    return library_tensor
+    
 def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
@@ -325,6 +349,7 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
     edge_index = np.concatenate(bond_idxs, axis=0)
     x_pharm = np.concatenate(x_pharm, axis=0)
     a_pharm = np.concatenate(a_pharm, axis=0)
+    db = np.concatenate(databases, axis=0)
 
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's node features
     node_lookup = build_lookup_table(batch_num_nodes)
@@ -334,22 +359,6 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
 
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
     pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
-
-    """
-    print("Shape of x:", x.shape)
-    print("Shape of a:", a.shape)
-    print("Shape of c:", c.shape)
-    print("Shape of e:", e.shape)
-    print("Shape of edge_index:", edge_index.shape)
-    print("Shape of x_pharm:", x_pharm.shape)
-    print("Shape of a_pharm:", a_pharm.shape)
-    print("Shape of db:", db.shape)
-    print("Shape of node_lookup:", node_lookup.shape)
-    print("Shape of edge_lookup:", edge_lookup.shape)
-    print("Shape of pharm_node_lookup:", pharm_node_lookup.shape)
-    print("Shape of db_node_lookup:", db_node_lookup.shape)
-    """
-    
     # Create data dictionary
     chunk_data_dict ={ 
         'lig_x': x,
@@ -438,15 +447,18 @@ if __name__ == '__main__':
             a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
         
        
+        # Tensorize database sources
+        databases  = generate_library_tensor(names)
+
         # Format and save tensors to disk
         output_chunk_file = f"{args.chunk_data_dir}/data_chunk_{chunks}.npz"
-        num_atoms, num_edges, num_pharm = save_chunk_to_disk(output_chunk_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, [np.array([])])
+        num_atoms, num_edges, num_pharm = save_chunk_to_disk(output_chunk_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases)
         
         # Record number of molecules in data chunk file to txt file
         output_info_file = f"{args.chunk_info_dir}/data_chunk_{chunks}.txt"
         with open(output_info_file, "w") as f:
             f.write("File, Mols, Atoms, Edges, Pharm \n")
-            line = f"{output_chunk_file}, {num_atoms}, {num_edges}, {num_pharm} \n"
+            line = f"{output_chunk_file}, {len(mols)}, {num_atoms}, {num_edges}, {num_pharm} \n"
             f.write(line)
         
         print(f"Processed batch {chunks}")
