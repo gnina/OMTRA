@@ -14,6 +14,7 @@ from rdkit import Chem
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class StructureData:
     coords: np.ndarray
@@ -69,8 +70,12 @@ class StructureProcessor:
         self.ligand_atom_map = ligand_atom_map
         self.npnde_atom_map = npnde_atom_map
         self.pocket_cutoff = pocket_cutoff
-        self.ligand_tensorizer = MoleculeTensorizer(atom_map=ligand_atom_map, n_cpus=n_cpus)
-        self.npnde_tensorizer = MoleculeTensorizer(atom_map=npnde_atom_map, n_cpus=n_cpus)
+        self.ligand_tensorizer = MoleculeTensorizer(
+            atom_map=ligand_atom_map, n_cpus=n_cpus
+        )
+        self.npnde_tensorizer = MoleculeTensorizer(
+            atom_map=npnde_atom_map, n_cpus=n_cpus
+        )
         self.raw_data = Path(raw_data)
 
     def load_structure(
@@ -127,11 +132,11 @@ class StructureProcessor:
                 atom_types=atom_types[i],
                 atom_charges=atom_charges[i],
                 bond_types=bond_types[i],
-                bond_indices=bond_idxs[i]
+                bond_indices=bond_idxs[i],
             )
 
         return ligands_data
-    
+
     def process_npndes(self, npnde_paths: List[str]) -> Dict[str, LigandData]:
         npnde_mols = [Chem.SDMolSupplier(path)[0] for path in npnde_paths]
         (positions, atom_types, atom_charges, bond_types, bond_idxs, _, failed_idxs) = (
@@ -156,7 +161,7 @@ class StructureProcessor:
                 atom_types=atom_types[i],
                 atom_charges=atom_charges[i],
                 bond_types=bond_types[i],
-                bond_indices=bond_idxs[i]
+                bond_indices=bond_idxs[i],
             )
 
         return npnde_data
@@ -181,7 +186,7 @@ class StructureProcessor:
             res_mask = (receptor.res_id == res_id) & (receptor.chain_id == chain_id)
             res_indices = np.where(res_mask)[0]
             pocket_indices.extend(res_indices)
-        
+
         if len(pocket_indices) == 0:
             return None
 
@@ -190,7 +195,7 @@ class StructureProcessor:
             atom_names=receptor.atom_name[pocket_indices],
             res_ids=receptor.res_id[pocket_indices],  # original residue ids
             res_names=receptor.res_name[pocket_indices],
-            chain_ids=receptor.chain_id[pocket_indices]
+            chain_ids=receptor.chain_id[pocket_indices],
         )
 
 
@@ -204,10 +209,13 @@ class SystemProcessor:
     ):
         logger.info("Initializing SystemProcessor with cutoff=%f", pocket_cutoff)
         self.structure_processor = StructureProcessor(
-            ligand_atom_map=ligand_atom_map, npnde_atom_map=npnde_atom_map, pocket_cutoff=pocket_cutoff, raw_data=raw_data
+            ligand_atom_map=ligand_atom_map,
+            npnde_atom_map=npnde_atom_map,
+            pocket_cutoff=pocket_cutoff,
+            raw_data=raw_data,
         )
         self.pdb_writer = None
-    
+
     def filter_ligands(self, system):
         system_annotation = system.system
 
@@ -238,7 +246,7 @@ class SystemProcessor:
                 ligand_paths.append(path)
             elif ligand_key in npnde_keys:
                 npnde_paths.append(path)
-                
+
         return ligand_paths, npnde_paths
 
     def process_system(self, system_id: str, save_pockets: bool = False) -> Dict:
@@ -312,8 +320,13 @@ class SystemProcessor:
         if result["npndes"]:
             num_npndes = len(result["npndes"])
 
-        logger.info("Processed system %s with %d ligands and %d npndes", system_id, len(result["ligands"]), num_npndes)
-        
+        logger.info(
+            "Processed system %s with %d ligands and %d npndes",
+            system_id,
+            len(result["ligands"]),
+            num_npndes,
+        )
+
         return result
 
     def process_structures(
@@ -354,7 +367,11 @@ class SystemProcessor:
                 ligands_to_remove.append(ligand_key)
                 continue
 
-            logger.info("Extracted pocket with %d atoms for %s", len(pocket_data.coords), ligand.sdf)
+            logger.info(
+                "Extracted pocket with %d atoms for %s",
+                len(pocket_data.coords),
+                ligand.sdf,
+            )
 
             if save_pockets:
                 output_dir = os.path.dirname(receptor_path)
@@ -365,7 +382,7 @@ class SystemProcessor:
 
         for ligand_key in ligands_to_remove:
             del ligands_data[ligand_key]
-        
+
         if len(ligands_data) < 1:
             return None
 
@@ -379,7 +396,7 @@ class SystemProcessor:
                 apo_structures[apo_key] = self.structure_processor.process_structure(
                     apo_struct, cif
                 )
-        
+
         # Process pred structures
         pred_structures = {}
         if pred_paths:
