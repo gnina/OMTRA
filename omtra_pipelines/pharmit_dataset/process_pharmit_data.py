@@ -23,18 +23,23 @@ from tempfile import TemporaryDirectory
 # yet know what the config for this dataset processing component will look like
 # so for now just argparse, and once its written it'll be easy/concrete to 
 # port into a hydra config
+ 
 def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
 
     # temporary default path for development
     # don't hard-code a path here. just make a symbolic link to my pharmit_small directory in the same place in your repo,
     # or run the code with --db_dir=/path/to/pharmit_small
-    p.add_argument('--db_dir', type=Path, default='./pharmit_small/') # OLD: './pharmit_small/'
+    p.add_argument('--db_dir', type=Path, default='./pharmit_small/')
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
     p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
-
+    p.add_argument('--chunk_info_dir', type=str, help='Output directory for information on data chunk files.')
+    p.add_argument('--chunk_data_dir', type=str, help='Output directory for tensor chunks.')
     p.add_argument('--batch_size', type=int, default=50, help='Number of conformer files to batch togther.')
+    p.add_argument('--pharm_types', type=list, default=['Aromatic','HydrogenDonor','HydrogenAcceptor','Hydrophobic','NegativeIon','PositiveIon'], help='Pharmacophore center types.')
+    p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
+    p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
 
     args = p.parse_args()
     return args
@@ -145,7 +150,6 @@ class NameFinder():
                 continue
         return list(prefixes)
     
-
     def query_smiles_from_file(self, conformer_file: Path):
         with self.conn.cursor() as cursor:
             cursor.execute("SELECT smile FROM structures WHERE sdfloc = %s", (str(conformer_file),))
@@ -178,7 +182,6 @@ class NameFinder():
 
         return smiles, failed_idxs
     
-
 
 def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first conformer
     with gzip.open(conf_file, 'rb') as gzipped_sdf:
@@ -274,7 +277,6 @@ def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
                 mol_cpy = mol_cpy.GetMol()
                 mol = minimize_molecule(mol_cpy)
                 mols[idx] = mol
-
     return mols
     
 
@@ -282,12 +284,7 @@ def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
 def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
 
     # TODO: this should not be hard coded!!!!
-    ph_type_to_idx = {'Aromatic': 0,
-    'HydrogenDonor': 1,
-    'HydrogenAcceptor':2,
-    'Hydrophobic':3,
-    'NegativeIon':4,
-    'PositiveIon':5}
+    ph_type_to_idx = {type:idx for idx, type in enumerate(args.pharm_types)}
 
     # create a temporary directory if one is not provided
     delete_tmp_dir = False
@@ -313,15 +310,36 @@ def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
         tmp_dir.cleanup()
 
     return all_x_pharm, all_a_pharm, failed_pharm_idxs
+    
+def generate_library_tensor(names):
+    """
+    Generates a binary tensor indicating whether each molecule belongs to any of the specified libraries.
 
+    Args:
+        names (list of list of str): A list of lists containing the database names for each molecule.
 
+    Returns:
+        np.ndarray: A binary tensor of shape (num_mols, num_libraries) where each element is 1 if the molecule belongs to the library, otherwise 0.
+    """
+    num_mols = len(names)
+    num_libraries = len(args.databases)
+    
+    # Initialize the binary tensor with zeros
+    library_tensor = np.zeros((num_mols, num_libraries), dtype=int)
+    
+    for i, molecule_names in enumerate(names):
+        for j, db in enumerate(args.databases):
+            if db in molecule_names:
+                library_tensor[i, j] = 1
+    
+    return library_tensor
+    
 def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
     batch_num_edges = np.array([eidxs.shape[0] for eidxs in bond_idxs])
     batch_num_pharm_nodes = np.array([x.shape[0] for x in x_pharm])
-    batch_num_db_nodes = np.array([x.shape[0] for x in databases]) 
 
     # concatenate all the data together
     x = np.concatenate(positions, axis=0)
@@ -341,25 +359,6 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
 
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
     pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
-
-    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's database locations
-    db_node_lookup = build_lookup_table(batch_num_db_nodes)
-
-    """
-    print("Shape of x:", x.shape)
-    print("Shape of a:", a.shape)
-    print("Shape of c:", c.shape)
-    print("Shape of e:", e.shape)
-    print("Shape of edge_index:", edge_index.shape)
-    print("Shape of x_pharm:", x_pharm.shape)
-    print("Shape of a_pharm:", a_pharm.shape)
-    print("Shape of db:", db.shape)
-    print("Shape of node_lookup:", node_lookup.shape)
-    print("Shape of edge_lookup:", edge_lookup.shape)
-    print("Shape of pharm_node_lookup:", pharm_node_lookup.shape)
-    print("Shape of db_node_lookup:", db_node_lookup.shape)
-    """
-    
     # Create data dictionary
     chunk_data_dict ={ 
         'lig_x': x,
@@ -372,42 +371,27 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
         'pharm_x': x_pharm,
         'pharm_a': a_pharm,
         'pharm_lookup': pharm_node_lookup,
-        'database': db,
-        'database_lookup': db_node_lookup
+        'database': databases
     }
 
     # Save dictionary to npz file
     with open(output_file, 'wb') as f:
         np.savez(f, chunk_data_dict)
 
+    return len(x), len(e), len(x_pharm)
+
 
 
 if __name__ == '__main__':
     args = parse_args()
     mol_tensorizer = MoleculeTensorizer(atom_map=args.atom_type_map)
-    name_finder = NameFinder(spoof_db=args.spoof_db) 
+    name_finder = NameFinder(spoof_db=args.spoof_db)
 
-    # Known counterions: https://www.sciencedirect.com/topics/chemistry/counterion#:~:text=About%2070%25%20of%20the%20counter,most%20common%20cation%20is%20Na%2B.
-    counterions = ['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn']
+    os.makedirs(args.chunk_data_dir, exist_ok=True)
+    os.makedirs(args.chunk_info_dir, exist_ok=True)
 
     batch_size = args.batch_size # Batch size for queries and processing to disk (memory clearing)
     chunks = 0
-
-
-    # TODO: Should output directory be an argument?
-    # Create directory ligand_data_MONTHDAYYEAR_TIME to store chunks of tensors
-    current_time = time.time()
-    date_str = time.strftime("%m%d%Y", time.localtime(current_time))  # MonthDayYear
-    time_str = str(int(current_time * 1000))[-6:]  # Last 6 digits of time in milliseconds
-    output_dir = f"ligand_data_{date_str}_{time_str}"
-    os.makedirs(output_dir, exist_ok=True)
-
-    # File to store number of molecules in each data chunk file
-    chunk_info_file = f"{output_dir}/chunk_info.txt"
-    with open(chunk_info_file, 'w') as f:
-        # Write a line to the file
-        f.write('Filename, Num Mols\n')
-
 
     for conformer_files in batch_generator(crawl_conformer_files(args.db_dir), batch_size):
         chunks += 1
@@ -424,10 +408,6 @@ if __name__ == '__main__':
             print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
             mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
             conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
-
-        # Check for counterions and remove
-        mols = remove_counterions_batch(mols, counterions)
-
 
         # (BATCHED) SMILES representations
         smiles, failed_smiles_idxs = name_finder.query_smiles_from_file_batch(conformer_files)
@@ -466,18 +446,19 @@ if __name__ == '__main__':
             x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
             a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
         
-        # TODO: Tensorize database name (Somayeh)
-        # INPUT: List of database sources
-        # OUTPUT: List of numpy arrays of one-hot encodings 
-
+       
+        # Tensorize database sources
+        databases  = generate_library_tensor(names)
 
         # Format and save tensors to disk
-        output_file = f"{output_dir}/data_chunk_{chunks}.npz"
-        save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, [np.array([])]) # TODO: Replace last arg to database one-hot encodings
+        output_chunk_file = f"{args.chunk_data_dir}/data_chunk_{chunks}.npz"
+        num_atoms, num_edges, num_pharm = save_chunk_to_disk(output_chunk_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases)
         
         # Record number of molecules in data chunk file to txt file
-        with open(chunk_info_file, "a") as f:
-            line = f"{output_file}, {len(mols)} \n"
+        output_info_file = f"{args.chunk_info_dir}/data_chunk_{chunks}.txt"
+        with open(output_info_file, "w") as f:
+            f.write("File, Mols, Atoms, Edges, Pharm \n")
+            line = f"{output_chunk_file}, {len(mols)}, {num_atoms}, {num_edges}, {num_pharm} \n"
             f.write(line)
         
         print(f"Processed batch {chunks}")
