@@ -142,13 +142,12 @@ class StructureProcessor:
         (positions, atom_types, atom_charges, bond_types, bond_idxs, _, failed_idxs) = (
             self.npnde_tensorizer.featurize_molecules(npnde_mols)
         )
+        for i in failed_idxs:
+            logger.warning("Failed to tensorize npnde %s", npnde_paths[i])
 
         npnde_paths = [
             path for i, path in enumerate(npnde_paths) if i not in failed_idxs
         ]
-
-        for i in failed_idxs:
-            logger.warning("Failed to tensorize npnde %s", npnde_paths[i])
 
         npnde_data = {}
         for i, path in enumerate(npnde_paths):
@@ -315,6 +314,7 @@ class SystemProcessor:
             return None
 
         result["system_annotation"] = system.system
+        result["system_id"] = system_id
 
         num_npndes = 0
         if result["npndes"]:

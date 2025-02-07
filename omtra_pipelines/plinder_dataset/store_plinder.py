@@ -1,7 +1,8 @@
 import argparse
 import logging
 from pathlib import Path
-from omtra_pipelines.plinder_dataset.plinder_zarr import *
+from omtra_pipelines.plinder_dataset.plinder_zarr import PlinderZarrConverter
+from omtra_pipelines.plinder_dataset.plinder_pipeline import SystemProcessor
 
 
 def setup_logger(log_output):
@@ -30,6 +31,9 @@ def parse_args():
     parser.add_argument(
         "--num_systems", type=int, required=False, help="Number of systems to process, "
     )
+    parser.add_argument(
+        "--num_cpus", type=int, required=False, default=1, help="Number of cpus"
+    )
 
     return parser.parse_args()
 
@@ -39,26 +43,38 @@ def main():
     log_path = str(Path(args.output).parent / "plinder_storage.log")
     setup_logger(log_path)
     processor = SystemProcessor(
-        atom_map=["C", "N", "O", "S", "F", "P", "Cl", "Br", "I"],
+        ligand_atom_map=["C", "N", "O", "S", "F", "P", "Cl", "Br", "I", "Se"],
+        npnde_atom_map=[
+            "C",
+            "N",
+            "O",
+            "S",
+            "F",
+            "P",
+            "Cl",
+            "Br",
+            "I",
+            "Se",
+            "B",
+            "Fe",
+            "K",
+            "Mg",
+            "Au",
+        ],
         pocket_cutoff=args.pocket_cutoff,
         raw_data=Path(args.data).parent,
     )
     converter = PlinderZarrConverter(
-        output_path=args.output, system_processor=processor
+        output_path=args.output, system_processor=processor, num_workers=args.num_cpus
     )
 
-    systems = Path(args.data)
-    count = 0
-    for system in systems.iterdir():
-        if system.is_dir():
-            if args.num_dirs and count == args.num_dirs:
-                break
-            try:
-                system_id = str(system.name)
-                converter.process_system(system_id)
-                count += 1
-            except Exception as e:
-                logging.exception("Unexpected error: %s", e)
+    systems_dir = Path(args.data)
+    system_ids = [d.name for d in systems_dir.iterdir() if d.is_dir()]
+
+    if args.num_systems:
+        system_ids = system_ids[: args.num_systems]
+
+    converter.process_dataset(system_ids)
 
 
 if __name__ == "__main__":

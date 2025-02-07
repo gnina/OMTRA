@@ -2,8 +2,12 @@ import zarr
 import numpy as np
 import pandas as pd
 import logging
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor
+import queue
+import threading
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Any
 from tqdm import tqdm
 from omtra_pipelines.plinder_dataset.plinder_pipeline import (
     SystemProcessor,
@@ -16,11 +20,18 @@ logger = logging.getLogger(__name__)
 
 class PlinderZarrConverter:
     def __init__(
-        self, output_path: str, system_processor: SystemProcessor, chunk_size: int = 50
+        self,
+        output_path: str,
+        system_processor: SystemProcessor,
+        struc_chunk_size: int = 235000,
+        lig_chunk_size: int = 2000,
+        num_workers: int = None,
     ):
         self.output_path = Path(output_path)
         self.system_processor = system_processor
-        self.chunk_size = chunk_size
+        self.struc_chunk_size = struc_chunk_size
+        self.lig_chunk_size = lig_chunk_size
+        self.num_workers = num_workers or mp.cpu_count()
 
         self.store = zarr.storage.LocalStore(str(self.output_path))
         self.root = zarr.group(store=self.store)
@@ -31,30 +42,32 @@ class PlinderZarrConverter:
         self.pocket = self.root.create_group("pocket")
 
         for group in [self.receptor, self.apo, self.pred, self.pocket]:
+            chunk = self.struc_chunk_size
+            if group == self.pocket:
+                chunk = self.lig_chunk_size
+
             group.create_array(
-                "coords", shape=(0, 3), chunks=(self.chunk_size, 3), dtype=np.float32
+                "coords", shape=(0, 3), chunks=(chunk, 3), dtype=np.float32
             )
             group.create_array(
                 "atom_names",
                 shape=(0,),
-                chunks=(self.chunk_size,),
+                chunks=(chunk,),
                 dtype=str,
                 compressors=None,
             )
-            group.create_array(
-                "res_ids", shape=(0,), chunks=(self.chunk_size,), dtype=np.int32
-            )
+            group.create_array("res_ids", shape=(0,), chunks=(chunk,), dtype=np.int32)
             group.create_array(
                 "res_names",
                 shape=(0,),
-                chunks=(self.chunk_size,),
+                chunks=(chunk,),
                 dtype=str,
                 compressors=None,
             )
             group.create_array(
                 "chain_ids",
                 shape=(0,),
-                chunks=(self.chunk_size,),
+                chunks=(chunk,),
                 dtype=str,
                 compressors=None,
             )
@@ -64,21 +77,27 @@ class PlinderZarrConverter:
 
         for group in [self.ligand, self.npnde]:
             group.create_array(
-                "coords", shape=(0, 3), chunks=(self.chunk_size, 3), dtype=np.float32
+                "coords",
+                shape=(0, 3),
+                chunks=(self.lig_chunk_size, 3),
+                dtype=np.float32,
             )
             group.create_array(
-                "atom_types", shape=(0,), chunks=(self.chunk_size,), dtype=np.int32
+                "atom_types", shape=(0,), chunks=(self.lig_chunk_size,), dtype=np.int32
             )
             group.create_array(
-                "atom_charges", shape=(0,), chunks=(self.chunk_size,), dtype=np.float32
+                "atom_charges",
+                shape=(0,),
+                chunks=(self.lig_chunk_size,),
+                dtype=np.float32,
             )
             group.create_array(
-                "bond_types", shape=(0,), chunks=(self.chunk_size,), dtype=np.int32
+                "bond_types", shape=(0,), chunks=(self.lig_chunk_size,), dtype=np.int32
             )
             group.create_array(
                 "bond_indices",
                 shape=(0, 2),
-                chunks=(self.chunk_size, 2),
+                chunks=(self.lig_chunk_size, 2),
                 dtype=np.int32,
             )
 
@@ -165,10 +184,15 @@ class PlinderZarrConverter:
 
         return current_len, new_len, bond_current_len, new_bond_len
 
-    def process_system(self, system_id: str):
+    def _process_system(self, system_id: str):
+        try:
+            return self.system_processor.process_system(system_id)
+        except Exception as e:
+            logging.exception(f"Error processing system {system_id}: {e}")
+            return None
+
+    def _write_system(self, system_data: Dict[str, Any]):
         """Process a single system"""
-        # Get system data
-        system_data = self.system_processor.process_system(system_id)
 
         if not system_data:
             return
@@ -178,20 +202,19 @@ class PlinderZarrConverter:
         receptor_start, receptor_end = self._append_structure_data(
             self.receptor, system_data["receptor"]
         )
-        self.receptor_lookup.append(
-            {
-                "system_id": system_id,
-                "receptor_idx": receptor_idx,
-                "start": receptor_start,
-                "end": receptor_end,
-                "ligand_idxs": [],
-                "pocket_idxs": [],
-                "npnde_idxs": [],
-                "apo_idxs": None,
-                "pred_idxs": None,
-                "cif": system_data["receptor"].cif,
-            }
-        )
+
+        receptor_entry = {
+            "system_id": system_data["system_id"],
+            "receptor_idx": receptor_idx,
+            "start": receptor_start,
+            "end": receptor_end,
+            "ligand_idxs": [],
+            "pocket_idxs": [],
+            "npnde_idxs": None,
+            "apo_idxs": None,
+            "pred_idxs": None,
+            "cif": system_data["receptor"].cif,
+        }
 
         # Process ligands and their corresponding pockets
         ligand_count = 0
@@ -205,7 +228,7 @@ class PlinderZarrConverter:
             )
             self.ligand_lookup.append(
                 {
-                    "system_id": system_id,
+                    "system_id": system_data["system_id"],
                     "ligand_id": ligand_id,
                     "receptor_idx": receptor_idx,
                     "ligand_idx": ligand_idx,
@@ -227,7 +250,7 @@ class PlinderZarrConverter:
             )
             self.pocket_lookup.append(
                 {
-                    "system_id": system_id,
+                    "system_id": system_data["system_id"],
                     "pocket_id": ligand_id,
                     "receptor_idx": receptor_idx,
                     "pocket_idx": pocket_idx,  # should be 1:1 ligand to pocket correspondance, but just in case
@@ -239,8 +262,8 @@ class PlinderZarrConverter:
 
             ligand_count += 1
 
-        self.receptor_lookup[-1]["ligand_idxs"] = ligand_idxs
-        self.receptor_lookup[-1]["pocket_idxs"] = pocket_idxs
+        receptor_entry["ligand_idxs"] = ligand_idxs
+        receptor_entry["pocket_idxs"] = pocket_idxs
 
         # process npndes
         if system_data["npndes"]:
@@ -254,7 +277,7 @@ class PlinderZarrConverter:
                 )
                 self.npnde_lookup.append(
                     {
-                        "system_id": system_id,
+                        "system_id": system_data["system_id"],
                         "npnde_id": npnde_id,
                         "receptor_idx": receptor_idx,
                         "npnde_idx": npnde_idx,
@@ -265,7 +288,7 @@ class PlinderZarrConverter:
                         "sdf": npnde_data.sdf,
                     }
                 )
-            self.receptor_lookup[-1]["npnde_idxs"] = npnde_idxs
+            receptor_entry["npnde_idxs"] = npnde_idxs
 
         # Process apo structures
         if system_data["apo_structures"]:
@@ -276,7 +299,7 @@ class PlinderZarrConverter:
                 apo_start, apo_end = self._append_structure_data(self.apo, apo_data)
                 self.apo_lookup.append(
                     {
-                        "system_id": system_id,
+                        "system_id": system_data["system_id"],
                         "apo_id": apo_id,
                         "receptor_idx": receptor_idx,
                         "apo_idx": apo_idx,
@@ -285,7 +308,7 @@ class PlinderZarrConverter:
                         "cif": apo_data.cif,
                     }
                 )
-            self.receptor_lookup[-1]["apo_idxs"] = apo_idxs
+            receptor_entry["apo_idxs"] = apo_idxs
 
         # Process pred structures
         if system_data["pred_structures"]:
@@ -296,7 +319,7 @@ class PlinderZarrConverter:
                 pred_start, pred_end = self._append_structure_data(self.pred, pred_data)
                 self.pred_lookup.append(
                     {
-                        "system_id": system_id,
+                        "system_id": system_data["system_id"],
                         "pred_id": pred_id,
                         "receptor_idx": receptor_idx,
                         "pred_idx": pred_idx,
@@ -305,16 +328,47 @@ class PlinderZarrConverter:
                         "cif": pred_data.cif,
                     }
                 )
-            self.receptor_lookup[-1]["pred_idxs"] = pred_idxs
+            receptor_entry["pred_idxs"] = pred_idxs
+        self.receptor_lookup.append(receptor_entry)
 
     def process_dataset(self, system_ids: List[str]):
         """Process list of systems"""
-        for system_id in tqdm(system_ids, desc="Processing systems"):
-            try:
-                self.process_system(system_id)
-            except Exception as e:
-                logging.exception("Unexpected error: %s", e)
-                continue
+        with mp.Manager() as manager:
+            lock = manager.Lock()
+            result_queue = manager.Queue()
+
+            def _write_results_worker():
+                while True:
+                    try:
+                        result = result_queue.get(timeout=1)
+                        if result is None:
+                            break
+
+                        with lock:
+                            self._write_system(result)
+
+                    except queue.Empty:
+                        continue
+
+            writer_thread = threading.Thread(target=_write_results_worker)
+            writer_thread.start()
+
+            with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+                futures = []
+                for sid in system_ids:
+                    futures.append(executor.submit(self._process_system, sid))
+
+                for future in tqdm(futures, desc="Processing systems"):
+                    try:
+                        result = future.result()
+                        if result:
+                            result_queue.put(result)
+                    except Exception as e:
+                        logging.exception(f"Error in future: {e}")
+                        continue
+
+            result_queue.put(None)
+            writer_thread.join()
 
         # Store lookup tables as attributes
         self.root.attrs["receptor_lookup"] = self.receptor_lookup
