@@ -128,7 +128,7 @@ class StructureProcessor:
 
             ligands_data[ligand_key] = LigandData(
                 sdf=str(raw_sdf),
-                coords=positions[i],
+                coords=np.array(positions[i], dtype=np.float32),
                 atom_types=atom_types[i],
                 atom_charges=atom_charges[i],
                 bond_types=bond_types[i],
@@ -157,7 +157,7 @@ class StructureProcessor:
 
             npnde_data[npnde_key] = LigandData(
                 sdf=str(raw_sdf),
-                coords=positions[i],
+                coords=np.array(positions[i], dtype=np.float32),
                 atom_types=atom_types[i],
                 atom_charges=atom_charges[i],
                 bond_types=bond_types[i],

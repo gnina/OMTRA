@@ -1,6 +1,7 @@
 import zarr
 import numpy as np
 import pandas as pd
+import logging
 from pathlib import Path
 from typing import List, Dict
 from tqdm import tqdm
@@ -9,6 +10,8 @@ from omtra_pipelines.plinder_dataset.plinder_pipeline import (
     StructureData,
     LigandData,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PlinderZarrConverter:
@@ -60,7 +63,6 @@ class PlinderZarrConverter:
         self.npnde = self.root.create_group("npnde")
 
         for group in [self.ligand, self.npnde]:
-
             group.create_array(
                 "coords", shape=(0, 3), chunks=(self.chunk_size, 3), dtype=np.float32
             )
@@ -74,16 +76,19 @@ class PlinderZarrConverter:
                 "bond_types", shape=(0,), chunks=(self.chunk_size,), dtype=np.int32
             )
             group.create_array(
-                "bond_indices", shape=(0, 2), chunks=(self.chunk_size, 2), dtype=np.int32
+                "bond_indices",
+                shape=(0, 2),
+                chunks=(self.chunk_size, 2),
+                dtype=np.int32,
             )
 
         # Initialize lookup tables
-        self.receptor_lookup = []  # [{system_id, receptor_idx, start, end, ligand_idx, npnde_idxs, pocket_idx, apo_idxs, pred_idxs, cif}]
+        self.receptor_lookup = []  # [{system_id, receptor_idx, start, end, ligand_idxs, npnde_idxs, pocket_idxs, apo_idxs, pred_idxs, cif}]
         self.apo_lookup = []  # [{system_id, apo_id, receptor_idx, apo_idx, start, end, cif}]
         self.pred_lookup = []  # [{system_id, pred_id, receptor_idx, pred_idx, start, end, cif}]
         self.ligand_lookup = []  # [{system_id, ligand_id, receptor_idx, ligand_idx, ligand_num, atom_start, atom_end, bond_start, bond_end, sdf}]
         self.pocket_lookup = []  # [{system_id, pocket_id, receptor_idx, pocket_idx, pocket_num, start, end}]
-        self.npnde_lookup = [] # [{system_id, npnde_id, receptor_idx, npnde_idx, atom_start, atom_end, bond_start, bond_end, sdf}]
+        self.npnde_lookup = []  # [{system_id, npnde_id, receptor_idx, npnde_idx, atom_start, atom_end, bond_start, bond_end, sdf}]
 
     def _append_structure_data(
         self, group: zarr.Group, data: StructureData
@@ -117,11 +122,6 @@ class PlinderZarrConverter:
 
         group["chain_ids"].resize((new_len,))
         group["chain_ids"][current_len:] = data.chain_ids
-
-        if data.cif is not None:
-            new_len = group["cif_paths"].shape[0] + 1
-            group["cif_paths"].resize((new_len,))
-            group["cif_paths"][-1] = data.cif
 
         return current_len, new_len
 
@@ -186,6 +186,7 @@ class PlinderZarrConverter:
                 "end": receptor_end,
                 "ligand_idxs": [],
                 "pocket_idxs": [],
+                "npnde_idxs": [],
                 "apo_idxs": None,
                 "pred_idxs": None,
                 "cif": system_data["receptor"].cif,
@@ -241,6 +242,31 @@ class PlinderZarrConverter:
         self.receptor_lookup[-1]["ligand_idxs"] = ligand_idxs
         self.receptor_lookup[-1]["pocket_idxs"] = pocket_idxs
 
+        # process npndes
+        if system_data["npndes"]:
+            npnde_idxs = []
+            for npnde_id, npnde_data in system_data["npndes"].items():
+                npnde_idx = len(self.npnde_lookup)
+                npnde_idxs.append(npnde_idx)
+
+                atom_start, atom_end, bond_start, bond_end = self._append_ligand_data(
+                    self.npnde, npnde_data
+                )
+                self.npnde_lookup.append(
+                    {
+                        "system_id": system_id,
+                        "npnde_id": npnde_id,
+                        "receptor_idx": receptor_idx,
+                        "npnde_idx": npnde_idx,
+                        "atom_start": atom_start,
+                        "atom_end": atom_end,
+                        "bond_start": bond_start,
+                        "bond_end": bond_end,
+                        "sdf": npnde_data.sdf,
+                    }
+                )
+            self.receptor_lookup[-1]["npnde_idxs"] = npnde_idxs
+
         # Process apo structures
         if system_data["apo_structures"]:
             apo_idxs = []
@@ -287,7 +313,7 @@ class PlinderZarrConverter:
             try:
                 self.process_system(system_id)
             except Exception as e:
-                print(f"Error processing system {system_id}: {e}")
+                logging.exception("Unexpected error: %s", e)
                 continue
 
         # Store lookup tables as attributes
@@ -296,6 +322,7 @@ class PlinderZarrConverter:
         self.root.attrs["pred_lookup"] = self.pred_lookup
         self.root.attrs["ligand_lookup"] = self.ligand_lookup
         self.root.attrs["pocket_lookup"] = self.pocket_lookup
+        self.root.attrs["npnde_lookup"] = self.npnde_lookup
 
 
 def load_lookups(
@@ -336,10 +363,10 @@ def get_receptor(
 
     receptor = StructureData(
         coords=root["receptor"]["coords"][start:end],
-        atom_names=root["receptor"]["atom_names"][start:end],
+        atom_names=root["receptor"]["atom_names"][start:end].astype(str),
         res_ids=root["receptor"]["res_ids"][start:end],
-        res_names=root["receptor"]["res_names"][start:end],
-        chain_ids=root["receptor"]["chain_ids"][start:end],
+        res_names=root["receptor"]["res_names"][start:end].astype(str),
+        chain_ids=root["receptor"]["chain_ids"][start:end].astype(str),
         cif=receptor_info["cif"],
     )
     return receptor
@@ -368,7 +395,33 @@ def get_ligand(
         bond_indices=root["ligand"]["bond_indices"][bond_start:bond_end],
     )
 
-    return ligand
+    return ligand_info["ligand_id"], ligand
+
+
+def get_npnde(
+    npnde_idx: int, zarr_path: str = None, root: zarr.Group = None
+) -> LigandData:
+    """Helper function to load npnde from zarr store"""
+    if not root:
+        store = zarr.storage.LocalStore(zarr_path)
+        root = zarr.group(store=store)
+
+    npnde_df = pd.DataFrame(root.attrs["npnde_lookup"])
+    npnde_info = npnde_df[npnde_df["npnde_idx"] == npnde_idx].iloc[0]
+
+    atom_start, atom_end = npnde_info["atom_start"], npnde_info["atom_end"]
+    bond_start, bond_end = npnde_info["bond_start"], npnde_info["bond_end"]
+
+    npnde = LigandData(
+        sdf=npnde_info["sdf"],
+        coords=root["npnde"]["coords"][atom_start:atom_end],
+        atom_types=root["npnde"]["atom_types"][atom_start:atom_end],
+        atom_charges=root["npnde"]["atom_charges"][atom_start:atom_end],
+        bond_types=root["npnde"]["bond_types"][bond_start:bond_end],
+        bond_indices=root["npnde"]["bond_indices"][bond_start:bond_end],
+    )
+
+    return npnde_info["npnde_id"], npnde
 
 
 def get_pocket(
@@ -386,13 +439,13 @@ def get_pocket(
 
     pocket = StructureData(
         coords=root["pocket"]["coords"][start:end],
-        atom_names=root["pocket"]["atom_names"][start:end],
+        atom_names=root["pocket"]["atom_names"][start:end].astype(str),
         res_ids=root["pocket"]["res_ids"][start:end],
-        res_names=root["pocket"]["res_names"][start:end],
-        chain_ids=root["pocket"]["chain_ids"][start:end],
+        res_names=root["pocket"]["res_names"][start:end].astype(str),
+        chain_ids=root["pocket"]["chain_ids"][start:end].astype(str),
     )
 
-    return pocket
+    return pocket_info["pocket_id"], pocket
 
 
 def get_apo(
@@ -410,14 +463,14 @@ def get_apo(
 
     apo = StructureData(
         coords=root["apo"]["coords"][start:end],
-        atom_names=root["apo"]["atom_names"][start:end],
+        atom_names=root["apo"]["atom_names"][start:end].astype(str),
         res_ids=root["apo"]["res_ids"][start:end],
-        res_names=root["apo"]["res_names"][start:end],
-        chain_ids=root["apo"]["chain_ids"][start:end],
+        res_names=root["apo"]["res_names"][start:end].astype(str),
+        chain_ids=root["apo"]["chain_ids"][start:end].astype(str),
         cif=apo_info["cif"],
     )
 
-    return apo
+    return apo_info["apo_id"], apo
 
 
 def get_pred(
@@ -435,14 +488,14 @@ def get_pred(
 
     pred = StructureData(
         coords=root["pred"]["coords"][start:end],
-        atom_names=root["pred"]["atom_names"][start:end],
+        atom_names=root["pred"]["atom_names"][start:end].astype(str),
         res_ids=root["pred"]["res_ids"][start:end],
-        res_names=root["pred"]["res_names"][start:end],
-        chain_ids=root["pred"]["chain_ids"][start:end],
+        res_names=root["pred"]["res_names"][start:end].astype(str),
+        chain_ids=root["pred"]["chain_ids"][start:end].astype(str),
         cif=pred_info["cif"],
     )
 
-    return pred
+    return pred_info["pred_id"], pred
 
 
 def get_system(zarr_path: str, receptor_idx: int) -> Dict:
@@ -450,45 +503,48 @@ def get_system(zarr_path: str, receptor_idx: int) -> Dict:
     store = zarr.storage.LocalStore(zarr_path)
     root = zarr.group(store=store)
 
-    lookups = load_lookups(root=root)
-
-    receptor_df = lookups["receptor"]
-    ligand_df = lookups["ligand"]
-    apo_df = lookups["apo"]
-    pred_df = lookups["pred"]
-    pocket_df = lookups["pocket"]
-
+    receptor_df = pd.DataFrame(root.attrs["receptor_lookup"])
     receptor_info = receptor_df[receptor_df["receptor_idx"] == receptor_idx].iloc[0]
 
     receptor = get_receptor(receptor_idx, root=root)
+
     ligands = {}
     for lig_idx in receptor_info["ligand_idxs"]:
-        ligand_info = ligand_df[ligand_df["ligand_idx"] == lig_idx].iloc[0]
-        ligands[ligand_info["ligand_id"]] = get_ligand(lig_idx, root=root)
+        lig_id, ligand = get_ligand(lig_idx, root=root)
+        ligands[lig_id] = ligand
 
     pockets = {}
     for pocket_idx in receptor_info["pocket_idxs"]:
-        pocket_info = pocket_df[pocket_df["pocket_idx"] == pocket_idx].iloc[0]
-        pockets[pocket_info["pocket_id"]] = get_pocket(pocket_idx, root=root)
+        pocket_id, pocket = get_pocket(pocket_idx, root=root)
+        pockets[pocket_id] = pocket
+
+    npndes = None
+    if receptor_info["npnde_idxs"] is not None:
+        npndes = {}
+        for npnde_idx in receptor_info["npnde_idxs"]:
+            npnde_id, npnde = get_npnde(npnde_idx, root=root)
+            npndes[npnde_id] = npnde
 
     apos = None
     if receptor_info["apo_idxs"] is not None:
         apos = {}
         for apo_idx in receptor_info["apo_idxs"]:
-            apo_info = apo_df[apo_df["apo_idx"] == apo_idx].iloc[0]
-            apos[apo_info["apo_id"]] = get_apo(apo_idx, root=root)
+            apo_id, apo = get_apo(apo_idx, root=root)
+            apos[apo_id] = apo
 
     preds = None
     if receptor_info["pred_idxs"] is not None:
         preds = {}
         for pred_idx in receptor_info["pred_idxs"]:
-            pred_info = pred_df[pred_df["pred_idx"] == pred_idx].iloc[0]
-            preds[pred_info["pred_id"]] = get_pred(pred_idx, root=root)
+            pred_id, pred = get_pred(pred_idx, root=root)
+            preds[pred_id] = pred
 
     return {
+        "system_id": receptor_info["system_id"],
         "receptor": receptor,
         "ligands": ligands,
         "pockets": pockets,
+        "npndes": npndes,
         "apo_structures": apos,
         "pred_structures": preds,
     }
