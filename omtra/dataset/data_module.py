@@ -20,7 +20,6 @@ class MultiTaskDataModule(pl.LightningDataModule):
         edges_per_batch: int, 
         num_workers: int = 0, 
         distributed: bool = False, 
-        max_num_edges: int = 40000
     ):
         super().__init__()
         self.tasks = tasks
@@ -29,7 +28,6 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self.edges_per_batch = edges_per_batch
         self.num_workers = num_workers
         self.prior_config = prior_config
-        self.max_num_edges = max_num_edges
         self.graph_config = graph_config
         self.save_hyperparameters()
 

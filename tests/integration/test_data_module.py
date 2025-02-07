@@ -9,6 +9,9 @@ from collections import defaultdict
 from hydra import initialize, compose
 from hydra.utils import instantiate
 
+import torch.multiprocessing as mp
+import multiprocessing
+
 from omtra.utils.graph import build_lookup_table
 
 def create_dummy_zarr_store(tmp_path: Path, split: str) -> Path:
@@ -198,6 +201,9 @@ def test_data_module_instantiation(dummy_config):
       4. TODO: Assert that the batch is in the expected format
     """
     from omtra.dataset.data_module import MultiTaskDataModule
+    
+    multiprocessing.set_start_method('spawn', force=True)
+    mp.set_start_method("spawn", force=True)
 
     # Instantiate the data module
     datamodule: MultiTaskDataModule = instantiate(
@@ -208,6 +214,16 @@ def test_data_module_instantiation(dummy_config):
     # Run setup
     datamodule.setup(stage="fit")
     
-    # Retrieve the dataloaders.
+    # Retrieve the dataloaders
     train_dataloader = datamodule.train_dataloader()
     val_dataloader   = datamodule.val_dataloader()
+
+    train_dataloader_iter = iter(train_dataloader)
+    val_dataloader_iter = iter(val_dataloader)
+
+    n_batches = 5
+    for _ in range(n_batches):
+        g, task_name, dataset_name = next(train_dataloader_iter)
+
+    for _ in range(n_batches):
+        g, task_name, dataset_name = next(val_dataloader_iter)

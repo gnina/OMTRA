@@ -8,6 +8,9 @@ from omtra.utils import omtra_root
 import torch.multiprocessing as mp
 import multiprocessing
 
+multiprocessing.set_start_method('spawn', force=True)
+mp.set_start_method("spawn", force=True)
+
 # register the omtra_root resolver so that anything in a config file
 # with ${omtra_root:} will be replaced with the root path of the omtra package
 OmegaConf.register_new_resolver("omtra_root", omtra_root, replace=True)
@@ -49,6 +52,4 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
     # TODO: do we need both of these? perhaps not
-    multiprocessing.set_start_method('spawn')
-    mp.set_start_method("spawn", force=True)
     main()
