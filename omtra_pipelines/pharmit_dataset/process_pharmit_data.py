@@ -12,6 +12,7 @@ from collections import defaultdict
 import zarr
 import time
 import os
+from multiprocessing import Pool
 
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
@@ -381,88 +382,87 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
     return len(x), len(e), len(x_pharm)
 
 
-
-if __name__ == '__main__':
-    args = parse_args()
+def process_batch(conformer_files, chunk):
     mol_tensorizer = MoleculeTensorizer(atom_map=args.atom_type_map)
     name_finder = NameFinder(spoof_db=args.spoof_db)
 
+    # Get RDKit Mol objects
+    mols = [read_mol_from_conf_file(file) for file in conformer_files]
+    # Find molecules that failed to featurize and count them
+    failed_mol_idxs = []
+    for i in range(len(mols)):
+        if mols[i] is None:
+            failed_mol_idxs.append(i)
+
+    if len(failed_mol_idxs) > 0:
+        #print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
+        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
+
+    # (BATCHED) SMILES representations
+    smiles, failed_smiles_idxs = name_finder.query_smiles_from_file_batch(conformer_files)
+    # Remove molecules that couldn't get SMILES data
+    if len(failed_smiles_idxs) > 0:
+       #print("SMILEs for", len(failed_smiles_idxs), "conformer files could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_smiles_idxs]
+        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_smiles_idxs]
+
+
+    # (BATCHED) Database source
+    names, failed_names_idxs = name_finder.query_name_batch(smiles)
+    # Remove molecules that couldn't get database data
+    if len(failed_names_idxs) > 0:
+        #print("Database sources for", len(failed_names_idxs), "could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
+        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
+
+
+    # Get pharmacophore data
+    x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files)
+    # Remove ligands where pharmacophore generation failed
+    if len(failed_pharm_idxs) > 0 :
+        #print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
+        names = [name for i, name in enumerate(names) if i not in failed_pharm_idxs]
+        
+    
+    # Get XACE data
+    positions, atom_types, atom_charges, bond_types, bond_idxs, num_xace_failed, failed_xace_idxs = mol_tensorizer.featurize_molecules(mols) # (BATCHED) Tensor representation of molecules
+    # Remove molecules that failed to get xace data
+    if len(failed_xace_idxs) > 0:
+        #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
+        names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
+        x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
+        a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
+    
+    
+    # Tensorize database sources
+    databases  = generate_library_tensor(names)
+
+    # Format and save tensors to disk
+    output_chunk_file = f"{args.chunk_data_dir}/data_chunk_{chunk}.npz"
+    num_atoms, num_edges, num_pharm = save_chunk_to_disk(output_chunk_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases)
+    
+    # Record number of molecules in data chunk file to txt file
+    output_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk}.txt"
+    with open(output_info_file, "w") as f:
+        f.write("File, Mols, Atoms, Edges, Pharm \n")
+        line = f"{output_chunk_file}, {len(mols)}, {num_atoms}, {num_edges}, {num_pharm} \n"
+        f.write(line)
+
+
+if __name__ == '__main__':
+    args = parse_args()
     os.makedirs(args.chunk_data_dir, exist_ok=True)
     os.makedirs(args.chunk_info_dir, exist_ok=True)
 
-    batch_size = args.batch_size # Batch size for queries and processing to disk (memory clearing)
-    chunks = 0
-
-    for conformer_files in batch_generator(crawl_conformer_files(args.db_dir), batch_size):
-        chunks += 1
-
-        # Get RDKit Mol objects
-        mols = [read_mol_from_conf_file(file) for file in conformer_files]
-        # Find molecules that failed to featurize and count them
-        failed_mol_idxs = []
-        for i in range(len(mols)):
-            if mols[i] is None:
-                failed_mol_idxs.append(i)
-
-        if len(failed_mol_idxs) > 0:
-            print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
-
-        # (BATCHED) SMILES representations
-        smiles, failed_smiles_idxs = name_finder.query_smiles_from_file_batch(conformer_files)
-        # Remove molecules that couldn't get SMILES data
-        if len(failed_smiles_idxs) > 0:
-            print("SMILEs for", len(failed_smiles_idxs), "conformer files could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_smiles_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_smiles_idxs]
-
-
-        # (BATCHED) Database source
-        names, failed_names_idxs = name_finder.query_name_batch(smiles)
-        # Remove molecules that couldn't get database data
-        if len(failed_names_idxs) > 0:
-            print("Database sources for", len(failed_names_idxs), "could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
-
-
-        # Get pharmacophore data
-        x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files)
-        # Remove ligands where pharmacophore generation failed
-        if len(failed_pharm_idxs) > 0 :
-            print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
-            names = [name for i, name in enumerate(names) if i not in failed_pharm_idxs]
-            
-        
-        # Get XACE data
-        positions, atom_types, atom_charges, bond_types, bond_idxs, num_xace_failed, failed_xace_idxs = mol_tensorizer.featurize_molecules(mols) # (BATCHED) Tensor representation of molecules
-        # Remove molecules that failed to get xace data
-        if len(failed_xace_idxs) > 0:
-            print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
-            names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
-            x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
-            a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
-        
-       
-        # Tensorize database sources
-        databases  = generate_library_tensor(names)
-
-        # Format and save tensors to disk
-        output_chunk_file = f"{args.chunk_data_dir}/data_chunk_{chunks}.npz"
-        num_atoms, num_edges, num_pharm = save_chunk_to_disk(output_chunk_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases)
-        
-        # Record number of molecules in data chunk file to txt file
-        output_info_file = f"{args.chunk_info_dir}/data_chunk_{chunks}.txt"
-        with open(output_info_file, "w") as f:
-            f.write("File, Mols, Atoms, Edges, Pharm \n")
-            line = f"{output_chunk_file}, {len(mols)}, {num_atoms}, {num_edges}, {num_pharm} \n"
-            f.write(line)
-        
-        print(f"Processed batch {chunks}")
-        print("––––––––––––––––––––––––––––––––––––––––––––––––")
+    with Pool() as pool:
+        for chunk, _ in enumerate(pool.starmap(process_batch, ((conformer_files, i+1) for i, conformer_files in enumerate(batch_generator(crawl_conformer_files(args.db_dir), args.batch_size))))):
+            print(f"Processed batch {chunk+1}")
+            print("––––––––––––––––––––––––––––––––––––––––––––––––")
+    
+    
 
     
 
