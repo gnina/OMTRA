@@ -2,7 +2,7 @@ import os
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 import biotite.structure as struc
 import biotite.structure.io.pdb as pdb
@@ -46,9 +46,6 @@ class PDBWriter:
         struct.coord = struct_data.coords
         struct.atom_name = struct_data.atom_names
         struct.res_id = struct_data.res_ids
-        struct.chain_id = np.array(
-            [self.chain_mapping[chain_id] for chain_id in struct_data.chain_ids]
-        )
         struct.res_name = struct_data.res_names
         struct.hetero = np.full(len(struct_data.coords), False)
 
@@ -66,7 +63,7 @@ class StructureProcessor:
         n_cpus: int = 1,
         raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
     ):
-        logger.info("Initializing StructureProcessor with cutoff=%f", pocket_cutoff)
+        logger.debug("Initializing StructureProcessor with cutoff=%f", pocket_cutoff)
         self.ligand_atom_map = ligand_atom_map
         self.npnde_atom_map = npnde_atom_map
         self.pocket_cutoff = pocket_cutoff
@@ -78,55 +75,135 @@ class StructureProcessor:
         )
         self.raw_data = Path(raw_data)
 
-    def load_structure(
-        self, path: str, chain_mapping: Optional[Dict[str, str]] = None
-    ) -> struc.AtomArray:
-        cif_file = CIFFile.read(path)
-        structure = get_structure(
-            cif_file, model=1, use_author_fields=False, include_bonds=True
-        )
+    def process_receptor(
+        self,
+        receptor: struc.AtomArray,
+        cif: str,
+        chain_mapping: Optional[Dict[str, str]] = None,
+    ) -> StructureData:
+        receptor = receptor[receptor.res_name != "HOH"]
+
+        raw_cif = Path(cif).relative_to(self.raw_data)
 
         if chain_mapping is not None:
-            chain_ids = [
-                chain_mapping.get(chain, chain) for chain in structure.chain_id
-            ]
-            structure.chain_id = chain_ids
+            chain_ids = [chain_mapping.get(chain, chain) for chain in receptor.chain_id]
+            receptor.chain_id = chain_ids
 
-        raw_cif = Path(path).relative_to(self.raw_data)
-
-        return structure[structure.res_name != "HOH"], raw_cif
-
-    def process_structure(
-        self, structure: struc.AtomArray, raw_path: Path
-    ) -> StructureData:
         return StructureData(
-            cif=str(raw_path),
-            coords=structure.coord,
-            atom_names=structure.atom_name,
-            res_ids=structure.res_id,
-            res_names=structure.res_name,
-            chain_ids=structure.chain_id,
+            cif=str(raw_cif),
+            coords=receptor.coord,
+            atom_names=receptor.atom_name,
+            res_ids=receptor.res_id,
+            res_names=receptor.res_name,
+            chain_ids=receptor.chain_id,
         )
 
-    def process_ligands(self, ligand_paths: List[str]) -> Dict[str, LigandData]:
-        ligand_mols = [Chem.SDMolSupplier(path)[0] for path in ligand_paths]
+    def check_ordering(
+        self, receptor: struc.AtomArray, linked_structure: struc.AtomArray
+    ) -> bool:
+        for i, (rec_atom, linked_atom) in enumerate(zip(receptor, linked_structure)):
+            if (
+                rec_atom.atom_name != linked_atom.atom_name
+                or rec_atom.res_name != linked_atom.res_name
+            ):
+                return False
+        return True
+
+    def create_atom_key(self, atom: struc.Atom) -> str:
+        return f"{atom.chain_id}_{atom.res_id}_{atom.res_name}_{atom.atom_name}"
+
+    def reorder(
+        self,
+        system_id: str,
+        link_id: str,
+        receptor: struc.AtomArray,
+        linked_structure: struc.AtomArray,
+    ) -> struc.AtomArray:
+        receptor_keys = [self.create_atom_key(atom) for atom in receptor]
+        linked_keys = [self.create_atom_key(atom) for atom in linked_structure]
+
+        if set(receptor_keys) != set(linked_keys):
+            logger.warning(
+                f"Atom key set mismatch between receptor and linked structure {system_id}_{link_id}"
+            )
+            return None
+
+        reorder_indices = []
+        for key in receptor_keys:
+            idx = linked_keys.index(key)
+            reorder_indices.append(idx)
+
+        if len(reorder_indices) != len(set(reorder_indices)):
+            logger.warning(f"Failed reordering for {system_id}_{link_id}")
+            return None
+
+        reordered = linked_structure[reorder_indices]
+
+        return reordered
+
+    def process_linked_structure(
+        self, system: PlinderSystem, linked_id: str
+    ) -> Dict[str, StructureData]:
+        holo = system.holo_structure
+        linked_structure = system.alternate_structures[linked_id]
+        linked_structure.set_chain(holo.protein_chain_ordered[0])
+
+        holo_cropped, linked_cropped = holo.align_common_sequence(
+            linked_structure, renumber_residues=True
+        )
+        linked_cropped_superposed, raw_rmsd, refined_rmsd = linked_cropped.superimpose(
+            holo_cropped
+        )
+
+        aligned = self.check_ordering(
+            holo_cropped.protein_atom_array,
+            linked_cropped_superposed.protein_atom_array,
+        )
+        if not aligned:
+            reordered_arr = self.reorder(
+                system.system_id,
+                linked_id,
+                holo_cropped.protein_atom_array,
+                linked_cropped_superposed.protein_atom_array,
+            )
+            if reordered_arr:
+                linked_cropped_superposed.protein_atom_array = reordered_arr
+            else:
+                return None
+
+        holo_data = self.process_receptor(
+            holo_cropped.protein_atom_array,
+            str(holo_cropped.protein_path),
+            system.chain_mapping,
+        )
+        linked_data = self.process_receptor(
+            linked_cropped_superposed.protein_atom_array,
+            str(linked_cropped_superposed.protein_path),
+            system.chain_mapping,
+        )
+
+        return {"holo": holo_data, "link": linked_data}
+
+    def process_ligands(
+        self, system: PlinderSystem, ligand_mols: Dict[str, Chem.Mol]
+    ) -> Dict[str, LigandData]:
+        keys = list(ligand_mols.keys())
+        mols = list(ligand_mols.values())
+
         (positions, atom_types, atom_charges, bond_types, bond_idxs, _, failed_idxs) = (
-            self.ligand_tensorizer.featurize_molecules(ligand_mols)
+            self.ligand_tensorizer.featurize_molecules(mols)
         )
 
         for i in failed_idxs:
-            logger.warning("Failed to tensorize ligand %s", ligand_paths[i])
+            logger.warning("Failed to tensorize ligand %s", keys[i])
 
-        ligand_paths = [
-            path for i, path in enumerate(ligand_paths) if i not in failed_idxs
-        ]
+        ligand_keys = [key for i, key in enumerate(keys) if i not in failed_idxs]
 
         ligands_data = {}
-        for i, path in enumerate(ligand_paths):
-            raw_sdf = Path(path).relative_to(self.raw_data)
-            ligand_key = Path(path).stem
+        for i, key in enumerate(ligand_keys):
+            raw_sdf = Path(system.ligand_sdfs[key]).relative_to(self.raw_data)
 
-            ligands_data[ligand_key] = LigandData(
+            ligands_data[key] = LigandData(
                 sdf=str(raw_sdf),
                 coords=np.array(positions[i], dtype=np.float32),
                 atom_types=atom_types[i],
@@ -137,24 +214,25 @@ class StructureProcessor:
 
         return ligands_data
 
-    def process_npndes(self, npnde_paths: List[str]) -> Dict[str, LigandData]:
-        npnde_mols = [Chem.SDMolSupplier(path)[0] for path in npnde_paths]
+    def process_npndes(
+        self, system: PlinderSystem, npnde_mols: Dict[str, Chem.Mol]
+    ) -> Dict[str, LigandData]:
+        keys = list(npnde_mols.keys())
+        mols = list(npnde_mols.values())
+
         (positions, atom_types, atom_charges, bond_types, bond_idxs, _, failed_idxs) = (
-            self.npnde_tensorizer.featurize_molecules(npnde_mols)
+            self.npnde_tensorizer.featurize_molecules(mols)
         )
         for i in failed_idxs:
-            logger.warning("Failed to tensorize npnde %s", npnde_paths[i])
+            logger.warning("Failed to tensorize npnde %s", keys[i])
 
-        npnde_paths = [
-            path for i, path in enumerate(npnde_paths) if i not in failed_idxs
-        ]
+        npnde_keys = [key for i, key in enumerate(keys) if i not in failed_idxs]
 
         npnde_data = {}
-        for i, path in enumerate(npnde_paths):
-            raw_sdf = Path(path).relative_to(self.raw_data)
-            npnde_key = Path(path).stem
+        for i, key in enumerate(npnde_keys):
+            raw_sdf = Path(system.ligand_sdfs[key]).relative_to(self.raw_data)
 
-            npnde_data[npnde_key] = LigandData(
+            npnde_data[key] = LigandData(
                 sdf=str(raw_sdf),
                 coords=np.array(positions[i], dtype=np.float32),
                 atom_types=atom_types[i],
@@ -166,9 +244,13 @@ class StructureProcessor:
         return npnde_data
 
     def extract_pocket(
-        self, receptor: struc.AtomArray, ligand_coords: np.ndarray
+        self,
+        receptor: struc.AtomArray,
+        ligand_coords: np.ndarray,
+        chain_mapping: Optional[Dict[str, str]] = None,
     ) -> StructureData:
         logger.debug("Extracting pocket")
+        receptor = receptor[receptor.res_name != "HOH"]
         receptor_cell_list = struc.CellList(receptor, cell_size=self.pocket_cutoff)
 
         close_atom_indices = []
@@ -189,6 +271,10 @@ class StructureProcessor:
         if len(pocket_indices) == 0:
             return None
 
+        if chain_mapping is not None:
+            chain_ids = [chain_mapping.get(chain, chain) for chain in receptor.chain_id]
+            receptor.chain_id = chain_ids
+
         return StructureData(
             coords=receptor.coord[pocket_indices],
             atom_names=receptor.atom_name[pocket_indices],
@@ -206,7 +292,7 @@ class SystemProcessor:
         pocket_cutoff: float = 8.0,
         raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
     ):
-        logger.info("Initializing SystemProcessor with cutoff=%f", pocket_cutoff)
+        logger.debug("Initializing SystemProcessor with cutoff=%f", pocket_cutoff)
         self.structure_processor = StructureProcessor(
             ligand_atom_map=ligand_atom_map,
             npnde_atom_map=npnde_atom_map,
@@ -215,8 +301,11 @@ class SystemProcessor:
         )
         self.pdb_writer = None
 
-    def filter_ligands(self, system):
+    def filter_ligands(
+        self, system: PlinderSystem
+    ) -> (Dict[str, Chem.Mol], Dict[str, Chem.Mol]):
         system_annotation = system.system
+        system_structure = system.holo_structure
 
         proper_ligand_keys = []
         npnde_keys = []
@@ -238,73 +327,45 @@ class SystemProcessor:
             logger.warning("Skipping %s due to no proper ligands", system.system_id)
             return None, None
 
-        ligand_paths = []
-        npnde_paths = []
-        for ligand_key, path in system.ligand_sdfs.items():
-            if ligand_key in proper_ligand_keys:
-                ligand_paths.append(path)
-            elif ligand_key in npnde_keys:
-                npnde_paths.append(path)
+        ligand_mols = {}
+        npnde_mols = {}
+        for key, mol in system_structure.resolved_ligand_mols.items():
+            if key in proper_ligand_keys:
+                ligand_mols[key] = mol
+            elif key in npnde_keys:
+                npnde_mols[key] = mol
 
-        return ligand_paths, npnde_paths
+        return ligand_mols, npnde_mols
 
-    def process_system(self, system_id: str, save_pockets: bool = False) -> Dict:
+    def process_system(
+        self, system_id: str, save_pockets: bool = False
+    ) -> Dict[str, Any]:
         logger.info("Processing system %s", system_id)
 
         system = PlinderSystem(system_id=system_id)
-        receptor_path = system.receptor_cif
 
-        ligand_paths, npnde_paths = self.filter_ligands(system)
+        ligand_mols, npnde_mols = self.filter_ligands(system)
 
-        if not ligand_paths:
+        if not ligand_mols:
             return None
 
-        # Get apo paths
+        # Get apo ids
         apo_ids = system.linked_structures[system.linked_structures["kind"] == "apo"][
             "id"
         ].tolist()
 
-        apo_paths = [
-            system.get_linked_structure(link_kind="apo", link_id=id) for id in apo_ids
-        ]
-
-        superposed_apo_paths = [
-            str(
-                Path(path).parent
-                / "apo"
-                / system_id
-                / Path(path).stem
-                / "superposed.cif"
-            )
-            for path in apo_paths
-        ]
-
-        # Get pred paths
+        # Get pred ids
         pred_ids = system.linked_structures[system.linked_structures["kind"] == "pred"][
             "id"
         ].tolist()
 
-        pred_paths = [
-            system.get_linked_structure(link_kind="pred", link_id=id) for id in pred_ids
-        ]
-
-        superposed_pred_paths = [
-            str(
-                Path(path).parent
-                / "pred"
-                / system_id
-                / Path(path).stem
-                / "superposed.cif"
-            )
-            for path in pred_paths
-        ]
-
         result = self.process_structures(
-            receptor_path=receptor_path,
-            ligand_paths=ligand_paths,
-            npnde_paths=npnde_paths,
-            apo_paths=superposed_apo_paths,
-            pred_paths=superposed_pred_paths,
+            system_id=system_id,
+            system=system,
+            ligand_mols=ligand_mols,
+            npnde_mols=npnde_mols,
+            apo_ids=apo_ids,
+            pred_ids=pred_ids,
             chain_mapping=system.chain_mapping,
             save_pockets=save_pockets,
         )
@@ -331,35 +392,39 @@ class SystemProcessor:
 
     def process_structures(
         self,
-        receptor_path: str,
-        ligand_paths: List[str],
-        npnde_paths: Optional[List[str]] = None,
-        apo_paths: Optional[List[str]] = None,
-        pred_paths: Optional[List[str]] = None,
+        system_id: str,
+        system: PlinderSystem,
+        ligand_mols: Dict[str, Chem.Mol],
+        npnde_mols: Optional[Dict[str, Chem.Mol]] = None,
+        apo_ids: Optional[List[str]] = None,
+        pred_ids: Optional[List[str]] = None,
         chain_mapping: Optional[Dict[str, str]] = None,
         save_pockets: bool = False,
-    ) -> Dict:
+    ) -> Dict[str, Any]:
         if save_pockets:
             self.pdb_writer = PDBWriter(chain_mapping)
 
+        system_structure = system.holo_structure
+
         # Process receptor
-        receptor, cif = self.structure_processor.load_structure(
-            receptor_path, chain_mapping
+        receptor_data = self.structure_processor.process_receptor(
+            system_structure.protein_atom_array,
+            str(system_structure.protein_path),
+            chain_mapping,
         )
-        receptor_data = self.structure_processor.process_structure(receptor, cif)
 
         # Process ligands
-        ligands_data = self.structure_processor.process_ligands(ligand_paths)
+        ligands_data = self.structure_processor.process_ligands(system, ligand_mols)
 
-        if npnde_paths:
-            npnde_data = self.structure_processor.process_npndes(npnde_paths)
+        if npnde_mols:
+            npnde_data = self.structure_processor.process_npndes(system, npnde_mols)
 
         # Process pockets
         pockets_data = {}
         ligands_to_remove = []
         for ligand_key, ligand in ligands_data.items():
             pocket_data = self.structure_processor.extract_pocket(
-                receptor, ligand.coords
+                system_structure.protein_atom_array, ligand.coords, system.chain_mapping
             )
 
             if not pocket_data:
@@ -374,7 +439,7 @@ class SystemProcessor:
             )
 
             if save_pockets:
-                output_dir = os.path.dirname(receptor_path)
+                output_dir = os.path.dirname(system_structure.protein_path)
                 pocket_path = os.path.join(output_dir, f"pocket_{ligand_key}.pdb")
                 self.pdb_writer.write(pocket_data, pocket_path)
 
@@ -388,31 +453,31 @@ class SystemProcessor:
 
         # Process apo structures
         apo_structures = {}
-        if apo_paths:
-            for apo_path in apo_paths:
-                apo_key = Path(apo_path).parent.name
-                logger.info("Processing apo structure %s", apo_path)
-                apo_struct, cif = self.structure_processor.load_structure(apo_path)
-                apo_structures[apo_key] = self.structure_processor.process_structure(
-                    apo_struct, cif
+        if apo_ids:
+            for id in apo_ids:
+                logger.info(
+                    "Processing apo structure %s linked to system %s", id, system_id
+                )
+                apo_structures[id] = self.structure_processor.process_linked_structure(
+                    system, id
                 )
 
         # Process pred structures
         pred_structures = {}
-        if pred_paths:
-            for pred_path in pred_paths:
-                pred_key = Path(pred_path).parent.name
-                logger.info("Processing pred structure %s", pred_path)
-                pred_struct, cif = self.structure_processor.load_structure(pred_path)
-                pred_structures[pred_key] = self.structure_processor.process_structure(
-                    pred_struct, cif
+        if pred_ids:
+            for id in pred_ids:
+                logger.info(
+                    "Processing pred structure %s linked to system %s", id, system_id
+                )
+                pred_structures[id] = self.structure_processor.process_linked_structure(
+                    system, id
                 )
 
         return {
             "receptor": receptor_data,
             "ligands": ligands_data,
-            "npndes": npnde_data if npnde_paths else None,
+            "npndes": npnde_data if npnde_mols else None,
             "pockets": pockets_data,
-            "apo_structures": apo_structures if apo_paths else None,
-            "pred_structures": pred_structures if pred_paths else None,
+            "apo_structures": apo_structures if apo_ids else None,
+            "pred_structures": pred_structures if pred_ids else None,
         }
