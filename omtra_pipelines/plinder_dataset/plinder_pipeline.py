@@ -231,7 +231,6 @@ class StructureProcessor:
         npnde_data = {}
         for i, key in enumerate(npnde_keys):
             raw_sdf = Path(system.ligand_sdfs[key]).relative_to(self.raw_data)
-
             npnde_data[key] = LigandData(
                 sdf=str(raw_sdf),
                 coords=np.array(positions[i], dtype=np.float32),

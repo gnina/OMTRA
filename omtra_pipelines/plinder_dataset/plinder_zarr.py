@@ -28,14 +28,14 @@ class PlinderZarrConverter:
         struc_chunk_size: int = 235000,
         lig_chunk_size: int = 2000,
         category: str = None,
-        num_workers: int = None,
+        num_workers: int = 1,
     ):
         self.output_path = Path(output_path)
         self.system_processor = system_processor
         self.struc_chunk_size = struc_chunk_size
         self.lig_chunk_size = lig_chunk_size
         self.category = category
-        self.num_workers = num_workers or mp.cpu_count()
+        self.num_workers = num_workers
 
         if not self.output_path.exists():
             self.store = zarr.storage.LocalStore(str(self.output_path))
@@ -235,14 +235,16 @@ class PlinderZarrConverter:
         group["atom_charges"][current_len:] = data.atom_charges
 
         num_bonds = len(data.bond_indices)
-        bond_current_len = group["bond_types"].shape[0]
-        new_bond_len = bond_current_len + num_bonds
 
-        group["bond_types"].resize((new_bond_len,))
-        group["bond_types"][-num_bonds:] = data.bond_types
+        bond_current_len, new_bond_len = None, None
+        if num_bonds > 0:
+            bond_current_len = group["bond_types"].shape[0]
+            new_bond_len = bond_current_len + num_bonds
+            group["bond_types"].resize((new_bond_len,))
+            group["bond_types"][-num_bonds:] = data.bond_types
 
-        group["bond_indices"].resize((new_bond_len, 2))
-        group["bond_indices"][-num_bonds:] = data.bond_indices
+            group["bond_indices"].resize((new_bond_len, 2))
+            group["bond_indices"][-num_bonds:] = data.bond_indices
 
         return current_len, new_len, bond_current_len, new_bond_len
 
