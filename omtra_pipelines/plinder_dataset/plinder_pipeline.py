@@ -34,7 +34,6 @@ class LigandData:
     bond_indices: np.ndarray
     sdf: str
 
-
 class PDBWriter:
     def __init__(self, chain_mapping: Optional[Dict[str, str]] = None):
         self.chain_mapping = chain_mapping
@@ -52,7 +51,6 @@ class PDBWriter:
         pdb_file = pdb.PDBFile()
         pdb_file.set_structure(struct)
         pdb_file.write(output_path)
-
 
 class StructureProcessor:
     def __init__(
@@ -194,7 +192,9 @@ class StructureProcessor:
             self.ligand_tensorizer.featurize_molecules(mols)
         )
 
+        failed_mols = {}
         for i in failed_idxs:
+            failed_mols[keys[i]] = ligand_mols[keys[i]]
             logger.warning("Failed to tensorize ligand %s", keys[i])
 
         ligand_keys = [key for i, key in enumerate(keys) if i not in failed_idxs]
@@ -212,7 +212,7 @@ class StructureProcessor:
                 bond_indices=bond_idxs[i],
             )
 
-        return ligands_data
+        return ligands_data, failed_mols
 
     def process_npndes(
         self, system: PlinderSystem, npnde_mols: Dict[str, Chem.rdchem.Mol]
@@ -413,8 +413,11 @@ class SystemProcessor:
         )
 
         # Process ligands
-        ligands_data = self.structure_processor.process_ligands(system, ligand_mols)
-
+        ligands_data, failed_mols = self.structure_processor.process_ligands(system, ligand_mols)
+        
+        if failed_mols:
+            npnde_mols.update(failed_mols)
+            
         if npnde_mols:
             npnde_data = self.structure_processor.process_npndes(system, npnde_mols)
 
