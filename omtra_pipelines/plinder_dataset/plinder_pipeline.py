@@ -24,7 +24,6 @@ class StructureData:
     chain_ids: np.ndarray
     cif: Optional[str] = None
 
-
 @dataclass
 class LigandData:
     coords: np.ndarray
@@ -32,7 +31,21 @@ class LigandData:
     atom_charges: np.ndarray
     bond_types: np.ndarray
     bond_indices: np.ndarray
+    is_covalent: bool
     sdf: str
+    linkages: Optional[List[str]] = None # "{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}"
+    
+
+@dataclass
+class SystemData:
+    system_id: str
+    ligand_id: str
+    receptor: StructureData
+    ligand: LigandData
+    pocket: StructureData
+    npndes: Optional[Dict[str, LigandData]] = None
+    apo: Optional[StructureData] = None
+    pred: Optional[StructureData] = None
 
 class PDBWriter:
     def __init__(self, chain_mapping: Optional[Dict[str, str]] = None):
@@ -140,8 +153,8 @@ class StructureProcessor:
         return reordered
 
     def process_linked_structure(
-        self, system: PlinderSystem, linked_id: str
-    ) -> Dict[str, StructureData]:
+        self, system: PlinderSystem, linked_id: str, ligand_data: Dict[str, LigandData], has_covalent: bool = False
+    ) -> (Dict[str, Any], Dict[int, int]):
         holo = system.holo_structure
         linked_structure = system.alternate_structures[linked_id]
         linked_structure.set_chain(holo.protein_chain_ordered[0])
@@ -149,6 +162,18 @@ class StructureProcessor:
         holo_cropped, linked_cropped = holo.align_common_sequence(
             linked_structure, renumber_residues=True
         )
+        
+        res_id_map = {}
+        if has_covalent:
+            holo_cropped_og, _ = holo.align_common_sequence(
+                linked_structure, renumber_residues=False
+            )
+            for i, atom in enumerate(holo_cropped_og.protein_atom_array):
+                if atom.chain_id not in res_id_map:
+                    res_id_map[atom.chain_id] = {}
+                if atom.res_id not in res_id_map[atom.chain_id]:
+                    res_id_map[atom.chain_id][atom.res_id] = holo_cropped.protein_atom_array[i].res_id
+
         linked_cropped_superposed, raw_rmsd, refined_rmsd = linked_cropped.superimpose(
             holo_cropped
         )
@@ -167,7 +192,7 @@ class StructureProcessor:
             if reordered_arr:
                 linked_cropped_superposed.protein_atom_array = reordered_arr
             else:
-                return None
+                return None, None
 
         holo_data = self.process_receptor(
             holo_cropped.protein_atom_array,
@@ -179,8 +204,12 @@ class StructureProcessor:
             str(linked_cropped_superposed.protein_path),
             system.chain_mapping,
         )
-
-        return {"holo": holo_data, linked_id: linked_data}
+        pockets_data = {}
+        for key, ligand in ligand_data.items():
+            pocket = self.extract_pocket(receptor=holo_cropped.protein_atom_array, ligand_coords=ligand.coords, chain_mapping=system.chain_mapping)
+            if pocket:
+                pockets_data[key] = pocket
+        return {"holo": holo_data, linked_id: linked_data, "pockets": pockets_data}, res_id_map
 
     def process_ligands(
         self, system: PlinderSystem, ligand_mols: Dict[str, Chem.rdchem.Mol]
@@ -191,7 +220,7 @@ class StructureProcessor:
         (positions, atom_types, atom_charges, bond_types, bond_idxs, _, failed_idxs) = (
             self.ligand_tensorizer.featurize_molecules(mols)
         )
-
+        annotation = system.system
         failed_mols = {}
         for i in failed_idxs:
             failed_mols[keys[i]] = ligand_mols[keys[i]]
@@ -202,7 +231,15 @@ class StructureProcessor:
         ligands_data = {}
         for i, key in enumerate(ligand_keys):
             raw_sdf = Path(system.ligand_sdfs[key]).relative_to(self.raw_data)
-
+            instance, asym_id = key.split('.')
+            is_covalent = False
+            linkages = None
+            for lig_ann in annotation['ligands']:
+                if int(lig_ann['instance']) == int(instance) and lig_ann['asym_id'] == asym_id:
+                    is_covalent = lig_ann['is_covalent']
+                    if is_covalent:
+                        linkages = lig_ann['covalent_linkages']
+            
             ligands_data[key] = LigandData(
                 sdf=str(raw_sdf),
                 coords=np.array(positions[i], dtype=np.float32),
@@ -210,6 +247,8 @@ class StructureProcessor:
                 atom_charges=atom_charges[i],
                 bond_types=bond_types[i],
                 bond_indices=bond_idxs[i],
+                is_covalent=is_covalent,
+                linkages=linkages
             )
 
         return ligands_data, failed_mols
@@ -223,6 +262,9 @@ class StructureProcessor:
         (positions, atom_types, atom_charges, bond_types, bond_idxs, _, failed_idxs) = (
             self.npnde_tensorizer.featurize_molecules(mols)
         )
+
+        annotation = system.system
+
         for i in failed_idxs:
             logger.warning("Failed to tensorize npnde %s", keys[i])
 
@@ -231,6 +273,16 @@ class StructureProcessor:
         npnde_data = {}
         for i, key in enumerate(npnde_keys):
             raw_sdf = Path(system.ligand_sdfs[key]).relative_to(self.raw_data)
+
+            instance, asym_id = key.split('.')
+            is_covalent = False
+            linkages = None
+            for lig_ann in annotation['ligands']:
+                if int(lig_ann['instance']) == int(instance) and lig_ann['asym_id'] == asym_id:
+                    is_covalent = lig_ann['is_covalent']
+                    if is_covalent:
+                        linkages = lig_ann['covalent_linkages']
+
             npnde_data[key] = LigandData(
                 sdf=str(raw_sdf),
                 coords=np.array(positions[i], dtype=np.float32),
@@ -238,9 +290,24 @@ class StructureProcessor:
                 atom_charges=atom_charges[i],
                 bond_types=bond_types[i],
                 bond_indices=bond_idxs[i],
+                is_covalent=is_covalent,
+                linkages=linkages
             )
 
         return npnde_data
+    
+    def convert_npnde_map(self, ligand: LigandData) -> LigandData:
+        atom_types = [self.ligand_atom_map[i] for i in ligand.atom_types]
+        new_atom_types = [self.npnde_atom_map.index(atom) for atom in atom_types]
+        npnde = LigandData(
+            sdf=ligand.sdf,
+            coords=ligand.coords,
+            atom_types=np.array(new_atom_types, dtype=np.int32),
+            atom_charges=ligand.atom_charges,
+            bond_types=ligand.bond_types,
+            bond_indices=ligand.bond_indices
+        )
+        return npnde
 
     def extract_pocket(
         self,
@@ -289,6 +356,7 @@ class SystemProcessor:
         ligand_atom_map: List[str],
         npnde_atom_map: List[str],
         pocket_cutoff: float = 8.0,
+        get_links: bool = True, 
         raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
     ):
         logger.debug("Initializing SystemProcessor with cutoff=%f", pocket_cutoff)
@@ -298,6 +366,7 @@ class SystemProcessor:
             pocket_cutoff=pocket_cutoff,
             raw_data=raw_data,
         )
+        self.get_links = get_links
         self.pdb_writer = None
 
     def filter_ligands(
@@ -348,23 +417,28 @@ class SystemProcessor:
         if not ligand_mols:
             return None
 
-        # Get apo ids
-        apo_ids = system.linked_structures[system.linked_structures["kind"] == "apo"][
-            "id"
-        ].tolist()
+        if self.get_links:
+            # Get apo ids
+            apo_ids = system.linked_structures[system.linked_structures["kind"] == "apo"][
+                "id"
+            ].tolist()
 
-        # Get pred ids
-        pred_ids = system.linked_structures[system.linked_structures["kind"] == "pred"][
-            "id"
-        ].tolist()
+            # Get pred ids
+            pred_ids = system.linked_structures[system.linked_structures["kind"] == "pred"][
+                "id"
+            ].tolist()
+
+            if not apo_ids and not pred_ids:
+                logger.warning(f"Skipping system {system_id} due to no linked structures")
+                return None
 
         result = self.process_structures(
             system_id=system_id,
             system=system,
             ligand_mols=ligand_mols,
             npnde_mols=npnde_mols,
-            apo_ids=apo_ids,
-            pred_ids=pred_ids,
+            apo_ids=apo_ids if self.get_links else None,
+            pred_ids=pred_ids if self.get_links else None,
             chain_mapping=system.chain_mapping,
             save_pockets=save_pockets,
         )
@@ -373,33 +447,73 @@ class SystemProcessor:
             logger.warning("Skipping system %s due to no ligands remaining", system_id)
             return None
 
-        result["system_annotation"] = system.system
-        result["system_id"] = system_id
-
-        num_npndes = 0
-        if result["npndes"]:
-            num_npndes = len(result["npndes"])
-
-        logger.info(
-            "Processed system %s with %d ligands and %d npndes",
-            system_id,
-            len(result["ligands"]),
-            num_npndes,
-        )
-
         return result
-
-    def process_structures(
+    
+    def process_linked_pair(
         self,
         system_id: str,
         system: PlinderSystem,
-        ligand_mols: Dict[str, Chem.rdchem.Mol],
-        npnde_mols: Optional[Dict[str, Chem.rdchem.Mol]] = None,
-        apo_ids: Optional[List[str]] = None,
-        pred_ids: Optional[List[str]] = None,
+        ligand_data: Dict[str, LigandData],
+        link_id: str,
+        link_type: str, 
+        npnde_data: Optional[Dict[str, LigandData]] = None,
+        chain_mapping: Optional[Dict[str, str]] = None
+    ) -> List[SystemData]:
+
+        annotation = system.system
+        has_covalent=False
+        for lig_ann in annotation['ligands']:
+            if lig_ann['is_covalent']:
+                has_covalent=True
+        
+        receptor_data, res_id_mapping = self.structure_processor.process_linked_structure(system=system, linked_id=link_id, has_covalent=has_covalent, ligand_data=ligand_data)
+        
+        if not receptor_data:
+            logger.warning(f"Failed to align/crop {system_id} with {link_id}")
+            return None
+        elif not receptor_data["pockets"]:
+            logger.warning(f"No pockets extracted for {system_id} with {link_id}")
+            return None
+        
+        system_datas = []
+
+        for key, ligand in ligand_data.items():
+            if key not in receptor_data["pockets"]:
+                continue
+
+            other_ligands = {k: l for k, l in ligand_data.items() if k != key}
+            if other_ligands:
+                for k, l in other_ligands.items():
+                    other_ligands[k] = self.structure_processor.convert_npnde_map(l)
+
+            if npnde_data:
+                temp_npnde_data = npnde_data.copy()
+            else:
+                temp_npnde_data = {}
+            temp_npnde_data.update(other_ligands)
+            # TODO: update linkages with new residue numbering
+            system_data = SystemData(
+                system_id = system_id,
+                ligand_id = key, 
+                receptor = receptor_data['holo'],
+                ligand = ligand, 
+                pocket = receptor_data["pockets"][key],
+                npndes = temp_npnde_data if temp_npnde_data else None, 
+                apo = receptor_data[link_id] if link_type == 'apo' else None,
+                pred = receptor_data[link_id] if link_type == 'pred' else None
+            )
+            system_datas.append(system_data)
+        return system_datas
+    
+    def process_structures_no_links(
+        self,
+        system_id: str,
+        system: PlinderSystem,
+        ligand_data: Dict[str, LigandData],
+        npnde_data: Optional[Dict[str, LigandData]] = None,
         chain_mapping: Optional[Dict[str, str]] = None,
         save_pockets: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> List[SystemData]:
         if save_pockets:
             self.pdb_writer = PDBWriter(chain_mapping)
 
@@ -412,19 +526,10 @@ class SystemProcessor:
             chain_mapping,
         )
 
-        # Process ligands
-        ligands_data, failed_mols = self.structure_processor.process_ligands(system, ligand_mols)
-        
-        if failed_mols:
-            npnde_mols.update(failed_mols)
-            
-        if npnde_mols:
-            npnde_data = self.structure_processor.process_npndes(system, npnde_mols)
-
         # Process pockets
         pockets_data = {}
         ligands_to_remove = []
-        for ligand_key, ligand in ligands_data.items():
+        for ligand_key, ligand in ligand_data.items():
             pocket_data = self.structure_processor.extract_pocket(
                 system_structure.protein_atom_array, ligand.coords, system.chain_mapping
             )
@@ -448,38 +553,107 @@ class SystemProcessor:
             pockets_data[ligand_key] = pocket_data
 
         for ligand_key in ligands_to_remove:
-            del ligands_data[ligand_key]
+            del ligand_data[ligand_key]
 
-        if len(ligands_data) < 1:
+        if len(ligand_data) < 1:
             return None
+        
+        system_datas = []
 
-        # Process apo structures
-        apo_structures = {}
-        if apo_ids:
-            for id in apo_ids:
-                logger.info(
-                    "Processing apo structure %s linked to system %s", id, system_id
+        for key, ligand in ligand_data.items():
+            other_ligands = {k: l for k, l in ligand_data.items() if k != key}
+            if other_ligands:
+                for k, l in other_ligands.items():
+                    other_ligands[k] = self.structure_processor.convert_npnde_map(l)
+
+            if npnde_data:
+                temp_npnde_data = npnde_data.copy()
+            else:
+                temp_npnde_data = {}
+            temp_npnde_data.update(other_ligands)
+
+            system_data = SystemData(
+                system_id = system_id,
+                ligand_id = key, 
+                receptor = receptor_data,
+                ligand = ligand, 
+                pocket = pockets_data[key],
+                npndes = temp_npnde_data if temp_npnde_data else None
+            )
+            system_datas.append(system_data)
+        return system_datas
+        
+    def process_structures(
+        self,
+        system_id: str,
+        system: PlinderSystem,
+        ligand_mols: Dict[str, Chem.rdchem.Mol],
+        npnde_mols: Optional[Dict[str, Chem.rdchem.Mol]] = None,
+        apo_ids: Optional[List[str]] = None,
+        pred_ids: Optional[List[str]] = None,
+        chain_mapping: Optional[Dict[str, str]] = None,
+        save_pockets: bool = False,
+    ) -> Dict[str, Any]:
+        # Process ligands
+        ligands_data, failed_mols = self.structure_processor.process_ligands(system, ligand_mols)
+        
+        if failed_mols:
+            npnde_mols.update(failed_mols)
+            
+        if npnde_mols:
+            npnde_data = self.structure_processor.process_npndes(system, npnde_mols)
+
+        if not self.get_links:
+            systems_data = self.process_structures_no_links(
+                system_id = system_id, 
+                system = system,
+                ligand_data = ligands_data,
+                npnde_data = npnde_data if npnde_mols else None,
+                chain_mapping = chain_mapping,
+                save_pockets = save_pockets,
+            )
+            if systems_data:
+                return {system_id: systems_data, 'links': False, 'annotation': system.system}
+            else:
+                return None
+        else:
+            systems_data = {}
+            links = False
+            apos = {}
+            for apo_id in apo_ids:
+                systems_list = self.process_linked_pair(
+                    system_id = system_id,
+                    system = system,
+                    ligand_data = ligands_data,
+                    npnde_data = npnde_data if npnde_mols else None,
+                    link_id = apo_id,
+                    link_type = 'apo', 
+                    chain_mapping = chain_mapping
                 )
-                apo = self.structure_processor.process_linked_structure(system, id)
-                if apo:
-                    apo_structures[id] = apo
-
-        # Process pred structures
-        pred_structures = {}
-        if pred_ids:
-            for id in pred_ids:
-                logger.info(
-                    "Processing pred structure %s linked to system %s", id, system_id
+                if systems_list:
+                    links = True
+                    apos[apo_id] = systems_list
+            if apos:
+                systems_data['apo'] = apos
+            preds = {}
+            for pred_id in pred_ids:
+                systems_list = self.process_linked_pair(
+                    system_id = system_id,
+                    system = system,
+                    ligand_data = ligands_data,
+                    npnde_data = npnde_data if npnde_mols else None,
+                    link_id = pred_id,
+                    link_type = 'pred', 
+                    chain_mapping = chain_mapping
                 )
-                pred = self.structure_processor.process_linked_structure(system, id)
-                if pred:
-                    pred_structures[id] = pred
-
-        return {
-            "receptor": receptor_data,
-            "ligands": ligands_data,
-            "npndes": npnde_data if npnde_mols else None,
-            "pockets": pockets_data,
-            "apo_structures": apo_structures if apo_ids else None,
-            "pred_structures": pred_structures if pred_ids else None,
-        }
+                if systems_list:
+                    links = True
+                    preds[pred_id] = systems_list
+            if preds:
+                systems_data['pred'] = preds
+            if systems_data:
+                systems_data['links'] = links
+                systems_data['annotation'] = system.system
+                return systems_data
+            else:
+                return None
