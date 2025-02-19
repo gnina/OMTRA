@@ -15,7 +15,7 @@ import os
 
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
-from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
+from omtra.data.pharmacophores import get_pharmacophores
 from tempfile import TemporaryDirectory
 
 # TODO: this script should actually take as input just a hydra config 
@@ -281,35 +281,28 @@ def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
     
 
 
-def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
+def get_pharmacophore_data(mols):
 
     # TODO: this should not be hard coded!!!!
     ph_type_to_idx = {type:idx for idx, type in enumerate(args.pharm_types)}
 
-    # create a temporary directory if one is not provided
-    delete_tmp_dir = False
-    if tmp_path is None:
-        delete_tmp_dir = True
-        tmp_dir = TemporaryDirectory()
-        tmp_path = Path(tmp_dir.name)
-
     # collect all pharmacophore data
     all_x_pharm = []
     all_a_pharm = []
+    all_v_pharm = [] # vector
+    
     failed_pharm_idxs = []
-    for idx, conf_file in enumerate(conformer_files):
-        x_pharm, a_pharm = get_lig_only_pharmacophore(conf_file, tmp_path, ph_type_to_idx)
+    for idx, mol in enumerate(mols):
+        x_pharm, a_pharm, v_pharm = get_pharmacophores(mol, ph_type_to_idx)
         if x_pharm is None:
             failed_pharm_idxs.append(idx)
             continue
+        
         all_x_pharm.append(x_pharm)
         all_a_pharm.append(a_pharm)
+        all_v_pharm.append(v_pharm)
 
-    # delete temporary directory if it was created
-    if delete_tmp_dir:
-        tmp_dir.cleanup()
-
-    return all_x_pharm, all_a_pharm, failed_pharm_idxs
+    return all_x_pharm, all_a_pharm, all_v_pharm, failed_pharm_idxs
     
 def generate_library_tensor(names):
     """
@@ -334,7 +327,7 @@ def generate_library_tensor(names):
     
     return library_tensor
     
-def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
+def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, v_pharm, databases):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
@@ -349,6 +342,7 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
     edge_index = np.concatenate(bond_idxs, axis=0)
     x_pharm = np.concatenate(x_pharm, axis=0)
     a_pharm = np.concatenate(a_pharm, axis=0)
+    v_pharm = np.concatenate(v_pharm, axis=0)
     db = np.concatenate(databases, axis=0)
 
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's node features
@@ -370,6 +364,7 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
         'edge_lookup': edge_lookup,
         'pharm_x': x_pharm,
         'pharm_a': a_pharm,
+        'pharm_v': v_pharm,
         'pharm_lookup': pharm_node_lookup,
         'database': databases
     }
@@ -428,7 +423,7 @@ if __name__ == '__main__':
 
 
         # Get pharmacophore data
-        x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files)
+        x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
         # Remove ligands where pharmacophore generation failed
         if len(failed_pharm_idxs) > 0 :
             print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
@@ -445,6 +440,7 @@ if __name__ == '__main__':
             names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
             x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
             a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
+            v_pharm = [v for i, v in enumerate(v_pharm) if i not in failed_xace_idxs]
         
        
         # Tensorize database sources
@@ -452,7 +448,7 @@ if __name__ == '__main__':
 
         # Format and save tensors to disk
         output_chunk_file = f"{args.chunk_data_dir}/data_chunk_{chunks}.npz"
-        num_atoms, num_edges, num_pharm = save_chunk_to_disk(output_chunk_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases)
+        num_atoms, num_edges, num_pharm = save_chunk_to_disk(output_chunk_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, v_pharm, databases)
         
         # Record number of molecules in data chunk file to txt file
         output_info_file = f"{args.chunk_info_dir}/data_chunk_{chunks}.txt"

@@ -132,3 +132,15 @@ def get_pharmacophore_dict(ligand, receptor=None):
                 pharmacophores[feature]['I'].extend(interaction)
                 
     return pharmacophores
+
+def get_pharmacophores(mol, ph_type_to_idx):
+    pharmacophores_dict = get_pharmacophore_dict(mol)
+    X, A, V = [], [], []
+    for type in pharmacophores_dict:
+        pos = pharmacophores_dict[type]['P']
+        A.extend(pos)
+        V.extend(pharmacophores_dict[type]['V'])
+        type_embed = ph_type_to_idx[type]
+        X.extend([type_embed]*len(pos))
+
+    return X, A, V
