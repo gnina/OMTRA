@@ -18,6 +18,7 @@ from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
 from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
 from tempfile import TemporaryDirectory
+import time
 
 # Global variable to hold the NameFinder object
 name_finder = None
@@ -49,6 +50,7 @@ def parse_args():
     p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
 
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
+    p.add_argument('--n_chunks', type=int, default=None, help='Number of to process. If None, process all. This is only for testing purposes.')
 
     args = p.parse_args()
     return args
@@ -480,7 +482,39 @@ def process_batch(conformer_files, atom_type_map, ph_type_idx, database_list):
     tensors = {'positions': positions, 'atom_types': atom_types, 'atom_charges': atom_charges, 'bond_types': bond_types, 'bond_idxs': bond_idxs, 'x_pharm': x_pharm, 'a_pharm': a_pharm, 'databases': databases}
     return tensors
 
-    
+def run_parallel(args, batch_iter):
+    with Pool(processes=args.n_cpus, initializer=worker_initializer, initargs=(spoof_db,)) as pool:
+        for chunk_idx, conformer_files in enumerate(batch_iter):
+
+            if args.n_chunks is not None and chunk_idx > args.n_chunks:
+                break
+
+            chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk_idx}.npz"
+            chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk_idx}.pkl"
+
+            pool.apply_async(
+                process_batch, 
+                args=(conformer_files, atom_type_map, ph_type_idx, database_list), 
+                callback=partial(save_chunk_to_disk, 
+                        chunk_data_file=chunk_data_file, 
+                        chunk_info_file=chunk_info_file))
+
+        
+        pool.close()
+        pool.join()
+
+def run_single(args, batch_iter):
+    worker_initializer(args.spoof_db)
+    for chunk_idx, conformer_files in enumerate(batch_iter):
+
+        if args.n_chunks is not None and chunk_idx > args.n_chunks:
+            break
+
+        chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk_idx}.npz"
+        chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk_idx}.pkl"
+
+        tensors = process_batch(conformer_files, atom_type_map, ph_type_idx, database_list)
+        save_chunk_to_disk(tensors, chunk_data_file, chunk_info_file)
 
 
 if __name__ == '__main__':
@@ -498,30 +532,15 @@ if __name__ == '__main__':
     path_iter = crawl_conformer_files(args.db_dir)
     batch_iter = batch_generator(path_iter, args.batch_size)
 
-    chunk = 0
+    start_time = time.time()
 
-    with Pool(processes=args.n_cpus, initializer=worker_initializer, initargs=(spoof_db,)) as pool:
-        for conformer_files in batch_iter:
-            chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk}.npz"
-            chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk}.pkl"
+    if args.n_cpus == 1:
+        run_single(args, batch_iter)
+    else:
+        run_parallel(args, batch_iter)
 
-            pool.apply_async(
-                process_batch, 
-                args=(conformer_files, atom_type_map, ph_type_idx, database_list), 
-                callback=partial(save_chunk_to_disk, 
-                        chunk_data_file=chunk_data_file, 
-                        chunk_info_file=chunk_info_file))
-            chunk += 1
-        
-        pool.close()
-        pool.join()
+    end_time = time.time()
+    print(f"Total time: {end_time - start_time:.1f} seconds")
 
-    # TODO: convert pharmacophore and names into tensors
     # TODO: can you combine the conformer_file -> smiles -> names into one query rather than two? one query that is batched?
-    # TODO: process molecules in batches; 
-    #     this includes using the NameFinder.query_batch method instead of NameFinder.query
-    #     you can also batch with NameFinder.query_smiles_from_file_batch in stead of NameFinder.query_smiles_from_file
-    #     MoleculeTensorizer can handle batches of molecules
-    # TODO: parallelize processing: hand chunks of conformer files to subprocesses
-    # TODO: write molecules to disk in chunks
-        
+
