@@ -84,30 +84,7 @@ def crawl_conformer_files(db_dir: Path):
                 yield conformer_file
 
 
-def batch_generator(iterable, batch_size, n_chunks):
-    """  
-    Gets batches of conformer files
 
-    Args: 
-        iterable: Generator that crawls the conformer files
-        batch_size: Size of the batches
-    
-    Returns:
-        batch: List of conformer file paths of length batch_size (or remaining files)
-    """
-    batch = []
-    batches_served = 0
-    for item in iterable:
-        batch.append(item)
-        if len(batch) == batch_size:
-            yield batch
-            batches_served += 1
-            batch = []  # Reset the batch
-            if n_chunks is not None and batches_served >= n_chunks:
-                break
-
-    if batch:  # Remaining items that didn't fill a complete batch
-        yield batch
     
 
 def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list):
@@ -171,14 +148,14 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list):
 
 def run_parallel(args, batch_iter):
     with Pool(processes=args.n_cpus, initializer=worker_initializer, initargs=(args.spoof_db,)) as pool:
-        for chunk_idx, conformer_files in enumerate(batch_iter):
+        for chunk_idx, chunk_data in enumerate(batch_iter):
 
             chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk_idx}.npz"
             chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk_idx}.pkl"
 
             pool.apply_async(
                 process_batch, 
-                args=(conformer_files, atom_type_map, ph_type_idx, database_list), 
+                args=(chunk_data, atom_type_map, ph_type_idx, database_list), 
                 callback=partial(save_chunk_to_disk, 
                         chunk_data_file=chunk_data_file, 
                         chunk_info_file=chunk_info_file))
@@ -219,9 +196,6 @@ if __name__ == '__main__':
                            max_num_queries=args.n_chunks // batches_per_query,
                            spoof_db=spoof_db)
 
-    path_iter = crawl_conformer_files(args.db_dir)
-    batch_iter = batch_generator(path_iter, args.batch_size, args.n_chunks)
-
     start_time = time.time()
 
     if args.n_cpus == 1:
@@ -231,6 +205,3 @@ if __name__ == '__main__':
 
     end_time = time.time()
     print(f"Total time: {end_time - start_time:.1f} seconds")
-
-    # TODO: can you combine the conformer_file -> smiles -> names into one query rather than two? one query that is batched?
-

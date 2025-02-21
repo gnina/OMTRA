@@ -21,6 +21,31 @@ from tempfile import TemporaryDirectory
 import time
 
 
+def batch_generator(iterable, batch_size, n_chunks):
+    """  
+    Gets batches of conformer files
+
+    Args: 
+        iterable: Generator that crawls the conformer files
+        batch_size: Size of the batches
+    
+    Returns:
+        batch: List of conformer file paths of length batch_size (or remaining files)
+    """
+    batch = []
+    batches_served = 0
+    for item in iterable:
+        batch.append(item)
+        if len(batch) == batch_size:
+            yield batch
+            batches_served += 1
+            batch = []  # Reset the batch
+            if n_chunks is not None and batches_served >= n_chunks:
+                break
+
+    if batch:  # Remaining items that didn't fill a complete batch
+        yield batch
+
 class PharmitDBConnector():
 
     def __init__(self, spoof_db=False):
