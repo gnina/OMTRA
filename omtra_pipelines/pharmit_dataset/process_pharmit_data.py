@@ -20,7 +20,7 @@ from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
 from tempfile import TemporaryDirectory
 import time
 
-from omtra_pipelines.pharmit_dataset.phase1 import NameFinder, get_pharmacophore_data
+from omtra_pipelines.pharmit_dataset.phase1 import *
 
 # Global variable to hold the NameFinder object
 name_finder = None
@@ -53,6 +53,7 @@ def parse_args():
 
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--n_chunks', type=int, default=None, help='Number of to process. If None, process all. This is only for testing purposes.')
+    p.add_argument('--batches_per_query', type=int, default=4, help='Number of batches per query.')
 
     args = p.parse_args()
     return args
@@ -109,9 +110,13 @@ def batch_generator(iterable, batch_size, n_chunks):
         yield batch
     
 
-def process_batch(conformer_files, atom_type_map, ph_type_idx, database_list):
+def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list):
     global name_finder
     mol_tensorizer = MoleculeTensorizer(atom_map=atom_type_map)
+
+    # chunk data is a list of tuples, each tuple contains (conformer_file, smile)
+
+    smiles, conformer_files = chunk_data
 
     # Get RDKit Mol objects
     mols = [read_mol_from_conf_file(file) for file in conformer_files]
@@ -126,23 +131,16 @@ def process_batch(conformer_files, atom_type_map, ph_type_idx, database_list):
         mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
         conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
 
-    # (BATCHED) SMILES representations
-    smiles, failed_smiles_idxs = name_finder.query_smiles_from_file_batch(conformer_files)
-    # Remove molecules that couldn't get SMILES data
-    if len(failed_smiles_idxs) > 0:
-       #print("SMILEs for", len(failed_smiles_idxs), "conformer files could not be found, removing")
-        mols = [mol for i, mol in enumerate(mols) if i not in failed_smiles_idxs]
-        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_smiles_idxs]
-
 
     # (BATCHED) Database source
-    names, failed_names_idxs = name_finder.query_name_batch(smiles)
+    names, failed_names_idxs = name_finder.query_name_from_smiles(smiles)
+    # TODO: name parsing is broken 
+
     # Remove molecules that couldn't get database data
     if len(failed_names_idxs) > 0:
         #print("Database sources for", len(failed_names_idxs), "could not be found, removing")
         mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
         conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
-
 
     # Get pharmacophore data
     x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files, ph_type_idx)
@@ -191,12 +189,12 @@ def run_parallel(args, batch_iter):
 
 def run_single(args, batch_iter):
     worker_initializer(args.spoof_db)
-    for chunk_idx, conformer_files in enumerate(batch_iter):
+    for chunk_idx, chunk_data in enumerate(batch_iter):
 
         chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk_idx}.npz"
         chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk_idx}.pkl"
 
-        tensors = process_batch(conformer_files, atom_type_map, ph_type_idx, database_list)
+        tensors = process_batch(chunk_data, atom_type_map, ph_type_idx, database_list)
         save_chunk_to_disk(tensors, chunk_data_file, chunk_info_file)
 
 
@@ -212,15 +210,24 @@ if __name__ == '__main__':
     os.makedirs(args.chunk_data_dir, exist_ok=True)
     os.makedirs(args.chunk_info_dir, exist_ok=True)
 
+    batches_per_query = args.batches_per_query
+
+    if args.n_chunks is None:
+        args.n_chunks = float('inf')
+
+    db_crawler = DBCrawler(query_size=batches_per_query*args.batch_size, 
+                           max_num_queries=args.n_chunks // batches_per_query,
+                           spoof_db=spoof_db)
+
     path_iter = crawl_conformer_files(args.db_dir)
     batch_iter = batch_generator(path_iter, args.batch_size, args.n_chunks)
 
     start_time = time.time()
 
     if args.n_cpus == 1:
-        run_single(args, batch_iter)
+        run_single(args, db_crawler)
     else:
-        run_parallel(args, batch_iter)
+        run_parallel(args, db_crawler)
 
     end_time = time.time()
     print(f"Total time: {end_time - start_time:.1f} seconds")

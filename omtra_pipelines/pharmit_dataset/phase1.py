@@ -21,10 +21,9 @@ from tempfile import TemporaryDirectory
 import time
 
 
-class NameFinder():
+class PharmitDBConnector():
 
     def __init__(self, spoof_db=False):
-
         if spoof_db:
             self.conn = None
         else:
@@ -32,8 +31,8 @@ class NameFinder():
                 host="localhost",
                 user="pharmit", 
                 db="conformers",)
-                # password="",
-                # unix_socket="/var/run/mysqld/mysqld.sock")
+
+class NameFinder(PharmitDBConnector):
 
     def query_name(self, smiles: str):
 
@@ -47,7 +46,7 @@ class NameFinder():
         return self.extract_prefixes(names)
     
 
-    def query_name_batch(self, smiles_list: list[str]):
+    def query_name_from_smiles(self, smiles_list: list[str]):
         if self.conn is None:
             return [['PubChem', 'ZINC', 'MolPort'] for smiles in smiles_list], []
 
@@ -64,7 +63,7 @@ class NameFinder():
         smiles_to_names = {smile: None for smile in smiles_list}
         
         for smile, name in results:
-            if smile not in smiles_to_names:
+            if smiles_to_names[smile] is None:
                 smiles_to_names[smile] = []
             smiles_to_names[smile].append(name)
         
@@ -95,78 +94,49 @@ class NameFinder():
                 continue
         return list(prefixes)
     
-    def query_smiles_from_file(self, conformer_file: Path):
-        with self.conn.cursor() as cursor:
-            cursor.execute("SELECT smile FROM structures WHERE sdfloc = %s", (str(conformer_file),))
-            smiles = cursor.fetchall()
-        return smiles
 
 
-    def query_smiles_from_file_batch(self, conformer_files: list[Path]):
+class DBCrawler(PharmitDBConnector):
 
-        if self.conn is None:
-            return ['CC' for file in conformer_files], []
+    def __init__(self, *args, max_num_queries=None, query_size: int = 1000, **kwargs):
+        self.query_size = query_size
+        self.max_num_queries = max_num_queries
+        super().__init__(*args, **kwargs)
 
-        file_to_smile = {Path(file): None for file in conformer_files}  # Dictionary to map conformer file to smile
+    def __iter__(self):
+        try:
+            with self.conn.cursor() as cursor:
+                last_id = 0  # Start from the first row
+                n_queries = 0
+                
+                while True:
+                    if n_queries >= self.max_num_queries:
+                        return
 
-        # failure will be different than a mysqlerror; there just wont be an entry if the file is not in the database
-        with self.conn.cursor() as cursor:
-            query = "SELECT sdfloc, smile FROM structures WHERE sdfloc IN %s"
-            cursor.execute(query, [tuple(str(file) for file in conformer_files)])
-            results = cursor.fetchall()
+                    rows = self._fetch_next_batch(cursor, last_id)
+                    if not rows:  # No more rows to fetch
+                        break
 
-        for sdfloc, smile in results:
-            file_to_smile[Path(sdfloc)] = smile  # Update with successfull queries
+                    id_vals, smiles, sdf_files = zip(*rows)
+                    
+                    # Yield current batch
+                    yield (smiles, sdf_files)
 
-        failed_idxs = []
-        for i, file in enumerate(conformer_files):
-            if file_to_smile[Path(file)] is None:
-                failed_idxs.append(i)
-        
-        smiles = [smile for smile in file_to_smile.values() if smile is not None] # Remove None entries 
+                    # Update last_id to the ID of the last row in this batch
+                    last_id = id_vals[-1]
+                    n_queries += 1
+        finally:
+            pass
 
-        return smiles, failed_idxs
-    
-
-    def query_names_from_files_batch(self, filepaths: list[Path]):
+    def _fetch_next_batch(self, cursor, last_id):
+        query = """
+            SELECT id, smile, sdfloc FROM structures
+            WHERE id > %s
+            ORDER BY id
+            LIMIT %s
         """
-        Given a list of filepaths, return the names linked to each of those filepaths
-        with a single query to the database.
-
-        Args:
-            filepaths (list of Path): A list of filepaths to query.
-
-        Returns:
-            list of list of str: A list of lists, where each sublist contains the names
-                                 associated with the corresponding filepath.
-            list of int: A list of indices for filepaths that failed to retrieve names.
-        """
-        if self.conn is None:
-            return [['PubChem', 'ZINC', 'MolPort'] for _ in filepaths], []
-
-        file_to_names = {Path(file): None for file in filepaths}  # Dictionary to map file to names
-
-        with self.conn.cursor() as cursor:
-            # Use the IN clause to query multiple filepaths
-            query = """
-                SELECT s.sdfloc, n.name 
-                FROM structures s 
-                JOIN names n ON s.smile = n.smile 
-                WHERE s.sdfloc IN %s
-            """
-            cursor.execute(query, (tuple(str(file) for file in filepaths),))
-            results = cursor.fetchall()
-
-        for sdfloc, name in results:
-            if file_to_names[Path(sdfloc)] is None:
-                file_to_names[Path(sdfloc)] = []
-            file_to_names[Path(sdfloc)].append(name)
-
-        failed_idxs = [i for i, file in enumerate(filepaths) if file_to_names[Path(file)] is None]  # Get the indices of failed filepaths
-        names = [names for file, names in file_to_names.items() if names is not None]  # Remove None entries
-
-        return names, failed_idxs
-    
+        cursor.execute(query, (last_id, self.query_size))
+        return cursor.fetchall()
 
 def get_pharmacophore_data(conformer_files, ph_type_idx, tmp_path: Path = None):
 
