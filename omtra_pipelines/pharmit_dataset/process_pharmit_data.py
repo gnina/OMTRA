@@ -192,8 +192,8 @@ if __name__ == '__main__':
     if args.n_chunks is None:
         args.n_chunks = float('inf')
 
-    db_crawler = DBCrawler(query_size=batches_per_query*args.batch_size, 
-                           max_num_queries=args.n_chunks // batches_per_query,
+    db_crawler = DBCrawler(query_size=args.batch_size, 
+                           max_num_queries=args.n_chunks,
                            spoof_db=spoof_db)
 
     start_time = time.time()

@@ -246,7 +246,7 @@ def save_chunk_to_disk(tensors, chunk_data_file, chunk_info_file):
 
     # Save tensor dictionary to npz file
     with open(chunk_data_file, 'wb') as f:
-        np.savez(f, **chunk_data_dict)
+        np.savez_compressed(f, **chunk_data_dict)
     
 
     
