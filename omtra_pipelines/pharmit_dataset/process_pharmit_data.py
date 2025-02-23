@@ -5,6 +5,7 @@ from rdkit import Chem
 import pymysql
 import itertools
 import re
+import json
 
 from rdkit.Chem import AllChem as Chem
 import numpy as np
@@ -38,12 +39,9 @@ def parse_args():
     p.add_argument('--db_dir', type=Path, default='./pharmit_small/')
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
-    p.add_argument('--chunk_info_dir', type=Path, 
-                   help='Output directory for information on data chunk files.', 
-                   default='outputs/phase1_chunk_info')
-    p.add_argument('--chunk_data_dir', type=Path, 
-                   help='Output directory for tensor chunks.', 
-                   default='outputs/phase1_chunk_data')
+    p.add_argument('--output_dir', type=Path,
+                   help='Output directory for processed data.', 
+                   default=Path('./outputs/phase1'))
 
     p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
     p.add_argument('--batch_size', type=int, default=50, help='Number of conformer files to batch togther.')
@@ -51,7 +49,8 @@ def parse_args():
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
     p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
     p.add_argument('--max_num_atoms', type=int, default=120, help='Maximum number of atoms in a molecule.')
-
+    p.add_argument('--chunk_offload_threshold', type=int, default=1000, help='Threshold for offloading chunks to disk, in MB.')
+    p.add_argument('--register_write_interval', type=int, default=10, help='Interval for recording processed chunks.')
 
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--n_chunks', type=int, default=None, help='Number of to process. If None, process all. This is only for testing purposes.')
@@ -163,33 +162,32 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     
     return tensors
 
-def run_parallel(args, batch_iter, process_args: tuple):
-    with Pool(processes=args.n_cpus, initializer=worker_initializer, initargs=(args.spoof_db,)) as pool:
+def run_parallel(n_cpus: int, spoof_db: bool, batch_iter: DBCrawler, chunk_saver: ChunkSaver, process_args: tuple):
+    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(spoof_db,)) as pool:
         for chunk_idx, chunk_data in enumerate(batch_iter):
 
-            chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk_idx}.npz"
-            chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk_idx}.pkl"
+            if chunk_saver.chunk_processed(chunk_idx):
+                continue
 
             pool.apply_async(
                 process_batch, 
                 args=(chunk_data, *process_args), 
-                callback=partial(save_chunk_to_disk, 
-                        chunk_data_file=chunk_data_file, 
-                        chunk_info_file=chunk_info_file))
+                callback=partial(chunk_saver.save_chunk_to_disk, 
+                        chunk_idx=chunk_idx))
 
         
         pool.close()
         pool.join()
 
-def run_single(args, batch_iter, process_args: tuple):
-    worker_initializer(args.spoof_db)
+def run_single(spoof_db, batch_iter, chunk_saver, process_args: tuple):
+    worker_initializer(spoof_db)
     for chunk_idx, chunk_data in enumerate(batch_iter):
 
-        chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk_idx}.npz"
-        chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk_idx}.pkl"
+        if chunk_saver.chunk_processed(chunk_idx):
+            continue
 
         tensors = process_batch(chunk_data, *process_args)
-        save_chunk_to_disk(tensors, chunk_data_file, chunk_info_file)
+        chunk_saver.save_chunk_to_disk(tensors, chunk_idx=chunk_idx)
 
 
 if __name__ == '__main__':
@@ -200,12 +198,14 @@ if __name__ == '__main__':
     spoof_db = args.spoof_db
     ph_type_idx = {type:idx for idx, type in enumerate(args.pharm_types)}
 
-    # Make output directories
-    os.makedirs(args.chunk_data_dir, exist_ok=True)
-    os.makedirs(args.chunk_info_dir, exist_ok=True)
-
     if args.n_chunks is None:
         args.n_chunks = float('inf')
+
+    chunk_saver = ChunkSaver(
+        output_dir=args.output_dir,
+        register_write_interval=args.register_write_interval,
+        chunk_offload_threshold_mb=args.chunk_offload_threshold
+    )
 
     db_crawler = DBCrawler(query_size=args.batch_size, 
                            max_num_queries=args.n_chunks,
@@ -216,9 +216,9 @@ if __name__ == '__main__':
     start_time = time.time()
 
     if args.n_cpus == 1:
-        run_single(args, db_crawler, process_args)
+        run_single(spoof_db, db_crawler, chunk_saver, process_args)
     else:
-        run_parallel(args, db_crawler, process_args)
+        run_parallel(args.n_cpus, spoof_db, db_crawler, chunk_saver, process_args)
 
     end_time = time.time()
     print(f"Total time: {end_time - start_time:.1f} seconds")

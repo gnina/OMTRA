@@ -5,6 +5,8 @@ from rdkit import Chem
 import pymysql
 import itertools
 import re
+from typing import Tuple
+import subprocess
 
 from rdkit.Chem import AllChem as Chem
 import numpy as np
@@ -193,85 +195,172 @@ def get_pharmacophore_data(conformer_files, ph_type_idx, tmp_path: Path = None):
     return all_x_pharm, all_a_pharm, failed_pharm_idxs
 
 
-def save_chunk_to_disk(tensors, chunk_data_file, chunk_info_file):
+class ChunkSaver():
+
+    def __init__(self, output_dir: Path, 
+        register_write_interval: int = 10, # how frequently we record the chunks that have been processed to disk
+        chunk_offload_threshold_mb: int = 1000 # how many MB of data to store locally before offloading to masuda
+        ):
+
+        self.output_dir = output_dir
+        self.register_write_interval = register_write_interval
+        self.chunk_offload_threshold_mb = chunk_offload_threshold_mb
+
+        # Make output directories
+        chunk_data_dir = self.output_dir / 'chunk_data'
+        chunk_info_dir = self.output_dir / 'chunk_info'
+        chunk_data_dir.mkdir(parents=True, exist_ok=True)
+        chunk_info_dir.mkdir(parents=True, exist_ok=True)
+        self.chunk_data_dir = chunk_data_dir
+        self.chunk_info_dir = chunk_info_dir
+
+        # get register file, load register if it exists
+        self.register_file = output_dir / 'register.pkl'
+        if self.register_file.exists():
+            with open(self.register_file, 'rb') as f:
+                self.register: set = pickle.load(f)
+        else:
+            self.register = set()
+
+        bytes_stored_local = sum(f.stat().st_size for f in self.chunk_data_dir.glob('*.npz'))
+        self.mb_stored_local = bytes_stored_local / (1024 ** 2)
+        self.n_chunks_since_register_write = 0
+
+    def chunk_processed(self, chunk_idx: int) -> bool:
+        chunk_data_file, _ = self.idx_to_chunk_files(chunk_idx)
+        return str(chunk_data_file) in self.register
+
+    def add_chunk_to_register(self, chunk_data_file: Path):
+        self.register.add(str(chunk_data_file))
+        self.mb_stored_local += chunk_data_file.stat().st_size / (1024 ** 2)
+        self.n_chunks_since_register_write += 1
+
+        if self.n_chunks_since_register_write >= self.register_write_interval:
+            self.write_register()
+
+        if self.mb_stored_local >= self.chunk_offload_threshold_mb:
+            self.offload_chunks()
+
+    def offload_chunks(self):
+        print("Offloading chunks to masuda")
+
+        data_files = self.chunk_data_dir / '*.npz'
+        info_files = self.chunk_info_dir / '*.pkl'
+        data_dst_path = '/home/ian/projects/mol_diffusion/OMTRA/omtra_pipelines/pharmit_dataset/outputs/phase1/chunk_data'
+        info_dst_path = '/home/ian/projects/mol_diffusion/OMTRA/omtra_pipelines/pharmit_dataset/outputs/phase1/chunk_info'
+        scp_transfer(str(data_files), "masuda-tunnel", data_dst_path)
+        scp_transfer(str(info_files), "masuda-tunnel", info_dst_path)
+
+        # remove files from local storage
+        for f in self.chunk_data_dir.glob('*.npz'):
+            f.unlink()
+        for f in self.chunk_info_dir.glob('*.pkl'):
+            f.unlink()
+
+        self.mb_stored_local = 0
+
+    def write_register(self):
+        with open(self.register_file, 'wb') as f:
+            pickle.dump(self.register, f)
+        self.n_chunks_since_register_write = 0
+
+    def idx_to_chunk_files(self, idx: int) -> Tuple[Path, Path]:
+        chunk_data_file = self.chunk_data_dir / f"chunk_data_{idx}.npz"
+        chunk_info_file = self.chunk_info_dir / f"chunk_info_{idx}.pkl"
+        return chunk_data_file, chunk_info_file
+
+
+    def save_chunk_to_disk(self, tensors, chunk_idx):
+
+        chunk_data_file, chunk_info_file = self.idx_to_chunk_files(chunk_idx)
+        
+        positions = tensors['positions']
+        atom_types = tensors['atom_types']
+        atom_charges = tensors['atom_charges']
+        bond_types = tensors['bond_types']
+        bond_idxs = tensors['bond_idxs']
+        x_pharm = tensors['x_pharm']
+        a_pharm = tensors['a_pharm']
+        databases = tensors['databases']
+
+        # Record the number of nodes and edges in each molecule and convert to numpy arrays
+        batch_num_nodes = np.array([x.shape[0] for x in positions])
+        batch_num_edges = np.array([eidxs.shape[0] for eidxs in bond_idxs])
+        batch_num_pharm_nodes = np.array([x.shape[0] for x in x_pharm])
+
+        # concatenate all the data together
+        x = np.concatenate(positions, axis=0)
+        a = np.concatenate(atom_types, axis=0)
+        c = np.concatenate(atom_charges, axis=0)
+        e = np.concatenate(bond_types, axis=0)
+        edge_index = np.concatenate(bond_idxs, axis=0)
+        x_pharm = np.concatenate(x_pharm, axis=0)
+        a_pharm = np.concatenate(a_pharm, axis=0)
+        db = np.concatenate(databases, axis=0)
+
+        # create an array of indicies to keep track of the start_idx and end_idx of each molecule's node features
+        node_lookup = build_lookup_table(batch_num_nodes)
+
+        # create an array of indicies to keep track of the start_idx and end_idx of each molecule's edge features
+        edge_lookup = build_lookup_table(batch_num_edges)
+
+        # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
+        pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
+
+        # Tensor dictionary
+        chunk_data_dict = { 
+            'lig_x': x,
+            'lig_a': a,
+            'lig_c': c,
+            'node_lookup': node_lookup,
+            'lig_e': e,
+            'lig_edge_idx': edge_index,
+            'edge_lookup': edge_lookup,
+            'pharm_x': x_pharm,
+            'pharm_a': a_pharm,
+            'pharm_lookup': pharm_node_lookup,
+            'database': databases
+        }
+
+        # Convert data types
+        chunk_data_dict['lig_x'] = chunk_data_dict['lig_x'].astype(np.float32)
+        chunk_data_dict['pharm_x'] = chunk_data_dict['pharm_x'].astype(np.float32)
+        chunk_data_dict['lig_a'] = chunk_data_dict['lig_a'].astype(np.uint8)
+        chunk_data_dict['pharm_a'] = chunk_data_dict['pharm_a'].astype(np.uint8)
+        chunk_data_dict['lig_c'] = chunk_data_dict['lig_c'].astype(np.int32)
+
+
+        # Save tensor dictionary to npz file
+        with open(chunk_data_file, 'wb') as f:
+            np.savez_compressed(f, **chunk_data_dict)
+        
+
+        # Chunk data file info dictionary
+        chunk_info_dict = {
+            'File': chunk_data_file,
+            'Mols': len(node_lookup),
+            'Atoms': len(x),
+            'Edges': len(e),
+            'Pharm': len(x_pharm)
+        }
+        
+        # Dump info dictionary in pickle files
+        with open(chunk_info_file, "wb") as f:
+            pickle.dump(chunk_info_dict, f)
+
+        print('Wrote chunk:', chunk_info_dict['File'])
+        self.add_chunk_to_register(chunk_data_file)
+
+def scp_transfer(local_path, remote_host, remote_path):
+    command = f"scp -r {local_path} {remote_host}:{remote_path}"
     
-    positions = tensors['positions']
-    atom_types = tensors['atom_types']
-    atom_charges = tensors['atom_charges']
-    bond_types = tensors['bond_types']
-    bond_idxs = tensors['bond_idxs']
-    x_pharm = tensors['x_pharm']
-    a_pharm = tensors['a_pharm']
-    databases = tensors['databases']
-
-    # Record the number of nodes and edges in each molecule and convert to numpy arrays
-    batch_num_nodes = np.array([x.shape[0] for x in positions])
-    batch_num_edges = np.array([eidxs.shape[0] for eidxs in bond_idxs])
-    batch_num_pharm_nodes = np.array([x.shape[0] for x in x_pharm])
-
-    # concatenate all the data together
-    x = np.concatenate(positions, axis=0)
-    a = np.concatenate(atom_types, axis=0)
-    c = np.concatenate(atom_charges, axis=0)
-    e = np.concatenate(bond_types, axis=0)
-    edge_index = np.concatenate(bond_idxs, axis=0)
-    x_pharm = np.concatenate(x_pharm, axis=0)
-    a_pharm = np.concatenate(a_pharm, axis=0)
-    db = np.concatenate(databases, axis=0)
-
-    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's node features
-    node_lookup = build_lookup_table(batch_num_nodes)
-
-    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's edge features
-    edge_lookup = build_lookup_table(batch_num_edges)
-
-    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
-    pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
-
-    # Tensor dictionary
-    chunk_data_dict = { 
-        'lig_x': x,
-        'lig_a': a,
-        'lig_c': c,
-        'node_lookup': node_lookup,
-        'lig_e': e,
-        'lig_edge_idx': edge_index,
-        'edge_lookup': edge_lookup,
-        'pharm_x': x_pharm,
-        'pharm_a': a_pharm,
-        'pharm_lookup': pharm_node_lookup,
-        'database': databases
-    }
-
-    # Convert data types
-    chunk_data_dict['lig_x'] = chunk_data_dict['lig_x'].astype(np.float32)
-    chunk_data_dict['pharm_x'] = chunk_data_dict['pharm_x'].astype(np.float32)
-    chunk_data_dict['lig_a'] = chunk_data_dict['lig_a'].astype(np.uint8)
-    chunk_data_dict['pharm_a'] = chunk_data_dict['pharm_a'].astype(np.uint8)
-    chunk_data_dict['lig_c'] = chunk_data_dict['lig_c'].astype(np.int32)
-
-
-    # Save tensor dictionary to npz file
-    with open(chunk_data_file, 'wb') as f:
-        np.savez_compressed(f, **chunk_data_dict)
-    
-
-    
-    # Chunk data file info dictionary
-    chunk_info_dict = {
-        'File': chunk_data_file,
-        'Mols': len(node_lookup),
-        'Atoms': len(x),
-        'Edges': len(e),
-        'Pharm': len(x_pharm)
-    }
-
-    
-    # Dump info dictionary in pickle files
-    with open(chunk_info_file, "wb") as f:
-        pickle.dump(chunk_info_dict, f)
-
-    print('Wrote chunk:', chunk_info_dict['File'])
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True, shell=True)
+        print("File transfer successful!")
+        print(result.stdout)  # Print the stdout from the scp command
+    except subprocess.CalledProcessError as e:
+        print(f"SCP failed with error:\n{e.stderr}")
+        raise RuntimeError(f"SCP command failed: {e}") from e
 
 
 def generate_library_tensor(names, database_list):
@@ -348,4 +437,3 @@ def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
                 mol = minimize_molecule(mol_cpy)
                 mols[idx] = mol
     return mols
-    
