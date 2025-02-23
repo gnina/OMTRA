@@ -7,6 +7,7 @@ import itertools
 import re
 from typing import Tuple
 import subprocess
+import functools
 
 from rdkit.Chem import AllChem as Chem
 import numpy as np
@@ -20,8 +21,38 @@ from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
 from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
 from tempfile import TemporaryDirectory
-import time
 
+def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first conformer
+
+    try:
+        if not Path(conf_file).exists():
+            return None
+    except PermissionError:
+        return None
+
+    with gzip.open(conf_file, 'rb') as gzipped_sdf:
+        suppl = Chem.ForwardSDMolSupplier(gzipped_sdf)
+        try:
+            for mol in suppl:
+                if mol is not None:
+                    return mol # Changed from break
+            if mol is None:
+                #print(f"Failed to parse a molecule from {conf_file}")
+                return None
+        except Exception as e:
+            #print("Error parsing file", conf_file)
+            return None
+
+
+def crawl_conformer_files(db_dir: Path):
+    for data_dir in db_dir.iterdir():
+        is_data_dir = data_dir.is_dir() and re.match(r'data\d{2}', data_dir.name)
+        if not is_data_dir:
+            continue
+        conformers_dir = data_dir / 'conformers'
+        for conformer_subdir in conformers_dir.iterdir():
+            for conformer_file in conformer_subdir.iterdir():
+                yield conformer_file
 
 def batch_generator(iterable, batch_size, n_chunks):
     """  
@@ -164,6 +195,28 @@ class DBCrawler(PharmitDBConnector):
         """
         cursor.execute(query, (last_id, self.query_size))
         return cursor.fetchall()
+
+    @functools.cached_property
+    def row_count(self):
+        """
+        Efficiently retrieves the number of rows in the 'structures' table.
+        
+        Returns:
+            int: The number of rows in the table.
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM structures")
+            count = cursor.fetchone()[0]
+        return count
+    
+    def __len__(self):
+        if self.max_num_queries == float('inf'):
+            n_rows = self.row_count()
+        else:
+            n_rows = self.max_num_queries*self.query_size
+
+        n_whole_queries, remainder = divmod(n_rows, self.query_size)
+        return n_whole_queries + (remainder > 0)
 
 def get_pharmacophore_data(conformer_files, ph_type_idx, tmp_path: Path = None):
 
@@ -348,16 +401,15 @@ class ChunkSaver():
         with open(chunk_info_file, "wb") as f:
             pickle.dump(chunk_info_dict, f)
 
-        print('Wrote chunk:', chunk_info_dict['File'])
         self.add_chunk_to_register(chunk_data_file)
 
 def scp_transfer(local_path, remote_host, remote_path):
-    command = f"scp -r {local_path} {remote_host}:{remote_path}"
+    command = f"scp {local_path} {remote_host}:{remote_path}"
     
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True, shell=True)
-        print("File transfer successful!")
-        print(result.stdout)  # Print the stdout from the scp command
+        # print(result.stdout)  # Print the stdout from the scp command
+        # print(result.stderr)  # Print the stderr from the scp command
     except subprocess.CalledProcessError as e:
         print(f"SCP failed with error:\n{e.stderr}")
         raise RuntimeError(f"SCP command failed: {e}") from e

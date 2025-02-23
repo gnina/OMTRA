@@ -1,25 +1,15 @@
 import argparse
 from pathlib import Path
-import gzip
-from rdkit import Chem
-import pymysql
-import itertools
-import re
-import json
+import traceback
+import shutil
+from tqdm import tqdm
 
-from rdkit.Chem import AllChem as Chem
-import numpy as np
-import os
 from multiprocessing import Pool
-import pickle
 from functools import partial
 
-
 from omtra.data.xace_ligand import MoleculeTensorizer
-from omtra.utils.graph import build_lookup_table
-from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
-from tempfile import TemporaryDirectory
 import time
+
 
 from omtra_pipelines.pharmit_dataset.phase1 import *
 
@@ -39,9 +29,13 @@ def parse_args():
     p.add_argument('--db_dir', type=Path, default='./pharmit_small/')
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
+    
+
     p.add_argument('--output_dir', type=Path,
                    help='Output directory for processed data.', 
                    default=Path('./outputs/phase1'))
+    
+    p.add_argument('--overwrite', action='store_true', help='Remove anything in existing output directory.')
 
     p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
     p.add_argument('--batch_size', type=int, default=50, help='Number of conformer files to batch togther.')
@@ -57,32 +51,6 @@ def parse_args():
 
     args = p.parse_args()
     return args
-
-def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first conformer
-    with gzip.open(conf_file, 'rb') as gzipped_sdf:
-        suppl = Chem.ForwardSDMolSupplier(gzipped_sdf)
-        try:
-            for mol in suppl:
-                if mol is not None:
-                    return mol # Changed from break
-            if mol is None:
-                #print(f"Failed to parse a molecule from {conf_file}")
-                return None
-        except Exception as e:
-            #print("Error parsing file", conf_file)
-            return None
-
-
-def crawl_conformer_files(db_dir: Path):
-    for data_dir in db_dir.iterdir():
-        is_data_dir = data_dir.is_dir() and re.match(r'data\d{2}', data_dir.name)
-        if not is_data_dir:
-            continue
-        conformers_dir = data_dir / 'conformers'
-        for conformer_subdir in conformers_dir.iterdir():
-            for conformer_file in conformer_subdir.iterdir():
-                yield conformer_file
-
 
 def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num_atoms):
     global name_finder
@@ -162,25 +130,76 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     
     return tensors
 
-def run_parallel(n_cpus: int, spoof_db: bool, batch_iter: DBCrawler, chunk_saver: ChunkSaver, process_args: tuple):
+def save_and_update(result, chunk_idx, pbar, chunk_saver):
+    # Save the result using your existing callback logic.
+    chunk_saver.save_chunk_to_disk(result, chunk_idx=chunk_idx)
+    # Update the progress bar by one step.
+    pbar.update(1)
+
+def error_and_update(error, pbar, error_counter):
+    """Handle errors, update error counter and the progress bar."""
+    print(f"Error: {error}")
+    traceback.print_exception(type(error), error, error.__traceback__)
+    # Increment the error counter (using a mutable container)
+    error_counter[0] += 1
+    # Optionally, update the tqdm bar's postfix to show the current error count.
+    pbar.set_postfix({'errors': error_counter[0]})
+    # Advance the progress bar, since this job is considered done.
+    pbar.update(1)
+
+
+def run_parallel(n_cpus: int, spoof_db: bool, batch_iter: DBCrawler, 
+                 chunk_saver: ChunkSaver, process_args: tuple, 
+                 max_pending: int = None):
+    # Set a default limit if not provided
+    if max_pending is None:
+        max_pending = n_cpus * 2  # adjust this factor as needed
+
+    total_tasks = len(batch_iter)
+    pbar = tqdm(total=total_tasks, desc="Processing", unit="chunks")
+    # Use a mutable container to track errors.
+    error_counter = [0]
+
     with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(spoof_db,)) as pool:
+        pending = []
         for chunk_idx, chunk_data in enumerate(batch_iter):
 
             if chunk_saver.chunk_processed(chunk_idx):
                 continue
 
-            pool.apply_async(
+            # Wait until the number of pending jobs is below the threshold.
+            # We remove finished tasks from the list, and if still too many remain,
+            # we sleep briefly before re-checking.
+            while len(pending) >= max_pending:
+                # Filter out jobs that have finished
+                pending = [r for r in pending if not r.ready()]
+                if len(pending) >= max_pending:
+                    time.sleep(0.1)  # brief pause before checking again
+
+            # Wrap the original success callback to also update the progress bar.
+            callback_fn = partial(save_and_update, chunk_idx=chunk_idx, pbar=pbar, chunk_saver=chunk_saver)
+            # Wrap the error callback to update the progress bar and error counter.
+            error_callback_fn = partial(error_and_update, pbar=pbar, error_counter=error_counter)
+
+            # Submit the job and add its AsyncResult to the pending list
+            result = pool.apply_async(
                 process_batch, 
                 args=(chunk_data, *process_args), 
-                callback=partial(chunk_saver.save_chunk_to_disk, 
-                        chunk_idx=chunk_idx))
+                callback=callback_fn,
+                error_callback=error_callback_fn
+            )
+            pending.append(result)
 
-        
+        # After submitting all jobs, wait for any remaining tasks to complete.
+        for result in pending:
+            result.wait()
+
         pool.close()
         pool.join()
 
 def run_single(spoof_db, batch_iter, chunk_saver, process_args: tuple):
     worker_initializer(spoof_db)
+    pbar = tqdm(total=len(batch_iter), desc="Processing", unit="chunks")
     for chunk_idx, chunk_data in enumerate(batch_iter):
 
         if chunk_saver.chunk_processed(chunk_idx):
@@ -188,6 +207,7 @@ def run_single(spoof_db, batch_iter, chunk_saver, process_args: tuple):
 
         tensors = process_batch(chunk_data, *process_args)
         chunk_saver.save_chunk_to_disk(tensors, chunk_idx=chunk_idx)
+        pbar.update(1)
 
 
 if __name__ == '__main__':
@@ -200,6 +220,9 @@ if __name__ == '__main__':
 
     if args.n_chunks is None:
         args.n_chunks = float('inf')
+
+    if args.output_dir.exists() and args.overwrite:
+        shutil.rmtree(args.output_dir)
 
     chunk_saver = ChunkSaver(
         output_dir=args.output_dir,
@@ -219,6 +242,9 @@ if __name__ == '__main__':
         run_single(spoof_db, db_crawler, chunk_saver, process_args)
     else:
         run_parallel(args.n_cpus, spoof_db, db_crawler, chunk_saver, process_args)
+
+    # off load last remaining chunks to masuda
+    chunk_saver.offload_chunks()
 
     end_time = time.time()
     print(f"Total time: {end_time - start_time:.1f} seconds")
