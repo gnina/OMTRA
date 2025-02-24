@@ -34,6 +34,7 @@ class LigandData:
     bond_types: np.ndarray
     bond_indices: np.ndarray
     is_covalent: bool
+    ccd: str
     sdf: str
     linkages: Optional[List[str]] = (
         None  # "{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}"
@@ -291,11 +292,13 @@ class StructureProcessor:
             instance, asym_id = key.split(".")
             is_covalent = False
             linkages = None
+            ccd = None
             for lig_ann in annotation["ligands"]:
                 if (
                     int(lig_ann["instance"]) == int(instance)
                     and lig_ann["asym_id"] == asym_id
                 ):
+                    ccd = lig_ann["ccd_code"]
                     is_covalent = lig_ann["is_covalent"]
                     if is_covalent:
                         linkages = lig_ann["covalent_linkages"]
@@ -309,6 +312,7 @@ class StructureProcessor:
 
             ligands_data[key] = LigandData(
                 sdf=str(raw_sdf),
+                ccd=ccd,
                 coords=np.array(positions[i], dtype=np.float32),
                 atom_types=atom_types[i],
                 atom_charges=atom_charges[i],
@@ -344,11 +348,13 @@ class StructureProcessor:
             instance, asym_id = key.split(".")
             is_covalent = False
             linkages = None
+            ccd = None
             for lig_ann in annotation["ligands"]:
                 if (
                     int(lig_ann["instance"]) == int(instance)
                     and lig_ann["asym_id"] == asym_id
                 ):
+                    ccd = lig_ann["ccd_code"]
                     is_covalent = lig_ann["is_covalent"]
                     if is_covalent:
                         linkages = lig_ann["covalent_linkages"]
@@ -362,6 +368,7 @@ class StructureProcessor:
 
             npnde_data[key] = LigandData(
                 sdf=str(raw_sdf),
+                ccd=ccd,
                 coords=np.array(positions[i], dtype=np.float32),
                 atom_types=atom_types[i],
                 atom_charges=atom_charges[i],
@@ -378,6 +385,7 @@ class StructureProcessor:
         new_atom_types = [self.npnde_atom_map.index(atom) for atom in atom_types]
         npnde = LigandData(
             sdf=ligand.sdf,
+            ccd=ligand.ccd,
             coords=ligand.coords,
             atom_types=np.array(new_atom_types, dtype=np.int32),
             atom_charges=ligand.atom_charges,
@@ -579,6 +587,96 @@ class SystemProcessor:
                 temp_npnde_data = {}
             temp_npnde_data.update(other_ligands)
             # TODO: update linkages with new residue numbering
+            # "{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}"
+            # 'covalent_linkages': ['11:CYS:A:11:SG__86:GSH:B:.:SG2']
+            if ligand.is_covalent:
+                updated_linkages = []
+                rec_chains = set(system.sequences.keys())
+                for linkage in ligand.linkages:
+                    prtnr1, prtnr2 = linkage.split("__")
+                    updated_linkage = None
+                    if ligand.ccd in prtnr1:
+                        (
+                            rec_auth_resid,
+                            rec_resname,
+                            rec_asym_id,
+                            rec_seq_resid,
+                            rec_atom_name,
+                        ) = prtnr2.split(":")
+                        (
+                            lig_auth_resid,
+                            lig_resname,
+                            lig_asym_id,
+                            lig_seq_resid,
+                            lig_atom_name,
+                        ) = prtnr1.split(":")
+                        for chain in rec_chains:
+                            if rec_asym_id == chain.split(".")[1]:
+                                chain_id = chain
+                        rec_seq_resid = res_id_mapping[chain_id][rec_seq_resid]
+                        prtnr1 = ":".join(
+                            [
+                                lig_auth_resid,
+                                lig_resname,
+                                lig_asym_id,
+                                lig_seq_resid,
+                                lig_atom_name,
+                            ]
+                        )
+                        prtnr2 = ":".join(
+                            [
+                                rec_auth_resid,
+                                rec_resname,
+                                rec_asym_id,
+                                rec_seq_resid,
+                                rec_atom_name,
+                            ]
+                        )
+                        updated_linkage = "__".join([prtnr1, prtnr2])
+                    elif ligand.ccd in prtnr2:
+                        (
+                            rec_auth_resid,
+                            rec_resname,
+                            rec_asym_id,
+                            rec_seq_resid,
+                            rec_atom_name,
+                        ) = prtnr1.split(":")
+                        (
+                            lig_auth_resid,
+                            lig_resname,
+                            lig_asym_id,
+                            lig_seq_resid,
+                            lig_atom_name,
+                        ) = prtnr2.split(":")
+                        for chain in rec_chains:
+                            if rec_asym_id == chain.split(".")[1]:
+                                chain_id = chain
+                        rec_seq_resid = res_id_mapping[chain_id][rec_seq_resid]
+                        prtnr2 = ":".join(
+                            [
+                                lig_auth_resid,
+                                lig_resname,
+                                lig_asym_id,
+                                lig_seq_resid,
+                                lig_atom_name,
+                            ]
+                        )
+                        prtnr1 = ":".join(
+                            [
+                                rec_auth_resid,
+                                rec_resname,
+                                rec_asym_id,
+                                rec_seq_resid,
+                                rec_atom_name,
+                            ]
+                        )
+                        updated_linkage = "__".join([prtnr1, prtnr2])
+                    if updated_linkage:
+                        updated_linkages.append(updated_linkage)
+                    else:
+                        updated_linkages.append(linkage)
+                ligand.linkages = updated_linkages
+
             system_data = SystemData(
                 system_id=system_id,
                 ligand_id=key,
