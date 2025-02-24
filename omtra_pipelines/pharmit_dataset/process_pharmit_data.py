@@ -105,13 +105,10 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     smiles = [smile for i, smile in enumerate(smiles) if i not in too_big_idxs]
 
     # Get pharmacophore data
-    start_time = time.time()
+    # TODO: x_pharm contains types, and a_pharm contains positions
+    # TODO: v_pharm contains variable number of vectors per center, 
+    # TODO: and defaults to 1 vector for pharm types with no directionality
     x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
-    end_1 = time.time()
-    r = get_pharmacophore_data_pharmit(conformer_files=conformer_files, ph_type_idx=ph_type_idx)
-    end_2 = time.time()
-    print(f"Time for get_pharmacophore_data: {end_1 - start_time:.1f} seconds")
-    print(f"Time for get_pharmacophore_data_pharmit: {end_2 - end_1:.1f} seconds")
     # Remove ligands where pharmacophore generation failed
     if len(failed_pharm_idxs) > 0 :
         print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
