@@ -9,6 +9,7 @@ import biotite.structure.io.pdb as pdb
 import numpy as np
 from biotite.structure.io.pdbx import CIFFile, get_structure
 from omtra.data.xace_ligand import MoleculeTensorizer
+from omtra_pipelines.plinder_dataset.utils import _DEFAULT_DISTANCE_RANGE
 from plinder.core import PlinderSystem
 from rdkit import Chem
 
@@ -230,6 +231,43 @@ class StructureProcessor:
             "pockets": pockets_data,
         }, res_id_map
 
+    def infer_covalent_linkages(
+        self, system: PlinderSystem, ligand_id: str
+    ) -> List[str]:
+        system_cif = CIFFile.read(system.system_cif)
+        system_struc = get_structure(system_cif, model=1, include_bonds=True)
+        ligand = system_struc[system_struc.chain_id == ligand_id]
+
+        receptor_cif = CIFFile.read(system.receptor_cif)
+        receptor = get_structure(receptor_cif, model=1, include_bonds=True)
+        receptor = receptor[receptor.res_name != "HOH"]
+
+        linkages = []
+        dists = struc.distance(
+            ligand.coord[:, np.newaxis, :], receptor.coord[np.newaxis, :, :]
+        )
+        for i, lig_atom in enumerate(ligand):
+            for j, rec_atom in enumerate(receptor):
+                dist_range = _DEFAULT_DISTANCE_RANGE.get(
+                    (lig_atom.element, rec_atom.element)
+                ) or _DEFAULT_DISTANCE_RANGE.get((rec_atom.element, lig_atom.element))
+                if dist_range is None:
+                    continue
+                else:
+                    min_dist, max_dist = dist_range
+                dist = dists[i, j]
+                if dist >= min_dist and dist <= max_dist:
+                    rec_assym_id = rec_atom.chain_id.split(".")[1]
+                    lig_assym_id = lig_atom.chain_id.split(".")[1]
+                    prtnr1 = f"{rec_atom.res_id}:{rec_atom.res_name}:{rec_assym_id}:{rec_atom.res_id}:{rec_atom.atom_name}"
+                    prtnr2 = f"{lig_atom.res_id}:{lig_atom.res_name}:{lig_assym_id}:.:{lig_atom.atom_name}"
+                    linkage = "__".join([prtnr1, prtnr2])
+                    linkages.append(linkage)
+                    logger.info(
+                        f"Covalent linkage detected in {system.system_id}: {linkage}"
+                    )
+        return linkages
+
     def process_ligands(
         self, system: PlinderSystem, ligand_mols: Dict[str, Chem.rdchem.Mol]
     ) -> Dict[str, LigandData]:
@@ -261,6 +299,13 @@ class StructureProcessor:
                     is_covalent = lig_ann["is_covalent"]
                     if is_covalent:
                         linkages = lig_ann["covalent_linkages"]
+                    else:
+                        inferred_linkages = self.infer_covalent_linkages(
+                            system=system, ligand_id=key
+                        )
+                        if inferred_linkages:
+                            is_covalent = True
+                            linkages = inferred_linkages
 
             ligands_data[key] = LigandData(
                 sdf=str(raw_sdf),
@@ -307,6 +352,13 @@ class StructureProcessor:
                     is_covalent = lig_ann["is_covalent"]
                     if is_covalent:
                         linkages = lig_ann["covalent_linkages"]
+                    else:
+                        inferred_linkages = self.infer_covalent_linkages(
+                            system=system, ligand_id=key
+                        )
+                        if inferred_linkages:
+                            is_covalent = True
+                            linkages = inferred_linkages
 
             npnde_data[key] = LigandData(
                 sdf=str(raw_sdf),
