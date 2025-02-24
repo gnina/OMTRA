@@ -15,6 +15,8 @@ import os
 from multiprocessing import Pool
 import pickle
 from functools import partial
+import random
+import math
 
 
 from omtra.data.xace_ligand import MoleculeTensorizer
@@ -125,8 +127,18 @@ class NameFinder(PharmitDBConnector):
                 smiles_to_names[smile] = []
             smiles_to_names[smile].append(name)
         
-        failed_idxs = [smiles_list.index(smile) for smile in smiles_to_names if smiles_to_names[smile] is None]  # Get the indices of failed smile in smiles_list
-        names = [names for smile, names in smiles_to_names.items() if names is not None] # Remove None entries 
+        # important to note here we are encoding a very important bit of logic here
+        # namely, we heavily filter naems for molecules. any name that does not
+        # have a "proper" prefix is removed
+        # we define a prefix as some sequence of num-numeric characters at the start of the string
+        names = []
+        failed_idxs = []
+        for i, smile in enumerate(smiles_list):
+            if smiles_to_names[smile] is None:
+                failed_idxs.append(i)
+                names.append(None)
+            else:
+                names.append(self.extract_prefixes(smiles_to_names[smile]))
 
         return names, failed_idxs
     
@@ -150,7 +162,7 @@ class NameFinder(PharmitDBConnector):
                 prefixes.add(match.group(0))
             else:
                 continue
-        return list(prefixes)
+        return prefixes
     
 
 
@@ -217,6 +229,55 @@ class DBCrawler(PharmitDBConnector):
 
         n_whole_queries, remainder = divmod(n_rows, self.query_size)
         return n_whole_queries + (remainder > 0)
+
+    def get_random_names(self, total_names, n_queries):
+        """
+        Randomly sample total_names values from the names table by selecting random rows 
+        from the "structures" table (using its indexed "id" column) and joining with the 
+        "names" table on the "smiles" column.
+
+        Parameters:
+            connection: a pymysql Connection object.
+            total_names: the total number of name values to retrieve.
+            n_queries: the total number of queries to execute (each query fetches roughly total_names/n_queries rows).
+
+        Returns:
+            A list of strings representing the 'name' values from the joined tables.
+        """
+        # Get the minimum and maximum id values from the structures table.
+        query = "SELECT MIN(id) AS min_id, MAX(id) AS max_id FROM structures"
+        with self.conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            cursor.execute(query)
+            result = cursor.fetchone()
+            min_id = result['min_id']
+            max_id = result['max_id']
+        
+        if min_id is None or max_id is None:
+            return []  # Table is empty.
+
+        # Calculate the approximate number of rows to fetch per query.
+        rows_per_query = math.ceil(total_names / n_queries)
+        results = []
+
+        for _ in range(n_queries):
+            random_id = random.randint(min_id, max_id)
+            # Query: select the name values by joining structures and names, starting from a random id.
+            query = (
+                "SELECT names.name "
+                "FROM structures "
+                "JOIN names ON structures.smile = names.smile "
+                "WHERE structures.id >= %s "
+                "LIMIT " + str(rows_per_query)
+            )
+            with self.conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                cursor.execute(query, (random_id,))
+                rows = cursor.fetchall()
+                for row in rows:
+                    results.append(row['name'])
+                    if len(results) >= total_names:
+                        return results
+
+        return results
 
 def get_pharmacophore_data(conformer_files, ph_type_idx, tmp_path: Path = None):
 
@@ -295,6 +356,10 @@ class ChunkSaver():
             self.offload_chunks()
 
     def offload_chunks(self):
+
+        if self.mb_stored_local == 0:
+            return
+
         print("Offloading chunks to masuda")
 
         data_files = self.chunk_data_dir / '*.npz'
@@ -390,11 +455,11 @@ class ChunkSaver():
 
         # Chunk data file info dictionary
         chunk_info_dict = {
-            'File': chunk_data_file,
-            'Mols': len(node_lookup),
-            'Atoms': len(x),
-            'Edges': len(e),
-            'Pharm': len(x_pharm)
+            'file': chunk_data_file,
+            'n_mols': len(node_lookup),
+            'n_atoms': len(x),
+            'n_edges': len(e),
+            'n_pharm': len(x_pharm)
         }
         
         # Dump info dictionary in pickle files
@@ -415,7 +480,10 @@ def scp_transfer(local_path, remote_host, remote_path):
         raise RuntimeError(f"SCP command failed: {e}") from e
 
 
-def generate_library_tensor(names, database_list):
+def generate_library_tensor(names, 
+                            database_list, 
+                            filter_unknown=True,
+                            other_category=False):
     """
     Generates a binary tensor indicating whether each molecule belongs to any of the specified libraries.
 
@@ -435,6 +503,21 @@ def generate_library_tensor(names, database_list):
         for j, db in enumerate(database_list):
             if db in molecule_names:
                 library_tensor[i, j] = 1
+
+    if filter_unknown and other_category:
+        raise ValueError("Cannot filter unknown and include an 'other' category at the same time.")
+
+    # Find rows where all columns have a value of 0
+    if filter_unknown:
+        db_found = np.any(library_tensor, axis=1)
+        failed_idxs = np.where(~db_found)[0].tolist()
+        failed_idxs = set(failed_idxs)
+        library_tensor = library_tensor[db_found]
+        return library_tensor, failed_idxs
+
+    if other_category:
+        db_found = np.any(library_tensor, axis=1)
+        library_tensor = np.concatenate([library_tensor, ~db_found[:, None]], axis=1)
     
     return library_tensor
     

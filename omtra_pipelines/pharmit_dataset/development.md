@@ -216,3 +216,5 @@ There are two tables, names and structures. `names` has two columns: smile and n
 | */C=C1C=C(C(c2ccc(*)c2)OC1)c1ccccc1       | 217902146 | 232.089   | 5      | /data08/conformers/21790/217902146.sdf.gz |
 | */C=C/c1ccc(*)cc1                         | 217903314 | 102.047   | 1      | /data11/conformers/21790/217903314.sdf.gz |
 ```
+
+# database name -> prefix mapping -> canonical database order

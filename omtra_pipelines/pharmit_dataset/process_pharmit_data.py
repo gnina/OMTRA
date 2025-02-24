@@ -60,6 +60,27 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
 
     smiles, conformer_files = chunk_data
 
+    # (BATCHED) Database source
+    names, failed_names_idxs = name_finder.query_name_from_smiles(smiles)
+
+    # Remove molecules that couldn't get database data
+    if len(failed_names_idxs) > 0:
+        #print("Database sources for", len(failed_names_idxs), "could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
+        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
+
+    # Tensorize database sources
+    databases = generate_library_tensor(
+        names, 
+        database_list, 
+        filter_unknown=False,
+        other_category=True
+    )
+    # databases, failed_idxs = generate_library_tensor(names, database_list, filter_unknown=True)
+    # mols = [  mol for i, mol in enumerate(mols) if i not in failed_idxs]
+    # conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_idxs]
+    # smiles = [smile for i, smile in enumerate(smiles) if i not in failed_idxs]
+
     # Get RDKit Mol objects
     mols = [read_mol_from_conf_file(file) for file in conformer_files]
     # Find molecules that failed to featurize and count them
@@ -83,17 +104,6 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     conformer_files = [file for i, file in enumerate(conformer_files) if i not in too_big_idxs]
     smiles = [smile for i, smile in enumerate(smiles) if i not in too_big_idxs]
 
-
-    # (BATCHED) Database source
-    names, failed_names_idxs = name_finder.query_name_from_smiles(smiles)
-    # TODO: name parsing is broken 
-
-    # Remove molecules that couldn't get database data
-    if len(failed_names_idxs) > 0:
-        #print("Database sources for", len(failed_names_idxs), "could not be found, removing")
-        mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
-        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
-
     # Get pharmacophore data
     x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files, ph_type_idx)
     # Remove ligands where pharmacophore generation failed
@@ -113,9 +123,6 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
         a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
     
-    
-    # Tensorize database sources
-    databases  = generate_library_tensor(names, database_list)
 
     # Save tensors in dictionary
     tensors = {
@@ -165,6 +172,7 @@ def run_parallel(n_cpus: int, spoof_db: bool, batch_iter: DBCrawler,
         for chunk_idx, chunk_data in enumerate(batch_iter):
 
             if chunk_saver.chunk_processed(chunk_idx):
+                pbar.update(1)
                 continue
 
             # Wait until the number of pending jobs is below the threshold.
@@ -203,6 +211,7 @@ def run_single(spoof_db, batch_iter, chunk_saver, process_args: tuple):
     for chunk_idx, chunk_data in enumerate(batch_iter):
 
         if chunk_saver.chunk_processed(chunk_idx):
+            pbar.update(1)
             continue
 
         tensors = process_batch(chunk_data, *process_args)
