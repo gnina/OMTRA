@@ -2,7 +2,9 @@ import inspect
 import omtra.tasks.tasks as tasks
 from typing import Dict
 
-task_classes = [cls_obj for cls_name, cls_obj in inspect.getmembers(tasks, inspect.isclass) if cls_name != 'Task']
+task_classes = [cls_obj 
+                for cls_name, cls_obj in inspect.getmembers(tasks, inspect.isclass) 
+                if issubclass(cls_obj, tasks.Task) and cls_obj is not tasks.Task]
 
 task_name_to_class: Dict[str, tasks.Task] = {cls_obj.name: cls_obj for cls_obj in task_classes}
 

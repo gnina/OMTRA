@@ -3,6 +3,7 @@ import numpy as np
 import dgl
 from typing import List, Dict
 from copy import deepcopy
+from omegaconf import DictConfig
 
 from omtra.dataset.register import dataset_name_to_class
 from omtra.tasks.register import task_name_to_class
@@ -12,7 +13,10 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
     """A dataset capable of serving up samples from multiple zarr datasets."""
 
-    def __init__(self, split: str, task_inputs: List[dict], single_dataset_configs: Dict[str, dict], dataset_task_coupling: dict):
+    def __init__(self, split: str, tasks: List[dict], 
+                 single_dataset_configs: Dict[str, dict], 
+                 dataset_task_coupling: dict,
+                 graph_config: DictConfig):
         """
         Describing the nature of the inputs, for now:
 
@@ -39,6 +43,9 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                 - if a dataset is specified in single_dataset_configs but not included in p(dataset|task) here, then we will assume p(dataset|task) = 0
 
         """
+        self.split = split
+        self.graph_config = graph_config
+        self.single_dataset_configs = single_dataset_configs
 
         # get the names of the datasets we'll be using
         self.dataset_names = list(single_dataset_configs.keys())
@@ -46,7 +53,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         # retrieve the tasks we need and their marginal probabilities p(task)
         self.task_names = []
         p_task = []
-        for task_dict in task_inputs:
+        for task_dict in tasks:
             self.task_names.append(task_dict['name'])
             p_task.append(task_dict['probability'])
         
@@ -71,11 +78,12 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         p_dataset_task = p_dataset_task / p_dataset_task.sum() # just make sure it sums to 1
         self.p_dataset_task = p_dataset_task
 
-
+            
         # initialize dataset classes
+        self.datasets = {}
         dataset_classes = [dataset_name_to_class[dataset_name] for dataset_name in self.dataset_names]
         for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes):
-            single_dataset_config = deepcopy(single_dataset_configs[dataset_name])
+            single_dataset_config = deepcopy(self.single_dataset_configs[dataset_name])
 
             # this is super-duper clunky but we have to do it for now
             # if we are using the plinder dataset and we are doing a mixture of tasks that use and dont use the apo state
@@ -83,34 +91,35 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
             # get the tasks associated with this dataset
             if dataset_name == 'plinder':
-                task_idxs_for_this_dataset = p_dataset_task[:, self.dataset_names.index(dataset_name)].nonzero(as_tuple=True)[0]
-                tasks_for_this_dataset_ = [ self.tasks[task_idx] for task_idx in task_idxs_for_this_dataset ]
-                task_uses_apo = [task.uses_apo for task in tasks_for_this_dataset_] 
+                task_idxs_for_this_dataset = self.p_dataset_task[:, self.dataset_names.index(dataset_name)].nonzero(as_tuple=True)[0]
+                task_idxs_for_this_dataset = task_idxs_for_this_dataset.tolist()
+                tasks_for_this_dataset = [ self.tasks[task_idx] for task_idx in task_idxs_for_this_dataset ]
+                task_uses_apo = [task.uses_apo for task in tasks_for_this_dataset] 
                 has_tasks_using_apo = any(task_uses_apo)
                 has_tasks_not_using_apo = not all(task_uses_apo)
                 if has_tasks_using_apo and has_tasks_not_using_apo:
                     single_dataset_config['n_chunks_cache'] = 7
 
-        self.datasets = {
-            dataset_name: dataset_class(
-                split=split, **single_dataset_configs[dataset_name]) 
-                for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes)
-        }
+            self.datasets[dataset_name] = dataset_class(
+                split=self.split, 
+                graph_config=self.graph_config,
+                **single_dataset_config)
 
 
     def __len__(self):
         pass
 
     def __getitem__(self, index):
-        
         task_idx, dataset_idx, local_idx = index
         task_name = self.task_names[task_idx]
 
         task = self.task_names[task_idx]
-        g: dgl.DGLHeteroGraph = self.datasets[self.dataset_names[dataset_idx]][(task_idx, local_idx)]
+        g: dgl.DGLHeteroGraph = self.datasets[self.dataset_names[dataset_idx]][(task_name, local_idx)]
 
         # TODO: task specific transforms
         # TODO: do individual datasets need access to the task name? figure out once implementing __getitem__ for individual datasets
 
-        return g, task_name
+        dataset_name = self.dataset_names[dataset_idx]
+
+        return g, task_name, dataset_name
 

@@ -1,6 +1,6 @@
 import torch
 import functools
-
+from omtra.utils.misc import classproperty
 
 canonical_modality_order = ['ligand_identity', 'ligand_structure', 'protein', 'pharmacophore']
 canonical_entity_order = ['ligand', 'protein', 'pharmacophore']
@@ -8,7 +8,7 @@ canonical_entity_order = ['ligand', 'protein', 'pharmacophore']
 class Task:
     protein_state_t0 = 'noise'
 
-    @functools.cached_property
+    @classproperty
     def t0_modality_arr(self) -> torch.Tensor:
         arr = torch.zeros(len(canonical_modality_order), dtype=bool)
         for i, modality in enumerate(canonical_modality_order):
@@ -16,21 +16,21 @@ class Task:
                 arr[i] = 1
         return arr
     
-    @functools.cached_property
-    def t1_modality_arr(self) -> torch.Tensor:
+    @classproperty
+    def t1_modality_arr(cls) -> torch.Tensor:
         arr = torch.zeros(len(canonical_modality_order), dtype=bool)
         for i, modality in enumerate(canonical_modality_order):
-            if modality in self.observed_at_t1:
+            if modality in cls.observed_at_t1:
                 arr[i] = 1
         return arr
     
-    @functools.cached_property
+    @classproperty
     def modalities_present(self):
-        present_modality_mask = self.t0_modality_arr or self.t1_modality_arr
+        present_modality_mask = self.t0_modality_arr | self.t1_modality_arr
         present_modality_idxs = torch.where(present_modality_mask)[0]
         return [canonical_modality_order[i] for i in present_modality_idxs]
     
-    @functools.cached_property
+    @classproperty
     def uses_apo(self):
         # TODO: this logic is subject to change if we ever decide to do apo sampling as a task
         # because then there would be a task where the intial protein state is noise but we still require the apo state (it would be the target)

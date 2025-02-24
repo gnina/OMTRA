@@ -1,22 +1,26 @@
 import dgl
 import torch
+from omegaconf import DictConfig
 
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.data.graph import build_complex_graph
 from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
+from omtra.utils.misc import classproperty
 
 class PlinderDataset(ZarrDataset):
     def __init__(self, 
                  split: str,
                  processed_data_dir: str,
-                 graphs_per_chunk: int
+                 graphs_per_chunk: int,
+                 graph_config: DictConfig,
     ):
         super().__init__(split, processed_data_dir)
         self.graphs_per_chunk = graphs_per_chunk
+        self.graph_config = graph_config
 
-    @classmethod
+    @classproperty
     def name(cls):
         return 'plinder'
 

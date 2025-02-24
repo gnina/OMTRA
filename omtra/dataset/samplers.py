@@ -1,24 +1,44 @@
+
 import torch
 from torch.utils.data import Sampler, DistributedSampler
 from typing import Dict, List
 
-from omtra.dataset.chunk_tracker import ChunkTracker
+from omtra.dataset.chunk_tracker import GraphChunkTracker
 from omtra.dataset.multitask import MultitaskDataSet
 from omtra.tasks.tasks import Task
 
 
 class MultiTaskSampler(Sampler):
 
-    def __init__(self, multi_dataset: MultitaskDataSet, batch_size):
-        super().__init__(multi_dataset)
+    def __init__(self, multi_dataset: MultitaskDataSet, 
+                 edges_per_batch: int,
+                 distributed: bool = False,
+                 rank: int = None,
+                 num_replicas: int = None,
+        ):
+        super().__init__()
         self.multi_dataset = multi_dataset
-        self.batch_size = batch_size
+        self.edges_per_batch = edges_per_batch
         
-
+        self.distributed = distributed
         self.task_names = multi_dataset.task_names
         self.tasks: List[Task] = multi_dataset.tasks
+        self.datasets = multi_dataset.datasets
         self.dataset_names = multi_dataset.dataset_names
         self.p_dataset_task = multi_dataset.p_dataset_task
+
+        if self.distributed:
+            self.num_replicas = num_replicas if num_replicas is not None else torch.distributed.get_world_size()
+            self.rank = rank if rank is not None else torch.distributed.get_rank()
+
+            dataset_frac_per_worker = 1.0 / self.num_replicas
+            self.frac_start = self.rank * dataset_frac_per_worker
+            self.frac_end = (self.rank + 1) * dataset_frac_per_worker
+        else:
+            self.rank = 0
+            self.num_replicas = 1
+            self.frac_start = 0
+            self.frac_end = 1
 
     def sample_task_and_dataset(self):
 
@@ -37,17 +57,20 @@ class MultiTaskSampler(Sampler):
         return task_idx, dataset_idx
     
     def build_chunk_trackers(self):
-        self.chunk_trackers: Dict[int, ChunkTracker] = {}
+        self.chunk_trackers: Dict[int, GraphChunkTracker] = {}
         self.td_pair_to_chunk_tracker_id = {}
 
         for dataset_idx, dataset_name in enumerate(self.dataset_names):
             task_idxs = self.p_dataset_task[:, dataset_idx].nonzero(as_tuple=True)[0]
+            task_idxs = tuple(task_idxs.tolist())
             # tasks = [self.tasks[self.task_names[task_idx]] for task_idx in task_idxs]
+
+            chunk_tracker_args = [self.datasets[dataset_name], self.edges_per_batch, self.frac_start, self.frac_end]
 
             if dataset_name == 'pharmit':
                 # create a single chunk tracker for all tasks
                 chunk_tracker_idx = len(self.chunk_trackers)
-                self.chunk_trackers[chunk_tracker_idx] = ChunkTracker(self.datasets[dataset_name])
+                self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(*chunk_tracker_args)
                 for task_idx in task_idxs:
                     self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
 
@@ -61,16 +84,16 @@ class MultiTaskSampler(Sampler):
                 # tasks not using apo structures need a separate chunk tracker from those that do
                 if len(tasks_not_using_apo) != 0:
                     chunk_tracker_idx = len(self.chunk_trackers)
-                    self.chunk_trackers[chunk_tracker_idx] = ChunkTracker(self.datasets[dataset_name])
+                    self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(*chunk_tracker_args)
                     for task_idx in tasks_not_using_apo:
                         self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
                 if len(tasks_using_apo) != 0:
                     chunk_tracker_idx = len(self.chunk_trackers)
                     # note a very important feature here! ChunkTracker recieves an extra argument here!
                     # this enables the chunk tracker to fetch the right subset of chunks from the dataset
-                    self.chunk_trackers[chunk_tracker_idx] = ChunkTracker(
-                        self.datasets[dataset_name],
-                        apo_systems=True
+                    self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(
+                        *chunk_tracker_args,
+                        apo_systems=True,
                     )
                     for task_idx in tasks_using_apo:
                         self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
@@ -78,24 +101,39 @@ class MultiTaskSampler(Sampler):
             else:
                 raise NotImplementedError(f"Dataset {dataset_name} not supported")
 
+    def get_td_pair_distributed(self):
+        if self.rank == 0:
+            task_idx, dataset_idx = self.sample_task_and_dataset()
+            task_idx_tensor = torch.tensor(task_idx, dtype=torch.int64)
+            dataset_idx_tensor = torch.tensor(dataset_idx, dtype=torch.int64)
+        else:
+            task_idx_tensor = torch.tensor(0, dtype=torch.int64)
+            dataset_idx_tensor = torch.tensor(0, dtype=torch.int64)
 
+        torch.distributed.broadcast(task_idx_tensor, src=0)
+        torch.distributed.broadcast(dataset_idx_tensor, src=0)
+
+        task_idx = task_idx_tensor.item()
+        dataset_idx = dataset_idx_tensor.item()
+        return task_idx, dataset_idx
 
     def __iter__(self):
 
         self.build_chunk_trackers()
         while True:
-            task_idx, dataset_idx = self.sample_task_and_dataset()
-
-            # TODO: broadcast or gather the task_idx and dataset_idx to all ranks
+            if self.distributed:
+                task_idx, dataset_idx = self.get_td_pair_distributed()
+            else:
+                task_idx, dataset_idx = self.sample_task_and_dataset()
 
             # get chunk tracker
             chunk_tracker_idx = self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)]
-            chunk_tracker: ChunkTracker = self.chunk_trackers[chunk_tracker_idx]
+            chunk_tracker: GraphChunkTracker = self.chunk_trackers[chunk_tracker_idx]
 
             # get next batch of indices
             batch_idxs = chunk_tracker.get_batch_idxs(self.tasks[task_idx])
 
             # construct the global indices
             global_idxs = [ (task_idx, dataset_idx, idx) for idx in batch_idxs ]
-
+            
             yield global_idxs

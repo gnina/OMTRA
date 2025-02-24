@@ -1,4 +1,4 @@
-# example of a task group where we can have all tasks related to docking in one place
+# This could be a task group where all the tasks are listed
 defaults:
   - _self_
 
@@ -6,16 +6,19 @@ defaults:
   - data: multitask
   # Merge pharmit.yaml directly into the single_dataset_configs dict (which is used for MultiTaskDataModule)
   - data@data.multitask_dataset_config.single_dataset_configs.pharmit: pharmit
-  # - data@data.multitask_dataset_config.single_dataset_configs.omtradataset: omtradataset
 
 tasks:
-  - name: "UnconditionalLigandDocking"
-    probability: 0.6
-  - name: "ApoConditionedLigandDocking"
-    probability: 0.4
+  - name: denovo_ligand
+    probability: 0.33
+  - name: denovo_ligand_pharmacophore
+    probability: 0.33
+  - name: ligand_conformer
+    probability: 0.33
 
 dataset_task_coupling:
-  UnconditionalLigandDocking:
+  denovo_ligand:
     - [pharmit, 1.0]
-  ApoConditionedLigandDocking:
+  denovo_ligand_pharmacophore:
+    - [pharmit, 1.0]
+  ligand_conformer:
     - [pharmit, 1.0]

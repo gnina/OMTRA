@@ -1,24 +1,30 @@
 import torch
+import functools
 
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.tasks.tasks import Task
 
-class ChunkTracker:
+class GraphChunkTracker:
     def __init__(self, 
                  dataset: ZarrDataset,
-                 nodes_per_batch: int,
+                 edges_per_batch: int,
+                 frac_start: float,
+                 frac_end: float,
                  *args, **kwargs):
         
         self.dataset = dataset
-        self.nodes_per_batch = nodes_per_batch
+        self.edges_per_batch = edges_per_batch # maximum number of nodes in a batch
+        self.construction_args = args
+        self.construction_kwargs = kwargs
+        self.frac_start = frac_start
+        self.frac_end = frac_end
 
-
-        # chunk index is an (n_graph_chunks, 2) array containing the start and end indices of each chunk
-        self.chunk_index = self.dataset.retrieve_graph_chunks(*args, **kwargs)
+        self.chunk_index = self.dataset.retrieve_graph_chunks(
+            frac_start=self.frac_start,
+            frac_end=self.frac_end,
+            *args, **kwargs)
+        
         self.n_chunks = self.chunk_index.shape[0]
-
-        self.chunk_queue = torch.randperm(self.n_chunks)
-        self.chunk_queue_idx = 0
         self.reset_queue()
 
     @property
@@ -36,17 +42,24 @@ class ChunkTracker:
         if self.chunk_queue_idx >= self.n_chunks:
             self.reset_queue()
 
+    def current_chunk_idxs(self):
+        idxs = self.chunk_index[self.chunk_queue[self.chunk_queue_idx]]
+        idxs = tuple(idx.item() for idx in idxs)
+        return idxs
+
     def get_batch_idxs(self, task: Task) -> torch.Tensor:
+        start_idx, end_idx = self.current_chunk_idxs()
+        n_graphs_in_chunk = end_idx - start_idx
 
         # check if we need to move to the next chunk
         if self.n_samples_served_this_chunk >= n_graphs_in_chunk:
             self.step_queue()
+            start_idx, end_idx = self.current_chunk_idxs()
 
-        start_idx, end_idx = self.chunk_index[self.chunk_queue[self.chunk_queue_idx]]
-        n_graphs_in_chunk = end_idx - start_idx
-        node_per_graph = self.dataset.get_num_nodes(task, start_idx, end_idx) # has shape (end_idx - start_idx,)
-        batch_idxs = start_idx + adaptive_batch_loader(node_per_graph, self.nodes_per_batch)
-        return batch_idxs
+        edges_per_graph = self.dataset.get_num_edges(task, start_idx, end_idx) # has shape (end_idx - start_idx,)
+        batch_idxs = start_idx + adaptive_batch_loader(edges_per_graph, self.edges_per_batch)
+        self.n_samples_served_this_chunk += batch_idxs.size(0)
+        return batch_idxs.tolist()
 
 
 def adaptive_batch_loader(nodes_per_graph: torch.Tensor, max_nodes: int) -> torch.Tensor:

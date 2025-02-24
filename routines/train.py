@@ -5,6 +5,11 @@ from omegaconf import DictConfig, OmegaConf
 
 from omtra.dataset.data_module import MultiTaskDataModule
 from omtra.utils import omtra_root
+import torch.multiprocessing as mp
+import multiprocessing
+
+multiprocessing.set_start_method('spawn', force=True)
+mp.set_start_method("spawn", force=True)
 
 # register the omtra_root resolver so that anything in a config file
 # with ${omtra_root:} will be replaced with the root path of the omtra package
@@ -19,10 +24,18 @@ def train(cfg: DictConfig):
     pl.seed_everything(cfg.seed, workers=True)
 
     print(f"⚛ Instantiating datamodule <{cfg.task_group.data._target_}>")
-    datamodule: MultiTaskDataModule = hydra.utils.instantiate(cfg.task_group.data)
+    datamodule: MultiTaskDataModule = hydra.utils.instantiate(
+        cfg.task_group.data, 
+        graph_config=cfg.graph)
 
     datamodule.setup(stage='fit')
-    # TODO: Implmenet other instantiation logic
+    # TODO: load dataloader
+    # TODO: turn datamodule instantiation and dataloader test into unit tests
+    dataloader = datamodule.train_dataloader()
+    dataloader_iter = iter(dataloader)
+    n_batches = 5
+    for _ in range(n_batches):
+        g, task_name, dataset_name = next(dataloader_iter)
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="config")
@@ -38,4 +51,5 @@ def main(cfg: DictConfig):
     _ = train(cfg)
 
 if __name__ == "__main__":
+    # TODO: do we need both of these? perhaps not
     main()

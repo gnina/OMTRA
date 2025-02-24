@@ -8,12 +8,13 @@ from abc import ABC, abstractmethod
 from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.dataset.dataset import OMTRADataset
 from omtra.tasks.tasks import Task
+from collections import OrderedDict
 
 class ZarrDataset(OMTRADataset):
 
     """Base class for single datasets. Specifically a dataset that is stored in a zarr store. Supports caching of chunks to minimize disk access."""
 
-    def __init__(self, split: str, processed_data_dir: str, n_chunks_cache: float = 4.25):
+    def __init__(self, split: str, processed_data_dir: str, n_chunks_cache: int = 4):
         super().__init__()
 
         zarr_store_path = Path(processed_data_dir) / f'{split}.zarr'
@@ -37,23 +38,8 @@ class ZarrDataset(OMTRADataset):
         
     def build_cached_chunk_fetchers(self):
         self.chunk_fetchers = {}
-        # self.chunks_accessed = defaultdict(set) # for debugging
-
         for array_name in self.array_keys:
-
-            approx_chunk_size = self.root[array_name].nbytes / self.root[array_name].nchunks
-            cache_size = int(self.n_chunks_cache*approx_chunk_size)
-            
-            # TODO: array-dependent cache size
-            @functools.lru_cache(cache_size)
-            def fetch_chunk(chunk_id, array_name=array_name): # we assume all arrays are chunked only along the first dimension 
-                # self.chunks_accessed[array_name].add(chunk_id)
-                chunk_size = self.root[array_name].chunks[0]
-                chunk_start_idx = chunk_id * chunk_size
-                chunk_end_idx = chunk_start_idx + chunk_size
-                return self.root[array_name][chunk_start_idx:chunk_end_idx]
-
-            self.chunk_fetchers[array_name] = fetch_chunk
+            self.chunk_fetchers[array_name] = ChunkFetcher(self.root, array_name, cache_size=self.n_chunks_cache)
 
     def slice_array(self, array_name, start_idx, end_idx=None):
         """Slice data from a zarr array but utilize chunk caching to minimize disk access."""
@@ -101,3 +87,24 @@ class ZarrDataset(OMTRADataset):
     def get_num_edges(self, task: Task, start_idx: int, end_idx: int):
         pass
     
+class ChunkFetcher:
+    def __init__(self, root, array_name, cache_size):
+        self.root = root
+        self.array_name = array_name
+        self.cache_size = cache_size
+        self.cache = OrderedDict()  # Ordered dictionary to maintain LRU order
+
+    def __call__(self, chunk_id):
+        if chunk_id in self.cache:
+            # Move the accessed chunk to the end to mark it as recently used
+            self.cache.move_to_end(chunk_id)
+        else:
+            if len(self.cache) >= self.cache_size:
+                # Remove the least recently used chunk
+                self.cache.popitem(last=False)
+            # Fetch the chunk and add it to the cache
+            chunk_size = self.root[self.array_name].chunks[0]
+            chunk_start_idx = chunk_id * chunk_size
+            chunk_end_idx = chunk_start_idx + chunk_size
+            self.cache[chunk_id] = self.root[self.array_name][chunk_start_idx:chunk_end_idx]
+        return self.cache[chunk_id]

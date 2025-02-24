@@ -1,0 +1,12 @@
+edges:             # parameter for KNN edges
+  lig_to_lig:
+    type: complete
+  pharm_to_pharm:
+    type: complete
+  lig_to_pharm:
+    type: knn
+    k: 6
+
+# enforce certain edge types are symmetric
+symmetric_etypes:
+  - lig_to_pharm           

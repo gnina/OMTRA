@@ -1,4 +1,6 @@
 omtra_pipelines/pharmit_dataset/pharmit_small/
+data/pharmit_dev/
+local/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

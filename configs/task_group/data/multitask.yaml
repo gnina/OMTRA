@@ -11,5 +11,5 @@ multitask_dataset_config:
 
 prior_config: null
 
-batch_size: ${batch_size}
+edges_per_batch: ${edges_per_batch}
 num_workers: ${num_workers}
