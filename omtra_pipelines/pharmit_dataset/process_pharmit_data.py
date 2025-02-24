@@ -108,6 +108,8 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     # TODO: x_pharm contains types, and a_pharm contains positions
     # TODO: v_pharm contains variable number of vectors per center, 
     # TODO: and defaults to 1 vector for pharm types with no directionality
+    # we want this to have a tensor for each molecule of shape (num_pharm_centers, num_vectors, 3)
+    # where num_vectors is the maximum number of vectors for any pharmacophore center
     x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
     # Remove ligands where pharmacophore generation failed
     if len(failed_pharm_idxs) > 0 :
