@@ -74,11 +74,13 @@ def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
 
 def check_interaction(all_ligand_positions, receptor, feature):
     """
-    Check if the ligand features interact with their matching receptor features
+    Check if the ligand features interact with a matching receptor features. 
+    If true, update vector to point to receptor feature.
     """
     paired_features = matching_types[feature]
     feature_cutoff = matching_distance[feature]
     interaction = [False] * len(all_ligand_positions)
+    updated_vectors = [None] * len(all_ligand_positions)
 
     for feature, cutoff in zip(paired_features, feature_cutoff):
         all_receptor_positions = []
@@ -94,8 +96,12 @@ def check_interaction(all_ligand_positions, receptor, feature):
         for i, dist in enumerate(distances):
             if np.any(dist <= cutoff):
                 interaction[i] = True
+                closest_receptor_position = all_receptor_positions[np.argmin(dist)]
+                vector = closest_receptor_position - all_ligand_positions[i]
+                vector = vector / np.linalg.norm(vector)
+                updated_vectors[i] = [vector]
 
-    return interaction
+    return interaction, updated_vectors
 
 def get_pharmacophore_dict(ligand, receptor=None):
     """Extract pharmacophores and direction vectors from RDKit molecule.
@@ -124,20 +130,21 @@ def get_pharmacophore_dict(ligand, receptor=None):
                 all_ligand_vectors.extend(vectors)
         
         if all_ligand_positions:
-            pharmacophores[feature]['P'].extend(all_ligand_positions)
-            pharmacophores[feature]['V'].extend(all_ligand_vectors)
-            
             if receptor:
-                interaction = check_interaction(all_ligand_positions, receptor, feature)
+                interaction, updated_vectors = check_interaction(all_ligand_positions, receptor, feature)
+                for i in range(len(all_ligand_vectors)):
+                    if interaction[i]: 
+                        all_ligand_vectors[i] = updated_vectors[i]
+
                 pharmacophores[feature]['I'].extend(interaction)
+            
+            pharmacophores[feature]['P'].extend(all_ligand_positions)
+            pharmacophores[feature]['V'].extend(all_ligand_vectors)            
                 
     return pharmacophores
 
 def get_pharmacophores(mol, rec=None):
-    if rec:
-        pharmacophores_dict = get_pharmacophore_dict(mol, rec)
-    else:
-        pharmacophores_dict = get_pharmacophore_dict(mol)
+    pharmacophores_dict = get_pharmacophore_dict(mol, rec) if rec else get_pharmacophore_dict(mol)
         
     X, P, V, I = [], [], [], []
     for type in pharmacophores_dict:
@@ -147,7 +154,11 @@ def get_pharmacophores(mol, rec=None):
         I.extend(pharmacophores_dict[type]['I'])
         type_embed = ph_type_to_idx[type]
         X.extend([type_embed]*len(pos))
-
-    P = np.asarray(P)
-    
+        
+    # V has shape (num_pharm_centers, num_vectors, 3)
+    # where num_vectors is the maximum number of vectors for any pharmacophore center
+    num_vectors = max(len(v) for v in V)
+    for i in range(len(V)):
+        V[i].extend([np.zeros(3)] * (num_vectors - len(V[i])))
+        
     return X, P, V, I
