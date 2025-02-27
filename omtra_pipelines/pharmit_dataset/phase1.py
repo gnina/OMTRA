@@ -17,6 +17,7 @@ import pickle
 from functools import partial
 import random
 import math
+from collections import defaultdict
 
 
 from omtra.data.xace_ligand import MoleculeTensorizer
@@ -120,11 +121,9 @@ class NameFinder(PharmitDBConnector):
             results = cursor.fetchall()
 
         # Organize results into a dictionary: {smile: [names]}
-        smiles_to_names = {smile: None for smile in smiles_list}
+        smiles_to_names = defaultdict(list)
         
         for smile, name in results:
-            if smiles_to_names[smile] is None:
-                smiles_to_names[smile] = []
             smiles_to_names[smile].append(name)
         
         # important to note here we are encoding a very important bit of logic here
@@ -443,9 +442,9 @@ class ChunkSaver():
         # Convert data types
         chunk_data_dict['lig_x'] = chunk_data_dict['lig_x'].astype(np.float32)
         chunk_data_dict['pharm_x'] = chunk_data_dict['pharm_x'].astype(np.float32)
-        chunk_data_dict['lig_a'] = chunk_data_dict['lig_a'].astype(np.uint8)
-        chunk_data_dict['pharm_a'] = chunk_data_dict['pharm_a'].astype(np.uint8)
-        chunk_data_dict['lig_c'] = chunk_data_dict['lig_c'].astype(np.int32)
+        chunk_data_dict['lig_a'] = chunk_data_dict['lig_a'].astype(np.int8)
+        chunk_data_dict['pharm_a'] = chunk_data_dict['pharm_a'].astype(np.int8)
+        chunk_data_dict['lig_c'] = chunk_data_dict['lig_c'].astype(np.int8)
 
 
         # Save tensor dictionary to npz file

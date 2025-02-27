@@ -66,7 +66,6 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     # Remove molecules that couldn't get database data
     if len(failed_names_idxs) > 0:
         #print("Database sources for", len(failed_names_idxs), "could not be found, removing")
-        mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
         conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
 
     # Tensorize database sources
@@ -92,7 +91,9 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     if len(failed_mol_idxs) > 0:
         #print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
         mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
-        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
+        failed_mask = np.zeros(len(mols), dtype=bool)
+        failed_mask[failed_mol_idxs] = True
+        databases = databases[~failed_mask]
 
     # filter molecules with too many atoms
     too_big_idxs = []
@@ -100,17 +101,23 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         if mol.GetNumAtoms() > max_num_atoms:
             too_big_idxs.append(i)
     too_big_idxs = set(too_big_idxs)
-    mols = [mol for i, mol in enumerate(mols) if i not in too_big_idxs]
-    conformer_files = [file for i, file in enumerate(conformer_files) if i not in too_big_idxs]
-    smiles = [smile for i, smile in enumerate(smiles) if i not in too_big_idxs]
+    if len(too_big_idxs) > 0:
+        mols = [mol for i, mol in enumerate(mols) if i not in too_big_idxs]
+        failed_mask = np.zeros(len(mols), dtype=bool)
+        failed_mask[list(too_big_idxs)] = True
+        databases = databases[~failed_mask]
 
     # Get pharmacophore data
     x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files, ph_type_idx)
     # Remove ligands where pharmacophore generation failed
     if len(failed_pharm_idxs) > 0 :
         #print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
+        x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_pharm_idxs]
+        a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_pharm_idxs]
         mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
-        names = [name for i, name in enumerate(names) if i not in failed_pharm_idxs]
+        failed_mask = np.zeros(len(mols), dtype=bool)
+        failed_mask[failed_pharm_idxs] = True
+        databases = databases[~failed_mask]
         
     
     # Get XACE data
@@ -118,10 +125,11 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     # Remove molecules that failed to get xace data
     if len(failed_xace_idxs) > 0:
         #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
-        mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
-        names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
         x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
         a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
+        failed_mask = np.zeros(len(x_pharm), dtype=bool)
+        failed_mask[failed_xace_idxs] = True
+        databases = databases[~failed_mask]
     
 
     # Save tensors in dictionary
