@@ -28,6 +28,9 @@ from tempfile import TemporaryDirectory
 
 def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first conformer
 
+    if conf_file is None:
+        return None
+
     try:
         if not Path(conf_file).exists():
             return None

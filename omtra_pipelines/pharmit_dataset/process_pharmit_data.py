@@ -43,7 +43,7 @@ def parse_args():
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
     p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
     p.add_argument('--max_num_atoms', type=int, default=120, help='Maximum number of atoms in a molecule.')
-    p.add_argument('--chunk_offload_threshold', type=int, default=1000, help='Threshold for offloading chunks to disk, in MB.')
+    p.add_argument('--chunk_offload_threshold', type=int, default=100, help='Threshold for offloading chunks to disk, in MB.')
     p.add_argument('--register_write_interval', type=int, default=10, help='Interval for recording processed chunks.')
 
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
@@ -91,7 +91,7 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     if len(failed_mol_idxs) > 0:
         #print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
         mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
-        failed_mask = np.zeros(len(mols), dtype=bool)
+        failed_mask = np.zeros(databases.shape[0], dtype=bool)
         failed_mask[failed_mol_idxs] = True
         databases = databases[~failed_mask]
 
@@ -103,7 +103,7 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     too_big_idxs = set(too_big_idxs)
     if len(too_big_idxs) > 0:
         mols = [mol for i, mol in enumerate(mols) if i not in too_big_idxs]
-        failed_mask = np.zeros(len(mols), dtype=bool)
+        failed_mask = np.zeros(databases.shape[0], dtype=bool)
         failed_mask[list(too_big_idxs)] = True
         databases = databases[~failed_mask]
 
@@ -120,7 +120,7 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_pharm_idxs]
         a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_pharm_idxs]
         mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
-        failed_mask = np.zeros(len(mols), dtype=bool)
+        failed_mask = np.zeros(databases.shape[0], dtype=bool)
         failed_mask[failed_pharm_idxs] = True
         databases = databases[~failed_mask]
         
@@ -130,10 +130,9 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     # Remove molecules that failed to get xace data
     if len(failed_xace_idxs) > 0:
         #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
-        failed_xace_idxs = set(failed_xace_idxs)
         x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
         a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
-        failed_mask = np.zeros(len(x_pharm), dtype=bool)
+        failed_mask = np.zeros(databases.shape[0], dtype=bool)
         failed_mask[failed_xace_idxs] = True
         databases = databases[~failed_mask]
         v_pharm = [v for i, v in enumerate(v_pharm) if i not in failed_xace_idxs]

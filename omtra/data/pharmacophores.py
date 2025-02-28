@@ -157,8 +157,21 @@ def get_pharmacophores(mol, rec=None):
         
     # V has shape (num_pharm_centers, num_vectors, 3)
     # where num_vectors is the maximum number of vectors for any pharmacophore center
-    num_vectors = max(len(v) for v in V)
+    # num_vectors = max(len(v) for v in V)
+    num_vectors=4
     for i in range(len(V)):
         V[i].extend([np.zeros(3)] * (num_vectors - len(V[i])))
-        
-    return X, P, V, I
+
+    P = np.array(P) # has shape (num_pharm_centers, 3)
+    V = np.array(V) # has shape (num_pharm_centers, num_vectors, 3)
+    X = np.array(X)
+
+    if P.shape[0] == 0:
+        P = np.zeros((0, 3))
+        X = np.zeros(0)
+        V = np.zeros((0, num_vectors, 3))
+
+        if I != []:
+            raise NotImplementedError("Didn't know how to handle this edge case for I because I was working on ligand-only data")
+
+    return P, X, V, I
