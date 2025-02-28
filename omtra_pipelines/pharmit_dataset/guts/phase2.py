@@ -3,21 +3,15 @@ from pathlib import Path
 import zarr
 import pickle
 import numpy as np
-import time
-import os
 from typing import List, Dict
 import pandas as pd
 import shutil
-import traceback
 import functools
 import math
-from contextlib import contextmanager
 
 from tqdm import tqdm
-from multiprocessing import Pool, Lock
 from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.utils.graph import build_lookup_table
-import multiprocessing
 
 class FileCrawler():
     def __init__(self, output_dir: Path, n_chunks_process: int = None, shuffle: bool = False):
@@ -56,6 +50,7 @@ class FileCrawler():
         lig_node_graph_lookup_boundaries = build_lookup_table(mols_per_chunk) # has shape (n_chunks, 2)
         lig_edge_graph_lookup_boundaries = build_lookup_table(mols_per_chunk) # has shape (n_chunks, 2)
         pharm_node_graph_lookup_boundaries = build_lookup_table(mols_per_chunk) # has shape (n_chunks, 2)
+        db_array_boundaries = build_lookup_table(mols_per_chunk) # has shape (n_chunks, 2)
 
         # compute the number of atoms, pharms, and edges preceding each chunk
         df['lig_node_offset'] = np.concatenate([[0], np.cumsum(df['n_atoms'].values)[:-1]])
@@ -69,6 +64,9 @@ class FileCrawler():
         df['lig_node_graph_lookup_start'], df['lig_node_graph_lookup_end'] = lig_node_graph_lookup_boundaries[:, 0], lig_node_graph_lookup_boundaries[:, 1]
         df['lig_edge_graph_lookup_start'], df['lig_edge_graph_lookup_end'] = lig_edge_graph_lookup_boundaries[:, 0], lig_edge_graph_lookup_boundaries[:, 1]
         df['pharm_node_graph_lookup_start'], df['pharm_node_graph_lookup_end'] = pharm_node_graph_lookup_boundaries[:, 0], pharm_node_graph_lookup_boundaries[:, 1]
+
+        # compute boundaries for the database array
+        df['db_start'], df['db_end'] = db_array_boundaries[:, 0], db_array_boundaries[:, 1]
 
         return df
     

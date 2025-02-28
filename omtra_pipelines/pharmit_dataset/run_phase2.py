@@ -150,6 +150,17 @@ def write_data_to_store(data_file: str, data_info: dict, parallel: bool = False)
         pharm_node_graph_lookup = tensors['pharm_lookup'] + data_info['pharm_node_offset']
         pharm_node_group['graph_lookup'][start_idx:end_idx] = pharm_node_graph_lookup
 
+    # write database array
+    start_idx = data_info['db_start']
+    end_idx = data_info['db_end']
+
+    if not parallel:
+        zchunks_touched = []
+    else:
+        zchunks_touched = global_zstore.get_chunks_touched('db/db', start_idx, end_idx)
+    with get_all_locks('db/db', zchunks_touched):
+        root['db/db'][start_idx:end_idx] = tensors['database']
+
 
     return
 

@@ -17,16 +17,24 @@ class PharmitDataset(ZarrDataset):
     def __init__(self, 
                  split: str,
                  processed_data_dir: str,
-                 graphs_per_chunk: int,
                  graph_config: DictConfig,
     ):
         super().__init__(split, processed_data_dir)
-        self.graphs_per_chunk = graphs_per_chunk
         self.graph_config = graph_config
 
     @classproperty
     def name(cls):
         return 'pharmit'
+    
+    @property
+    def n_zarr_chunks(self):
+        graph_lookup = self.root['lig/node/graph_lookup']
+        return graph_lookup.chunks[0]
+    
+    @property
+    def graphs_per_chunk(self):
+        return len(self) // self.n_zarr_chunks
+
 
     def __len__(self):
         return self.root['lig/node/graph_lookup'].shape[0]
@@ -59,6 +67,13 @@ class PharmitDataset(ZarrDataset):
         # convert to torch tensors
         # TODO: data typing!! need to design data typing!
         xace_ligand = [torch.from_numpy(arr) for arr in xace_ligand]
+
+        # set data types
+        xace_ligand[0] = xace_ligand[0].float()
+        xace_ligand[1] = xace_ligand[1].long()
+        xace_ligand[2] = xace_ligand[2].long()
+        xace_ligand[3] = xace_ligand[3].long()
+        xace_ligand[4] = xace_ligand[4].long()
 
         # convert sparse xae to dense xae
         lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(*xace_ligand)
