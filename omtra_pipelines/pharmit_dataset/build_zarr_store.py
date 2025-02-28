@@ -17,6 +17,7 @@ from tqdm import tqdm
 from multiprocessing import Pool, Lock
 from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.utils.graph import build_lookup_table
+import multiprocessing
 
 
 def parse_args():
@@ -42,7 +43,7 @@ def init_worker(locks, store_path):
     global global_lock_register
     global global_zstore
     global_lock_register = locks
-    global_zstore: ZarrStore = ZarrStore(store_path, None, None, overwrite=False, build=False)
+    global_zstore = ZarrStore(store_path, None, None, overwrite=False, build=False, mode='a')
 
 @contextmanager
 def get_all_locks(arr_name: str, zchunk_ids: List[int]):
@@ -53,7 +54,7 @@ def get_all_locks(arr_name: str, zchunk_ids: List[int]):
             lock = global_lock_register[arr_name][lock_id]
             lock.acquire()  # Blocking call to acquire the lock.
             acquired_locks.append(lock)
-        print("Acquired locks for ids:", sorted_ids)
+        # print(f"Acquired locks for {arr_name} chunks ids: {sorted_ids}")
         yield  # Critical section where the caller can safely do work.
     finally:
         # Release the locks in reverse order.
@@ -62,9 +63,10 @@ def get_all_locks(arr_name: str, zchunk_ids: List[int]):
 
 
 class FileCrawler():
-    def __init__(self, output_dir: Path, n_chunks_process: int = None):
+    def __init__(self, output_dir: Path, n_chunks_process: int = None, shuffle: bool = False):
         self.info_dir = output_dir / 'phase1' / 'chunk_info'
         self.data_dir = output_dir / 'phase1' / 'chunk_data'
+        self.shuffle = shuffle
 
         # read all chunk info files, convert to dataframe
         cinfo_rows = []
@@ -120,8 +122,11 @@ class FileCrawler():
         # find the zarr chunks that would be touched by the write operation
         # return a dictionary with the array name as key and the list of chunks as value
     
-    def info_batch_generator(self):
-        for _, row in self.df.iterrows():
+    def __iter__(self):
+        iter_data = list(self.df.iterrows())
+        if self.shuffle:
+            np.random.shuffle(iter_data)
+        for _, row in iter_data:
             yield row.to_dict()
 
     def __len__(self):
@@ -175,7 +180,7 @@ def init_zarr_store(store_path: Path, totals: dict, n_chunks: int):
     # Create pharmacophore arrays
     pharm_node_data.create_array('x', shape=(n_pharms, 3), chunks=(pharm_nodes_per_chunk,3), dtype=np.float32)
     pharm_node_data.create_array('a', shape=(n_pharms, ), chunks=(pharm_nodes_per_chunk, ), dtype=np.int8)
-    pharm_node_data.create_array('graph_lookup', shape=(n_pharms, 2), chunks=(pharm_nodes_per_chunk,2), dtype=np.int64)
+    pharm_node_data.create_array('graph_lookup', shape=(n_graphs, 2), chunks=(graphs_per_chunk,2), dtype=np.int64)
     
     # Create database array
     # TODO: i don't like hard-coding the shape of the database array (and therefore # databases supported)
@@ -187,7 +192,6 @@ def init_zarr_store(store_path: Path, totals: dict, n_chunks: int):
 
 
 def write_data_to_store(data_file: str, data_info: dict, parallel: bool = False):
-
     tensors = np.load(data_file)
     tensors = tensors
 
@@ -279,9 +283,9 @@ def write_data_to_store(data_file: str, data_info: dict, parallel: bool = False)
 
 def error_and_update(error):
     """Handle errors, update error counter and the progress bar."""
-    print(f"Error: {error}")
+    # print(f"Error: {error}")
     traceback.print_exception(type(error), error, error.__traceback__)
-    raise Exception("Error encountered during processing.")
+    raise error
 
 
 def run_parallel(n_cpus: int, file_crawler: FileCrawler, store_path: Path, locks: dict):
@@ -296,7 +300,7 @@ def run_parallel(n_cpus: int, file_crawler: FileCrawler, store_path: Path, locks
             # Submit the job and add its AsyncResult to the pending list
             result = pool.apply_async(
                 write_data_to_store, 
-                args=(store_path, row_info['file'], row_info, True),
+                args=(row_info['file'], row_info, True),
                 callback=lambda _: pbar.update(1),
                 error_callback=error_and_update
             )
@@ -307,15 +311,16 @@ def run_parallel(n_cpus: int, file_crawler: FileCrawler, store_path: Path, locks
 
 def run_simple(file_crawler: FileCrawler, store_path: Path):
     init_worker({}, store_path)
-    iterator = tqdm(file_crawler.info_batch_generator(), desc="Processing", unit="chunks")
+    iterator = tqdm(file_crawler, desc="Processing", unit="chunks")
     for data_info in iterator:
         write_data_to_store(data_info['file'], data_info)
 
 class ZarrStore:
     def __init__(self, store_path: Path, totals: dict, n_chunks: int,
-                 overwrite: bool = False, build: bool = True):
+                 overwrite: bool = False, build: bool = True, mode='r'):
         self.totals = totals
         self.n_chunks = n_chunks
+        self.store_path = store_path
 
         if store_path.exists() and overwrite:
             shutil.rmtree(store_path)
@@ -323,8 +328,13 @@ class ZarrStore:
         if not self.store_path.exists() and (build or overwrite):
             init_zarr_store(store_path, totals, n_chunks)
 
-        self.store = zarr.storage.LocalStore(str(store_path), read_only=True)
-        self.root = zarr.open(store=self.store, mode='r')
+        if mode == 'r':
+            read_only = True
+        else:
+            read_only = False
+
+        self.store = zarr.storage.LocalStore(str(store_path), read_only=read_only)
+        self.root = zarr.open(store=self.store, mode=mode)
 
     @functools.cached_property
     def array_keys(self):
@@ -358,7 +368,13 @@ def build_lock_register(file_crawler: FileCrawler, zstore: ZarrStore):
 if __name__ == '__main__':
     args = parse_args()
 
-    file_crawler = FileCrawler(args.output_dir, args.n_chunks_process)
+    # Set the multiprocessing start method to 'spawn'
+    multiprocessing.set_start_method('spawn', force=True)
+
+    file_crawler = FileCrawler(args.output_dir, 
+                               args.n_chunks_process,
+                               shuffle=args.n_cpus > 1
+                               )
 
     # create zarr store
     zarr_dir = args.output_dir / 'phase2' 

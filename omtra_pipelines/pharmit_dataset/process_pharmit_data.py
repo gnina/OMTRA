@@ -37,7 +37,7 @@ def parse_args():
     
     p.add_argument('--overwrite', action='store_true', help='Remove anything in existing output directory.')
 
-    p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
+    p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"])
     p.add_argument('--batch_size', type=int, default=50, help='Number of conformer files to batch togther.')
     p.add_argument('--pharm_types', type=list, default=['Aromatic','HydrogenDonor','HydrogenAcceptor','Hydrophobic','NegativeIon','PositiveIon'], help='Pharmacophore center types.')
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
