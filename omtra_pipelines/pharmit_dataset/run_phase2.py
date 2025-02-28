@@ -171,7 +171,7 @@ def error_and_update(error):
     raise error
 
 
-def run_parallel(n_cpus: int, file_crawler: FileCrawler, store_path: Path, locks: dict):
+def run_parallel(n_cpus: int, file_crawler: ChunkInfoManager, store_path: Path, locks: dict):
 
     total_tasks = len(file_crawler)
     pbar = tqdm(total=total_tasks, desc="Processing", unit="chunks")
@@ -192,13 +192,13 @@ def run_parallel(n_cpus: int, file_crawler: FileCrawler, store_path: Path, locks
         pool.join()
 
 
-def run_simple(file_crawler: FileCrawler, store_path: Path):
+def run_simple(file_crawler: ChunkInfoManager, store_path: Path):
     init_worker({}, store_path)
     iterator = tqdm(file_crawler, desc="Processing", unit="chunks")
     for data_info in iterator:
         write_data_to_store(data_info['file'], data_info)
 
-def build_lock_register(file_crawler: FileCrawler, zstore: ZarrStore):
+def build_lock_register(file_crawler: ChunkInfoManager, zstore: ZarrStore):
     locks = {}
     for array_name in zstore.array_keys:
         n_chunks = zstore.n_zarr_chunks(array_name)
@@ -211,7 +211,7 @@ if __name__ == '__main__':
     # Set the multiprocessing start method to 'spawn'
     multiprocessing.set_start_method('spawn', force=True)
 
-    file_crawler = FileCrawler(args.output_dir, 
+    file_crawler = ChunkInfoManager(args.output_dir, 
                                args.n_chunks_process,
                                shuffle=args.n_cpus > 1
                                )
@@ -222,6 +222,10 @@ if __name__ == '__main__':
     store_path = zarr_dir / args.store_name
 
     zstore = ZarrStore(store_path, file_crawler.totals, args.n_chunks_zarr, overwrite=args.overwrite)
+
+    # write p(n_atoms, n_pharms) data to simple npz file
+    hist_file = zarr_dir / f'{store_path.stem}_n_nodes_dist.npz'
+    np.savez(hist_file, **file_crawler.n_nodes_dist_info)
 
     if args.n_cpus > 1:
         locks = build_lock_register(file_crawler, zstore)

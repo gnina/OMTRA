@@ -8,12 +8,13 @@ import pandas as pd
 import shutil
 import functools
 import math
+from collections import defaultdict
 
 from tqdm import tqdm
 from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.utils.graph import build_lookup_table
 
-class FileCrawler():
+class ChunkInfoManager():
     def __init__(self, output_dir: Path, n_chunks_process: int = None, shuffle: bool = False):
         self.info_dir = output_dir / 'phase1' / 'chunk_info'
         self.data_dir = output_dir / 'phase1' / 'chunk_data'
@@ -21,24 +22,90 @@ class FileCrawler():
 
         # read all chunk info files, convert to dataframe
         cinfo_rows = []
+        atom_counts = []
+        pharm_counts = []
         for chunk_info_file in self.info_dir.iterdir():
             with open(chunk_info_file, 'rb') as f:
                 chunk_info = pickle.load(f)
+            atom_counts.append(chunk_info.pop('p_atoms'))
+            pharm_counts.append(chunk_info.pop('p_pharms_given_atoms'))
             cinfo_rows.append(chunk_info)
-
 
             if n_chunks_process is not None and len(cinfo_rows) >= n_chunks_process:
                 break
+
+        self.n_nodes_dist_info = self.compute_num_node_dists(atom_counts, pharm_counts)
+
         self.df = pd.DataFrame(cinfo_rows) # raw info data converted to dataframe
 
         self.totals = self.df.sum(axis=0, numeric_only=True).to_dict() # sum numerical columns (n_mols, n_atoms, n_edges, n_pharm)
 
         self.df = self.compute_write_boundaries(self.df)
 
+    def compute_num_node_dists(self, atom_counts, pharm_counts):
+        """Merge the unnormalize p(n_atoms) and p(n_pharms|n_atoms) distributions obtained for each chunk of the dataset
+
+        Args:
+            atom_counts (_type_): A list where each element is the output of np.unique(n_atoms_per_mol, return_counts=True)
+            pharm_counts (_type_): A dictionary where keys are an integer specifying the number of atoms in a molecule.
+                                    The values are the output of np.unique(n_pharms_per_mol, return_counts=True), thus specifying the counts 
+                                    that when normalized will yield p(n_pharms|n_atoms)
+        """
+
+        merged_atom_counts = defaultdict(int)
+        for n_atoms, n_observations in atom_counts:
+            for n, c in zip(n_atoms, n_observations):
+                merged_atom_counts[n] += c
+        
+        # get keys of merged_atom_counts and sort them in ascending order
+        n_atoms = sorted(merged_atom_counts.keys())
+        p_n_atoms = np.array([merged_atom_counts[n] for n in n_atoms])
+        p_n_atoms = p_n_atoms / p_n_atoms.sum()
+
+        merged_pharms_given_atoms = defaultdict(lambda: defaultdict(int))
+        n_pharms_observed = set()
+        for pharm_count_dict in pharm_counts:
+            for n_atoms_obs, pharm_counts in pharm_count_dict.items():
+                for n_pharms, c in zip(*pharm_counts):
+                    merged_pharms_given_atoms[n_atoms_obs][n_pharms] += c
+                    n_pharms_observed.add(n_pharms)
+        n_pharms_observed = sorted(list(n_pharms_observed))
+
+        p_pharms_given_atoms = np.zeros((len(n_atoms), len(n_pharms_observed)))
+        for i, n_atoms_i in enumerate(n_atoms):
+            for j, n_pharms_j in enumerate(n_pharms_observed):
+                p_pharms_given_atoms[i, j] = merged_pharms_given_atoms[n_atoms_i][n_pharms_j]
+
+        # normalize along rows
+        p_pharms_given_atoms = p_pharms_given_atoms / p_pharms_given_atoms.sum(axis=1, keepdims=True)
+
+        # finally, compute the joint distribution p(n_atoms, n_pharms)
+        p_atoms_pharms = p_n_atoms[:, None] * p_pharms_given_atoms
+
+        # normalize just to be safe
+        p_atoms_pharms = p_atoms_pharms / p_atoms_pharms.sum()
+
+        n_atoms = np.array(n_atoms)
+        n_pharms_observed = np.array(n_pharms_observed)
+
+        nodes_dist_info = {
+            'n_atoms': n_atoms,
+            'n_pharms': n_pharms_observed,
+            'p_atoms_pharms': p_atoms_pharms
+        }
+
+        return nodes_dist_info
+
+
     def compute_write_boundaries(self, df: pd.DataFrame):
 
-        df['order'] = np.arange(df.shape[0]) # define canonical order for chunks
+        # define canonical order for chunks
+        if self.shuffle:
+            df['order'] = np.random.permutation(df.shape[0])
+        else:
+            df['order'] = np.arange(df.shape[0]) 
         df = df.sort_values(by='order')
+
 
         # we need boundaries for: ligand nodes, ligand edges, and pharmacophore nodes
         lig_node_boundaries = build_lookup_table(df['n_atoms'].values) # has shape (n_chunks, 2)
