@@ -126,7 +126,7 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         
     
     # Get XACE data
-    positions, atom_types, atom_charges, bond_types, bond_idxs, num_xace_failed, failed_xace_idxs = mol_tensorizer.featurize_molecules(mols) # (BATCHED) Tensor representation of molecules
+    xace_mols, num_xace_failed, failed_xace_idxs, unique_valencies = mol_tensorizer.featurize_molecules(mols)
     # Remove molecules that failed to get xace data
     if len(failed_xace_idxs) > 0:
         #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
@@ -138,21 +138,21 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         v_pharm = [v for i, v in enumerate(v_pharm) if i not in failed_xace_idxs]
 
     # sanity check
-    assert databases.shape[0] == len(positions) == len(x_pharm) == len(a_pharm)
+    assert databases.shape[0] == len(xace_mols) == len(x_pharm) == len(a_pharm) == len(v_pharm)
         
-    
-
     # Save tensors in dictionary
     tensors = {
-        'positions': positions, 
-        'atom_types': atom_types, 
-        'atom_charges': atom_charges, 
-        'bond_types': bond_types, 
-        'bond_idxs': bond_idxs, 
+        'positions': [m.positions for m in xace_mols], 
+        'atom_types': [m.atom_types for m in xace_mols], 
+        'atom_charges': [m.atom_charges for m in xace_mols], 
+        'bond_types': [m.bond_types for m in xace_mols], 
+        'bond_idxs': [m.bond_idxs for m in xace_mols], 
         'x_pharm': x_pharm, 
         'a_pharm': a_pharm, 
         'v_pharm': v_pharm,
-        'databases': databases}
+        'databases': databases,
+        'unique_valencies': unique_valencies
+    }
     
     return tensors
 
