@@ -6,6 +6,7 @@ import traceback
 from multiprocessing import Pool
 from dataclasses import dataclass
 from typing import Tuple
+from collections import defaultdict
 
 @dataclass
 class MolXACE:
@@ -15,6 +16,7 @@ class MolXACE:
     bond_types: Optional[np.ndarray] = None  # corresponds to edge attributes (bond orders)
     bond_idxs: Optional[np.ndarray] = None   # corresponds to edge index (upper triangular edges)
     unique_valencies: Optional[np.ndarray] = None
+    failure_mode: Optional[str] = None
 
 
 class MoleculeTensorizer():
@@ -35,16 +37,18 @@ class MoleculeTensorizer():
         else:    
             self.explicit_hydrogens = False
 
-    def featurize_molecules(self, molecules) -> Tuple[MolXACE, int, List[int], np.ndarray]:
+    def featurize_molecules(self, molecules) -> Tuple[MolXACE, List[int], np.ndarray]:
         """Featurizes a list of RDKit molecules into MolXACE data classes."""
         valid_molecules = []
         failed_idxs = []
+        failure_counts = defaultdict(int)
 
         if self.n_cpus == 1:
             for idx, molecule in enumerate(molecules):
                 molxace = rdmol_to_xace(molecule, self.atom_map_dict, self.explicit_hydrogens)
-                if molxace is None or molxace.positions is None:
+                if molxace.failure_mode is not None:
                     failed_idxs.append(idx)
+                    failure_counts[molxace.failure_mode] += 1
                 else:
                     valid_molecules.append(molxace)
         else:
@@ -53,6 +57,7 @@ class MoleculeTensorizer():
             for idx, molxace in enumerate(results):
                 if molxace is None or molxace.positions is None:
                     failed_idxs.append(idx)
+                    failure_counts[molxace.failure_mode] += 1
                 else:
                     valid_molecules.append(molxace)
 
@@ -63,7 +68,7 @@ class MoleculeTensorizer():
         unique_valencies = np.unique(unique_valencies, axis=0)
 
 
-        return valid_molecules, num_failed, failed_idxs, unique_valencies
+        return valid_molecules, failed_idxs, failure_counts, unique_valencies
 
 
 def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=False) -> Optional[MolXACE]:
@@ -73,7 +78,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         Chem.Kekulize(molecule, clearAromaticFlags=True)
     except Exception as e:
         traceback.print_exc()
-        return None
+        return MolXACE(failure_mode="sanitization/kekulization")
 
     # remove hydrogens if explicit hydrogens are not desired
     if not explicit_hydrogens:
@@ -81,14 +86,13 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
 
     num_fragments = len(Chem.GetMolFrags(molecule, sanitizeFrags=False))
     if num_fragments > 1:
-        print(f"Fragmented molecule with {num_fragments} fragments", flush=True)
-        return None
+        return MolXACE(failure_mode="multiple fragments")
 
     try:
         positions = molecule.GetConformer().GetPositions()
     except Exception as e:
         traceback.print_exc()
-        return None
+        return MolXACE(failure_mode="positions")
 
     num_atoms = molecule.GetNumAtoms()
     atom_types = np.zeros(num_atoms, dtype=int)
@@ -98,7 +102,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
             atom_types[i] = atom_map_dict[atom.GetSymbol()]
         except KeyError:
             print(f"Atom {atom.GetSymbol()} not in atom map", flush=True)
-            return None
+            return MolXACE(failure_mode="atom map")
         atom_charges[i] = atom.GetFormalCharge()
 
     # get one-hot encoded bonds (only existing bonds) using the upper-triangular portion of the adjacency matrix

@@ -497,7 +497,8 @@ class ChunkSaver():
             'n_edges': len(e),
             'n_pharm': len(x_pharm),
             'p_atoms': (unique_n_atoms, n_atoms_counts),
-            'p_pharms_given_atoms': p_pharms_given_atoms
+            'p_pharms_given_atoms': p_pharms_given_atoms,
+            'unique_valencies': tensors['unique_valencies']
         }
         
         # Dump info dictionary in pickle files

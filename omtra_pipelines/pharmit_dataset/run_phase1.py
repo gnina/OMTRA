@@ -126,16 +126,16 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         
     
     # Get XACE data
-    xace_mols, num_xace_failed, failed_xace_idxs, unique_valencies = mol_tensorizer.featurize_molecules(mols)
+    xace_mols, failed_xace_idxs, failure_modes, unique_valencies = mol_tensorizer.featurize_molecules(mols)
     # Remove molecules that failed to get xace data
     if len(failed_xace_idxs) > 0:
         #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
         x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
         a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
+        v_pharm = [v for i, v in enumerate(v_pharm) if i not in failed_xace_idxs]
         failed_mask = np.zeros(databases.shape[0], dtype=bool)
         failed_mask[failed_xace_idxs] = True
         databases = databases[~failed_mask]
-        v_pharm = [v for i, v in enumerate(v_pharm) if i not in failed_xace_idxs]
 
     # sanity check
     assert databases.shape[0] == len(xace_mols) == len(x_pharm) == len(a_pharm) == len(v_pharm)

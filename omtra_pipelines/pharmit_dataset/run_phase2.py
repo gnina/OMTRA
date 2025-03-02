@@ -12,6 +12,7 @@ import traceback
 import functools
 import math
 from contextlib import contextmanager
+import yaml
 
 from tqdm import tqdm
 from multiprocessing import Pool, Lock
@@ -31,6 +32,7 @@ def parse_args():
     p.add_argument('--n_chunks_zarr', type=int, default=1000, help='Number of chunks for zarr arrays.')
     p.add_argument('--n_chunks_process', type=int, default=None, help='Number of chunks to process, just for debugging.')
     p.add_argument('--overwrite', action='store_true', help='Overwrite existing store.')
+    p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"])
 
     args = p.parse_args()
     return args
@@ -205,14 +207,18 @@ def build_lock_register(file_crawler: ChunkInfoManager, zstore: ZarrStore):
         locks[array_name] = [Lock() for _ in range(n_chunks)]
     return locks
 
+
+
 if __name__ == '__main__':
     args = parse_args()
 
     # Set the multiprocessing start method to 'spawn'
     multiprocessing.set_start_method('spawn', force=True)
 
-    file_crawler = ChunkInfoManager(args.output_dir, 
-                               args.n_chunks_process,
+    chunk_info_manager = ChunkInfoManager(
+                               output_dir=args.output_dir, 
+                               atom_map=args.atom_type_map,
+                               n_chunks_process=args.n_chunks_process,
                                shuffle=args.n_cpus > 1
                                )
 
@@ -221,21 +227,26 @@ if __name__ == '__main__':
     zarr_dir.mkdir(parents=True, exist_ok=True)
     store_path = zarr_dir / args.store_name
 
-    zstore = ZarrStore(store_path, file_crawler.totals, args.n_chunks_zarr, overwrite=args.overwrite)
+    zstore = ZarrStore(store_path, chunk_info_manager.totals, args.n_chunks_zarr, overwrite=args.overwrite)
 
     # write p(n_atoms, n_pharms) data to simple npz file
     hist_file = zarr_dir / f'{store_path.stem}_n_nodes_dist.npz'
-    np.savez(hist_file, **file_crawler.n_nodes_dist_info)
+    np.savez(hist_file, **chunk_info_manager.n_nodes_dist_info)
+
+    # write valency table to yaml file
+    valency_file = zarr_dir / f'{store_path.stem}_valency_table.yml'
+    with open(valency_file, "w") as f:
+        yaml.dump(chunk_info_manager.valency_table, f, default_flow_style=False)
 
     if args.n_cpus > 1:
-        locks = build_lock_register(file_crawler, zstore)
+        locks = build_lock_register(chunk_info_manager, zstore)
 
     start_time = time.time()
 
     if args.n_cpus == 1:
-        run_simple(file_crawler, store_path)
+        run_simple(chunk_info_manager, store_path)
     else:
-        run_parallel(args.n_cpus, file_crawler, store_path, locks)
+        run_parallel(args.n_cpus, chunk_info_manager, store_path, locks)
 
     # store.display_structure()   # Display final Zarr store structrue
 

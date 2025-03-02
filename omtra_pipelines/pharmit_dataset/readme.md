@@ -15,3 +15,6 @@ autossh -M 20000 -f -N -R 2222:localhost:22 jabba
 - [ ] double-check xace module does kekulization / sanitization
 - [ ] dataset splits? datamodule currently expects a train and val set
 - [ ] fix zarr dataset graphs_per_chunk 
+- [ ] write out bad mols on pharmacophore error
+- [ ] pipeline should use hydra configs instead of argparse
+- [ ] write atom type map into zarr store?

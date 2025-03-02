@@ -15,7 +15,7 @@ from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.utils.graph import build_lookup_table
 
 class ChunkInfoManager():
-    def __init__(self, output_dir: Path, n_chunks_process: int = None, shuffle: bool = False):
+    def __init__(self, output_dir: Path, atom_map: List[str], n_chunks_process: int = None, shuffle: bool = False):
         self.info_dir = output_dir / 'phase1' / 'chunk_info'
         self.data_dir = output_dir / 'phase1' / 'chunk_data'
         self.shuffle = shuffle
@@ -24,23 +24,43 @@ class ChunkInfoManager():
         cinfo_rows = []
         atom_counts = []
         pharm_counts = []
+        unique_valencies = []
         for chunk_info_file in self.info_dir.iterdir():
             with open(chunk_info_file, 'rb') as f:
                 chunk_info = pickle.load(f)
             atom_counts.append(chunk_info.pop('p_atoms'))
             pharm_counts.append(chunk_info.pop('p_pharms_given_atoms'))
+            unique_valencies.append(chunk_info.pop('unique_valencies'))
             cinfo_rows.append(chunk_info)
 
             if n_chunks_process is not None and len(cinfo_rows) >= n_chunks_process:
                 break
 
         self.n_nodes_dist_info = self.compute_num_node_dists(atom_counts, pharm_counts)
+        self.valency_arr = self.build_valency_table(unique_valencies, atom_map)
 
         self.df = pd.DataFrame(cinfo_rows) # raw info data converted to dataframe
 
         self.totals = self.df.sum(axis=0, numeric_only=True).to_dict() # sum numerical columns (n_mols, n_atoms, n_edges, n_pharm)
 
         self.df = self.compute_write_boundaries(self.df)
+
+    def build_valency_table(unique_valencies: List[np.ndarray], atom_map) -> dict:
+
+        valency_arr = np.unique(np.concatenate(unique_valencies), axis=0)
+
+        atom_idx_to_symbol = {i: atom for atom, i in atom_map.items()}
+
+        valency_dict = {}
+        for tcv in valency_arr:
+            atom_idx, charge, valency = tcv.tolist()
+            atom_symbol = atom_idx_to_symbol[atom_idx]
+            if atom_symbol not in valency_dict:
+                valency_dict[atom_symbol] = {}
+            if charge not in valency_dict[atom_symbol]:
+                valency_dict[atom_symbol][charge] = []
+            valency_dict[atom_symbol][charge].append(valency)
+        return valency_dict
 
     def compute_num_node_dists(self, atom_counts, pharm_counts):
         """Merge the unnormalize p(n_atoms) and p(n_pharms|n_atoms) distributions obtained for each chunk of the dataset
