@@ -229,9 +229,13 @@ if __name__ == '__main__':
 
     zstore = ZarrStore(store_path, chunk_info_manager.totals, args.n_chunks_zarr, overwrite=args.overwrite)
 
-    # write p(n_atoms, n_pharms) data to simple npz file
+    # write relevant distribution info
+    # currently this includes the distribution p(n_atoms, n_pharms)
+    # as well as p(atom_type, atom_charge, valency), also referred to as p_tcv
     hist_file = zarr_dir / f'{store_path.stem}_n_nodes_dist.npz'
-    np.savez(hist_file, **chunk_info_manager.n_nodes_dist_info)
+    np.savez(hist_file, 
+             **chunk_info_manager.n_nodes_dist_info, 
+             **chunk_info_manager.valency_dist_info)
 
     # write valency table to yaml file
     valency_file = zarr_dir / f'{store_path.stem}_valency_table.yml'

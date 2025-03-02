@@ -275,7 +275,7 @@ class StructureProcessor:
         keys = list(ligand_mols.keys())
         mols = list(ligand_mols.values())
 
-        (xace_mols, failed_idxs, failure_counts, unique_valencies) = (
+        (xace_mols, failed_idxs, failure_counts, tcv_counts) = (
             self.ligand_tensorizer.featurize_molecules(mols)
         )
         annotation = system.system
@@ -331,7 +331,7 @@ class StructureProcessor:
         keys = list(npnde_mols.keys())
         mols = list(npnde_mols.values())
 
-        (xace_mols, failed_idxs, failure_counts, unique_valencies) = (
+        (xace_mols, failed_idxs, failure_counts, tcv_counts) = (
             self.npnde_tensorizer.featurize_molecules(mols)
         )
 

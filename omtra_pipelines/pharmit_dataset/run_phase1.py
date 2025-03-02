@@ -126,7 +126,7 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         
     
     # Get XACE data
-    xace_mols, failed_xace_idxs, failure_modes, unique_valencies = mol_tensorizer.featurize_molecules(mols)
+    xace_mols, failed_xace_idxs, failure_modes, tcv_counts = mol_tensorizer.featurize_molecules(mols)
     # Remove molecules that failed to get xace data
     if len(failed_xace_idxs) > 0:
         #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
@@ -151,7 +151,7 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         'a_pharm': a_pharm, 
         'v_pharm': v_pharm,
         'databases': databases,
-        'unique_valencies': unique_valencies
+        'tcv_counts': tcv_counts
     }
     
     return tensors

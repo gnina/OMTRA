@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Tuple
 from collections import defaultdict
 
+from omtra.utils.misc import combine_tcv_counts
+
 @dataclass
 class MolXACE:
     positions: Optional[np.ndarray] = None
@@ -61,11 +63,9 @@ class MoleculeTensorizer():
         num_failed = len(failed_idxs)
 
         # combine unique valencies from all valid molecules
-        unique_valencies = np.concatenate([molxace.unique_valencies for molxace in valid_molecules], axis=0)
-        unique_valencies = np.unique(unique_valencies, axis=0)
+        tcv_counts = combine_tcv_counts([molxace.tcv_counts for molxace in valid_molecules])
 
-
-        return valid_molecules, failed_idxs, failure_counts, unique_valencies
+        return valid_molecules, failed_idxs, failure_counts, tcv_counts
 
 
 def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=False) -> MolXACE:
@@ -114,10 +114,12 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         bond_types = adj[bond_idxs[:, 0], bond_idxs[:, 1]].astype(np.int32)
 
     # compute valencies and unique valencies information
-    # Note: torch simulation of np.sum; here we use numpy first then convert to torch
     valencies = np.sum(adj, axis=1)
     tcv = np.stack([atom_types, atom_charges, valencies], axis=1).astype(np.int8)
-    unique_valencies = np.unique(tcv, axis=0)
+    unique_valencies, counts = np.unique(tcv, axis=0)
+    tcv_counts = {}
+    for row, count in zip(unique_valencies, counts):
+        tcv_counts[tuple(row)] = count
 
     return MolXACE(
         positions=positions,
@@ -125,7 +127,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         atom_charges=atom_charges,
         bond_types=bond_types,
         bond_idxs=bond_idxs,
-        unique_valencies=unique_valencies
+        tcv_counts=tcv_counts,
     )
 
 

@@ -13,6 +13,7 @@ from collections import defaultdict
 from tqdm import tqdm
 from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.utils.graph import build_lookup_table
+from omtra.utils.misc import combine_tcv_counts
 
 class ChunkInfoManager():
     def __init__(self, output_dir: Path, atom_map: List[str], n_chunks_process: int = None, shuffle: bool = False):
@@ -24,20 +25,20 @@ class ChunkInfoManager():
         cinfo_rows = []
         atom_counts = []
         pharm_counts = []
-        unique_valencies = []
+        tcv_counts = []
         for chunk_info_file in self.info_dir.iterdir():
             with open(chunk_info_file, 'rb') as f:
                 chunk_info = pickle.load(f)
             atom_counts.append(chunk_info.pop('p_atoms'))
             pharm_counts.append(chunk_info.pop('p_pharms_given_atoms'))
-            unique_valencies.append(chunk_info.pop('unique_valencies'))
+            tcv_counts.append(chunk_info.pop('tcv_counts'))
             cinfo_rows.append(chunk_info)
 
             if n_chunks_process is not None and len(cinfo_rows) >= n_chunks_process:
                 break
 
         self.n_nodes_dist_info = self.compute_num_node_dists(atom_counts, pharm_counts)
-        self.valency_table = self.build_valency_table(unique_valencies, atom_map)
+        self.valency_dist_info, self.valency_table = self.compute_valency_dists(tcv_counts, atom_map)
 
         self.df = pd.DataFrame(cinfo_rows) # raw info data converted to dataframe
 
@@ -45,22 +46,46 @@ class ChunkInfoManager():
 
         self.df = self.compute_write_boundaries(self.df)
 
-    def build_valency_table(self, unique_valencies: List[np.ndarray], atom_map) -> dict:
+    def compute_valency_dists(self, tcv_counts: List[dict], atom_map) -> dict:
 
-        valency_arr = np.unique(np.concatenate(unique_valencies), axis=0)
+        tcv_counts: defaultdict = combine_tcv_counts(tcv_counts) # default dict mapping from (type_idx, charge, valency) to count (number of times that tcv was observed)
 
+        tcv_support = np.array(list(tcv_counts.keys())) # array containing all tcv values with non-zero counts
+
+        t_space = np.unique(tcv_support[:, 0]).tolist()
+        c_space = np.unique(tcv_support[:, 1]).tolist()
+        v_space = np.unique(tcv_support[:, 2]).tolist()
+
+        p_tcv_unnormalized = np.zeros((len(t_space), len(c_space), len(v_space)))
+        for i, t in enumerate(t_space):
+            for j, c in enumerate(c_space):
+                for k, v in enumerate(v_space):
+                    p_tcv_unnormalized[i, j, k] = tcv_counts[(t, c, v)]
+        p_tcv = p_tcv_unnormalized / p_tcv_unnormalized.sum()
+
+
+
+        valency_arr = tcv_support
         atom_idx_to_symbol = {i: atom for i, atom in enumerate(atom_map)}
 
         valency_dict = {}
-        for tcv in valency_arr:
-            atom_idx, charge, valency = tcv.tolist()
+        for tcv_support in valency_arr:
+            atom_idx, charge, valency = tcv_support.tolist()
             atom_symbol = atom_idx_to_symbol[atom_idx]
             if atom_symbol not in valency_dict:
                 valency_dict[atom_symbol] = {}
             if charge not in valency_dict[atom_symbol]:
                 valency_dict[atom_symbol][charge] = []
             valency_dict[atom_symbol][charge].append(valency)
-        return valency_dict
+
+        tcv_dist_info = {
+            'p_tcv_t_space': t_space,
+            'p_tcv_c_space': c_space,
+            'p_tcv_v_space': v_space,
+            'p_tcv': p_tcv
+        }
+
+        return tcv_dist_info, valency_dict
 
     def compute_num_node_dists(self, atom_counts, pharm_counts):
         """Merge the unnormalize p(n_atoms) and p(n_pharms|n_atoms) distributions obtained for each chunk of the dataset
@@ -109,9 +134,9 @@ class ChunkInfoManager():
         n_pharms_observed = np.array(n_pharms_observed)
 
         nodes_dist_info = {
-            'n_atoms': n_atoms,
-            'n_pharms': n_pharms_observed,
-            'p_atoms_pharms': p_atoms_pharms
+            'p_ap_atoms_space': n_atoms,
+            'p_ap_pharms_space': n_pharms_observed,
+            'p_ap': p_atoms_pharms
         }
 
         return nodes_dist_info
