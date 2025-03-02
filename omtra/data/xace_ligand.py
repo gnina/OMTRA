@@ -32,10 +32,7 @@ class MoleculeTensorizer():
         else:
             self.pool = Pool(self.n_cpus)
 
-        if 'H' in atom_map:
-            self.explicit_hydrogens = True
-        else:    
-            self.explicit_hydrogens = False
+        self.explicit_hydrogens = False
 
     def featurize_molecules(self, molecules) -> Tuple[MolXACE, List[int], np.ndarray]:
         """Featurizes a list of RDKit molecules into MolXACE data classes."""
@@ -71,7 +68,7 @@ class MoleculeTensorizer():
         return valid_molecules, failed_idxs, failure_counts, unique_valencies
 
 
-def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=False) -> Optional[MolXACE]:
+def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=False) -> MolXACE:
     """Converts an RDKit molecule to a MolXACE data class containing the positions, atom types, atom charges, bond types, bond indexes, and unique valencies."""
     try:
         Chem.SanitizeMol(molecule)
