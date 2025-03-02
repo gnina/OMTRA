@@ -66,7 +66,7 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
 
     cpt = conf.GetAtomPosition(atom_idx)
     
-    if atom.GetAtomicNum() == 8: # two lone pairs
+    if atom.GetAtomicNum() == 8 and len(nbrs) < 3: # two lone pairs
         heavy_nbr = heavy[0]
         if len(nbrs) == 1: # sp2
             for a in heavy_nbr.GetNeighbors():
