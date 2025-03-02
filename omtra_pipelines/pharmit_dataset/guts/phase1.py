@@ -8,6 +8,7 @@ import re
 from typing import Tuple
 import subprocess
 import functools
+import uuid
 
 from rdkit.Chem import AllChem as Chem
 import numpy as np
@@ -25,6 +26,7 @@ from omtra.utils.graph import build_lookup_table
 from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
 from omtra.data.pharmacophores import get_pharmacophores
 from tempfile import TemporaryDirectory
+import traceback
 
 def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first conformer
 
@@ -291,7 +293,18 @@ def get_pharmacophore_data(mols):
     
     failed_pharm_idxs = []
     for idx, mol in enumerate(mols):
-        x_pharm, a_pharm, v_pharm, _ = get_pharmacophores(mol)
+        try:
+            x_pharm, a_pharm, v_pharm, _ = get_pharmacophores(mol)
+        except Exception as e:
+            # TODO: remove this behavior, just for debugging
+            uuid = str(uuid.uuid4())[:4]
+            bad_mols_dir = Path("./bad_mols/")
+            bad_mols_dir.mkdir(exist_ok=True)
+            error_filepath = bad_mols_dir / f"error_{uuid}.txt"
+            with open(error_filepath, 'w') as error_file:
+                traceback.print_exc(file=error_file)
+            Chem.MolToMolFile(mol, str(bad_mols_dir / f"mol_{uuid}.sdf"), kekulize=False)
+            raise e
         if x_pharm is None:
             failed_pharm_idxs.append(idx)
             continue
