@@ -17,7 +17,7 @@ class MolXACE:
     atom_charges: Optional[np.ndarray] = None
     bond_types: Optional[np.ndarray] = None  # corresponds to edge attributes (bond orders)
     bond_idxs: Optional[np.ndarray] = None   # corresponds to edge index (upper triangular edges)
-    unique_valencies: Optional[np.ndarray] = None
+    tcv_counts: Optional[dict] = None
     failure_mode: Optional[str] = None
 
 
@@ -116,7 +116,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
     # compute valencies and unique valencies information
     valencies = np.sum(adj, axis=1)
     tcv = np.stack([atom_types, atom_charges, valencies], axis=1).astype(np.int8)
-    unique_valencies, counts = np.unique(tcv, axis=0)
+    unique_valencies, counts = np.unique(tcv, axis=0, return_counts=True)
     tcv_counts = {}
     for row, count in zip(unique_valencies, counts):
         tcv_counts[tuple(row)] = count
