@@ -219,7 +219,7 @@ if __name__ == '__main__':
                                output_dir=args.output_dir, 
                                atom_map=args.atom_type_map,
                                n_chunks_process=args.n_chunks_process,
-                               shuffle=args.n_cpus > 1
+                               shuffle=True
                                )
 
     # create zarr store
