@@ -122,7 +122,9 @@ def get_pharmacophore_dict(ligand, receptor=None):
     """
     
     pharmacophores = {feature: {'P': [], 'V': [], 'I': []} for feature in smarts_patterns}
+    
     ligand = Chem.AddHs(ligand)
+    if receptor: receptor = Chem.AddHs(receptor)
 
     for feature, patterns in smarts_patterns.items():
         all_ligand_positions = []
@@ -137,16 +139,19 @@ def get_pharmacophore_dict(ligand, receptor=None):
         
         if all_ligand_positions:
             if receptor:
-                receptor = Chem.AddHs(receptor)
                 interaction, updated_vectors = check_interaction(all_ligand_positions, receptor, feature)
                 for i in range(len(all_ligand_vectors)):
                     if interaction[i]: 
                         all_ligand_vectors[i] = updated_vectors[i]
 
                 pharmacophores[feature]['I'].extend(interaction)
+                receptor = Chem.RemoveHs(receptor)
             
             pharmacophores[feature]['P'].extend(all_ligand_positions)
             pharmacophores[feature]['V'].extend(all_ligand_vectors)            
+    
+    ligand = Chem.RemoveHs(ligand)
+    if receptor: receptor = Chem.RemoveHs(receptor)                
                 
     return pharmacophores
 
