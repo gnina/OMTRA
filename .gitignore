@@ -2,6 +2,7 @@ omtra_pipelines/pharmit_dataset/pharmit_small/
 omtra_pipelines/pharmit_dataset/outputs/
 data/pharmit_dev/
 local/
+.vscode/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
