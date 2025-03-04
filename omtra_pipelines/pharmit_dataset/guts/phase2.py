@@ -293,6 +293,9 @@ def init_zarr_store(store_path: Path, totals: dict, n_chunks: int):
     # Create pharmacophore arrays
     pharm_node_data.create_array('x', shape=(n_pharms, 3), chunks=(pharm_nodes_per_chunk,3), dtype=np.float32)
     pharm_node_data.create_array('a', shape=(n_pharms, ), chunks=(pharm_nodes_per_chunk, ), dtype=np.int8)
+    
+    # TODO: don't like hard-coding the number of vectors per node
+    pharm_node_data.create_array('v', shape=(n_pharms, 4, 3), chunks=(pharm_nodes_per_chunk, 4, 3), dtype=np.float32)
     pharm_node_data.create_array('graph_lookup', shape=(n_graphs, 2), chunks=(graphs_per_chunk,2), dtype=np.int64)
     
     # Create database array

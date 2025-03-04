@@ -4,6 +4,11 @@ import traceback
 import shutil
 from tqdm import tqdm
 
+from rdkit import RDLogger
+
+# Disable RDKit warnings and errors
+RDLogger.DisableLog('rdApp.*')
+
 from multiprocessing import Pool
 from functools import partial
 
@@ -114,7 +119,7 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     xace_mols, failed_xace_idxs, failure_modes, tcv_counts = mol_tensorizer.featurize_molecules(mols)
 
     if len(failure_modes) != 0:
-        print(failure_modes)
+        print(failure_modes, flush=True)
 
     # Remove molecules that failed to get xace data
     if len(failed_xace_idxs) > 0:

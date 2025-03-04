@@ -10,6 +10,11 @@ from collections import defaultdict
 
 from omtra.utils.misc import combine_tcv_counts, bad_mol_reporter
 
+from rdkit import RDLogger
+
+# Disable RDKit warnings and errors
+RDLogger.DisableLog('rdApp.*')
+
 @dataclass
 class MolXACE:
     positions: Optional[np.ndarray] = None

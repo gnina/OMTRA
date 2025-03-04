@@ -139,6 +139,7 @@ def write_data_to_store(data_file: str, data_info: dict, parallel: bool = False)
     with get_all_locks('pharm/node/x', zchunks_touched):
         pharm_node_group['x'][start_idx:end_idx] = tensors['pharm_x']
         pharm_node_group['a'][start_idx:end_idx] = tensors['pharm_a']
+        pharm_node_group['v'][start_idx:end_idx] = tensors['pharm_v']
 
 
     # convert pharm node graph lookup to global indicies

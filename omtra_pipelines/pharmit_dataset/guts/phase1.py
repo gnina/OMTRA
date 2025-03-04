@@ -303,6 +303,11 @@ def get_pharmacophore_data(mols):
         if x_pharm is None:
             failed_pharm_idxs.append(idx)
             continue
+
+        # check if v_pharm has NaN values
+        if np.isnan(v_pharm).any():
+            failed_pharm_idxs.append(idx)
+            continue
         
         all_x_pharm.append(x_pharm)
         all_a_pharm.append(a_pharm)
@@ -430,6 +435,7 @@ class ChunkSaver():
         bond_idxs = tensors['bond_idxs']
         x_pharm = tensors['x_pharm']
         a_pharm = tensors['a_pharm']
+        v_pharm = tensors['v_pharm']
         databases = tensors['databases']
 
         # Record the number of nodes and edges in each molecule and convert to numpy arrays
@@ -445,6 +451,7 @@ class ChunkSaver():
         edge_index = np.concatenate(bond_idxs, axis=0)
         x_pharm = np.concatenate(x_pharm, axis=0)
         a_pharm = np.concatenate(a_pharm, axis=0)
+        v_pharm = np.concatenate(v_pharm, axis=0)
         db = np.concatenate(databases, axis=0)
 
         # create an array of indicies to keep track of the start_idx and end_idx of each molecule's node features
@@ -480,6 +487,7 @@ class ChunkSaver():
             'edge_lookup': edge_lookup,
             'pharm_x': x_pharm,
             'pharm_a': a_pharm,
+            'pharm_v': v_pharm,
             'pharm_lookup': pharm_node_lookup,
             'database': databases
         }
