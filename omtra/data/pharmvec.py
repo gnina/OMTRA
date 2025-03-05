@@ -24,10 +24,11 @@ def GetDonorFeatVects(featAtoms, atomsLoc, rdmol):
     atom_idx = featAtoms[0]
     atom_coords = atomsLoc[0]
     vectors = []
+    conf = rdmol.GetConformer()
     
     for nbor in rdmol.GetAtomWithIdx(atom_idx).GetNeighbors():
         if nbor.GetAtomicNum() == 1:  # hydrogen atom
-            nbor_coords = np.array(rdmol.GetConformer().GetAtomPosition(nbor.GetIdx()))
+            nbor_coords = np.array(conf.GetAtomPosition(nbor.GetIdx()))
             vec = nbor_coords - atom_coords
             vec = vec / np.linalg.norm(vec)
             vectors.append(vec)
@@ -114,9 +115,10 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
         # take average direction of bonds and reverse it
         ave_bond = np.zeros(3)
         cnt = 0
+        conf = rdmol.GetConformer()
         
         for nbor in rdmol.GetAtomWithIdx(atom_idx).GetNeighbors():
-            nbor_coords = np.array(rdmol.GetConformer().GetAtomPosition(nbor.GetIdx()))
+            nbor_coords = np.array(conf.GetAtomPosition(nbor.GetIdx()))
             ave_bond += nbor_coords - atom_coords 
             cnt += 1
         
