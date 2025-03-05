@@ -11,6 +11,7 @@ from biotite.structure.io.pdbx import CIFFile, get_structure
 from omtra.data.pharmacophores import get_pharmacophores
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra_pipelines.plinder_dataset.utils import _DEFAULT_DISTANCE_RANGE
+from omtra_pipelines.plinder_dataset.filter import filter
 from plinder.core import PlinderSystem
 from rdkit import Chem
 
@@ -326,6 +327,13 @@ class StructureProcessor:
                             linkages = inferred_linkages
 
             P, X, V, I = get_pharmacophores(mol=ligand_mols[key], rec=receptor_mol)
+            if not np.isfinite(V).all():
+                logger.warning(
+                    f"Non-finite pharmacophore vectors found in system {system.system_id} ligand {key}"
+                )
+                failed_mols[key] = ligand_mols[key]
+                continue
+
             pharmacophores_data[key] = PharmacophoreData(
                 coords=P, types=X, vectors=V, interactions=I
             )
@@ -479,37 +487,7 @@ class SystemProcessor:
     def filter_ligands(
         self, system: PlinderSystem
     ) -> (Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]):
-        system_annotation = system.system
-        system_structure = system.holo_structure
-
-        proper_ligand_keys = []
-        npnde_keys = []
-
-        for ligand in system_annotation["ligands"]:
-            lig_key = str(ligand["instance"]) + "." + ligand["asym_id"]
-
-            if ligand["is_ion"] or ligand["is_artifact"]:
-                npnde_keys.append(lig_key)
-            else:
-                num_interacting_res = 0
-                for chain, res_list in ligand["interacting_residues"].items():
-                    num_interacting_res += len(res_list)
-
-                if num_interacting_res > 0:
-                    proper_ligand_keys.append(lig_key)
-
-        if len(proper_ligand_keys) < 1:
-            logger.warning("Skipping %s due to no proper ligands", system.system_id)
-            return None, None
-
-        ligand_mols = {}
-        npnde_mols = {}
-        for key, mol in system_structure.resolved_ligand_mols.items():
-            if key in proper_ligand_keys:
-                ligand_mols[key] = mol
-            elif key in npnde_keys:
-                npnde_mols[key] = mol
-
+        ligand_mols, npnde_mols = filter(system.system_id)
         return ligand_mols, npnde_mols
 
     def process_system(
