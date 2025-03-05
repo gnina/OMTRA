@@ -1,7 +1,7 @@
 import numpy as np
 from rdkit.Chem.Features import FeatDirUtilsRD as FeatDirUtils
 
-def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = False):
+def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = True):
     """Compute the direction vector for an aromatic feature."""
     
     v1 = atomsLoc[0] - featLoc
@@ -127,3 +127,38 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
             return [ave_bond]
             # if np.all(np.isfinite(ave_bond)):   
             #     return [ave_bond]
+
+def GetHalogenFeatVects(featAtoms, atomsLoc, rdmol):
+    """
+    Get the anchor positions and relative unit vectors of a halogen atom.
+    Assumes only one connection.
+
+    Arguments
+    ---------
+    conf : rdkit Mol object with a conformer.
+    featAtoms : list containing rdkit Atom object of atom attributed as an acceptor.
+    scale : float (default = 1.) length of direction vector.
+
+    Returns
+    -------
+    Tuple
+        list of anchor position(s) as rdkit Point3D or [None]
+        list of relative unit vector(s) as rdkit Point3D or [None]
+    """
+    assert len(featAtoms) == 1
+    atom_id = featAtoms[0]
+
+    atom = rdmol.GetAtomWithIdx(atom_id)
+    nbrs = atom.GetNeighbors()
+
+    cpt = atomsLoc[0]
+
+    # Just do opposite of single bond
+    heavy_nbr = nbrs[0]
+    conf = rdmol.GetConformer()
+    v1 = conf.GetAtomPosition(heavy_nbr.GetIdx())
+    v1 = np.array([v1.x, v1.y, v1.z])
+    v1 -= cpt
+    v1 *= -1.0
+    v1 = v1 / np.linalg.norm(v1)
+    return [v1]

@@ -3,6 +3,8 @@ ph_idx_to_type = [    'Aromatic',
     'HydrogenAcceptor',
     'PositiveIon',
     'NegativeIon',
-    'Hydrophobic']
+    'Hydrophobic',
+    'Halogen',
+    ]
 
 ph_type_to_idx = { val:idx for idx,val in enumerate(ph_idx_to_type) }
