@@ -27,11 +27,14 @@ def combine_tcv_counts(tcv_counts_list) -> defaultdict:
             combined_tcv_counts[tcv] += count
     return combined_tcv_counts
 
-def bad_mol_reporter(mol):
+def bad_mol_reporter(mol, note=None):
     uuid_str = str(uuid.uuid4())[:4]
     bad_mols_dir = Path("./bad_mols/")
     bad_mols_dir.mkdir(exist_ok=True)
     error_filepath = bad_mols_dir / f"error_{uuid_str}.txt"
     with open(error_filepath, 'w') as error_file:
         traceback.print_exc(file=error_file)
+        if note:
+            error_file.write(f"\n\n{note}")
+
     Chem.MolToMolFile(mol, str(bad_mols_dir / f"mol_{uuid_str}.sdf"), kekulize=False)

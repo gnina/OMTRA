@@ -10,8 +10,8 @@ def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = False):
     normal = np.cross(v1, v2)
     normal = normal / np.linalg.norm(normal)
     
-    if not np.all(np.isfinite(normal)):
-        return
+    # if not np.all(np.isfinite(normal)):
+    #     return
     
     if return_both:
         normal2 = normal * -1
@@ -30,10 +30,11 @@ def GetDonorFeatVects(featAtoms, atomsLoc, rdmol):
             nbor_coords = np.array(rdmol.GetConformer().GetAtomPosition(nbor.GetIdx()))
             vec = nbor_coords - atom_coords
             vec = vec / np.linalg.norm(vec)
-            if not np.all(np.isfinite(vec)):
-                continue
-            else:
-                vectors.append(vec)
+            vectors.append(vec)
+            # if not np.all(np.isfinite(vec)):
+            #     continue
+            # else:
+            #     vectors.append(vec)
         
     return vectors
 
@@ -123,5 +124,6 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
             ave_bond /= cnt
             ave_bond *= -1
             ave_bond = ave_bond / np.linalg.norm(ave_bond)
-            if np.all(np.isfinite(ave_bond)):   
-                return [ave_bond]
+            return [ave_bond]
+            # if np.all(np.isfinite(ave_bond)):   
+            #     return [ave_bond]

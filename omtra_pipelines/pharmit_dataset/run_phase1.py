@@ -31,7 +31,6 @@ def parse_args():
     # temporary default path for development
     # don't hard-code a path here. just make a symbolic link to my pharmit_small directory in the same place in your repo,
     # or run the code with --db_dir=/path/to/pharmit_small
-    p.add_argument('--db_dir', type=Path, default='./pharmit_small/')
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
     
@@ -54,8 +53,13 @@ def parse_args():
 
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--n_chunks', type=int, default=None, help='Number of to process. If None, process all. This is only for testing purposes.')
+    p.add_argument('--dev', action='store_true', help='Run in development mode.')
 
     args = p.parse_args()
+
+    if args.dev:
+        args.output_dir = args.output_dir.parent / f'dev_{args.output_dir.name}'
+
     return args
 
 def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num_atoms, min_num_atoms):
@@ -259,7 +263,8 @@ if __name__ == '__main__':
     chunk_saver = ChunkSaver(
         output_dir=args.output_dir,
         register_write_interval=args.register_write_interval,
-        chunk_offload_threshold_mb=args.chunk_offload_threshold
+        chunk_offload_threshold_mb=args.chunk_offload_threshold,
+        dev_mode=args.dev
     )
 
     db_crawler = DBCrawler(query_size=args.batch_size, 

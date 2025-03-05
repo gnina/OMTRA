@@ -304,8 +304,10 @@ def get_pharmacophore_data(mols):
             failed_pharm_idxs.append(idx)
             continue
 
-        # check if v_pharm has NaN values
-        if np.isnan(v_pharm).any():
+        # check if v_pharm has non-finite values
+        if not np.isfinite(v_pharm).all():
+            print('non-finite values in v_pharm', flush=True)
+            bad_mol_reporter(mol, note="Pharmacophore vectors contain non-finite values")
             failed_pharm_idxs.append(idx)
             continue
         
@@ -349,12 +351,14 @@ class ChunkSaver():
 
     def __init__(self, output_dir: Path, 
         register_write_interval: int = 10, # how frequently we record the chunks that have been processed to disk
-        chunk_offload_threshold_mb: int = 1000 # how many MB of data to store locally before offloading to masuda
+        chunk_offload_threshold_mb: int = 1000, # how many MB of data to store locally before offloading to masuda
+        dev_mode: bool = False,
         ):
 
         self.output_dir = output_dir
         self.register_write_interval = register_write_interval
         self.chunk_offload_threshold_mb = chunk_offload_threshold_mb
+        self.dev_mode = dev_mode
 
         # Make output directories
         chunk_data_dir = self.output_dir / 'chunk_data'
@@ -392,6 +396,9 @@ class ChunkSaver():
             self.offload_chunks()
 
     def offload_chunks(self):
+
+        if self.dev_mode:
+            return
 
         if self.mb_stored_local == 0:
             return
