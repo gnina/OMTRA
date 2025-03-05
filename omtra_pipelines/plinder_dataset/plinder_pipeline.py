@@ -596,7 +596,7 @@ class SystemProcessor:
         for key, ligand in ligand_data.items():
             if key not in receptor_data["pockets"]:
                 continue
-
+            lig_instance, lig_asym_id = key.split(".")
             other_ligands = {k: l for k, l in ligand_data.items() if k != key}
             if other_ligands:
                 for k, l in other_ligands.items():
@@ -616,7 +616,12 @@ class SystemProcessor:
                 for linkage in ligand.linkages:
                     prtnr1, prtnr2 = linkage.split("__")
                     updated_linkage = None
-                    if ligand.ccd in prtnr1:
+                    lig_identifier = f"{ligand.ccd}:{ligand_asym_id}"
+                    if lig_identifier in prtnr1 and lig_identifier in prtnr2:
+                        logger.warning(
+                            f"Failed to update linkage in system {system_id} ligand {key}"
+                        )
+                    elif lig_identifier in prtnr1:
                         (
                             rec_auth_resid,
                             rec_resname,
@@ -654,7 +659,7 @@ class SystemProcessor:
                             ]
                         )
                         updated_linkage = "__".join([prtnr1, prtnr2])
-                    elif ligand.ccd in prtnr2:
+                    elif lig_identifier in prtnr2:
                         (
                             rec_auth_resid,
                             rec_resname,
@@ -692,6 +697,10 @@ class SystemProcessor:
                             ]
                         )
                         updated_linkage = "__".join([prtnr1, prtnr2])
+                    else:
+                        logger.warning(
+                            f"Failed to update linkage in system {system_id} ligand {key}"
+                        )
                     if updated_linkage:
                         updated_linkages.append(updated_linkage)
                     else:

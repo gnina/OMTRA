@@ -46,16 +46,9 @@ class PlinderZarrConverter:
             self.receptor = self.root.create_group("receptor")
             self.apo = self.root.create_group("apo")
             self.pred = self.root.create_group("pred")
-            self.link_receptor = self.root.create_group("link_receptor")
             self.pocket = self.root.create_group("pocket")
 
-            for group in [
-                self.receptor,
-                self.apo,
-                self.pred,
-                self.pocket,
-                self.link_receptor,
-            ]:
+            for group in [self.receptor, self.apo, self.pred, self.pocket]:
                 chunk = self.struc_chunk_size
                 if group == self.pocket:
                     chunk = self.lig_chunk_size
@@ -132,7 +125,6 @@ class PlinderZarrConverter:
             self.root.attrs["npnde_lookup"] = []
             self.root.attrs["chunk_sizes"] = []
             self.root.attrs["system_type_idxs"] = []
-            self.root.attrs["link_receptor_lookup"] = []
 
             self.receptor_lookup = self.root.attrs[
                 "receptor_lookup"
@@ -145,13 +137,13 @@ class PlinderZarrConverter:
             ]  # [{system_id, pred_id, receptor_idx, link_receptor_idx, pred_idx, start, end, link_start, link_end, cif}]
             self.ligand_lookup = self.root.attrs[
                 "ligand_lookup"
-            ]  # [{system_id, ligand_id, receptor_idx, ligand_idx, ligand_num, atom_start, atom_end, bond_start, bond_end, sdf}]
+            ]  # [{system_id, ligand_id, receptor_idx, ligand_idx, ccd, linkages, atom_start, atom_end, bond_start, bond_end, sdf}]
             self.pocket_lookup = self.root.attrs[
                 "pocket_lookup"
-            ]  # [{system_id, pocket_id, receptor_idx, pocket_idx, pocket_num, start, end}]
+            ]  # [{system_id, pocket_id, receptor_idx, pocket_idx, start, end}]
             self.npnde_lookup = self.root.attrs[
                 "npnde_lookup"
-            ]  # [{system_id, npnde_id, receptor_idx, npnde_idx, atom_start, atom_end, bond_start, bond_end, sdf}]
+            ]  # [{system_id, npnde_id, receptor_idx, npnde_idx, ccd, linkages, atom_start, atom_end, bond_start, bond_end, sdf}]
             self.link_receptor_lookup = self.root.attrs["link_receptor_lookup"]
 
         else:
