@@ -23,6 +23,6 @@ mamba install -c conda-forge hydra-core pytorch-lightning -y
 mamba install -c conda-forge rdkit=2023.09.4 pystow einops zarr=3 jupyterlab rich matplotlib -y
 echo "✔ Done installing mamba packages"
 
-pip install wandb useful_rdkit_utils py3Dmol --no-input
+pip install wandb useful_rdkit_utils py3Dmol tqdm --no-input
 pip install -e ./
 echo "✔ Done installing pip packages"

@@ -31,7 +31,7 @@ def build_complex_graph(
     node_data: Dict[str, Dict[str, torch.Tensor]],
     edge_idxs: Dict[str, torch.Tensor],
     edge_data: Dict[str, Dict[str, torch.Tensor]],
-):
+) -> dgl.DGLHeteroGraph:
     
     # check that all node types are valid
     node_types_present = list(node_data.keys())
