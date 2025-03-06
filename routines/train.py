@@ -25,8 +25,6 @@ def train(cfg: DictConfig):
     # set seed everywhere (pytorch, numpy, python)
     pl.seed_everything(cfg.seed, workers=True)
 
-    cfg = merge_task_spec(cfg)
-
     # print(f"⚛ Instantiating datamodule <{cfg.task_group.data._target_}>")
     datamodule: MultiTaskDataModule = hydra.utils.instantiate(
         cfg.task_group.datamodule, 
@@ -48,6 +46,9 @@ def main(cfg: DictConfig):
 
     cfg is a DictConfig configuration composed by Hydra.
     """
+    cfg = merge_task_spec(cfg)
+
+
     print("\n=== Training Config ===")
     print(OmegaConf.to_yaml(cfg))
 
