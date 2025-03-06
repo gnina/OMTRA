@@ -4,7 +4,7 @@ from typing import Dict
 import itertools
 from omegaconf import DictConfig
 
-node_types = ['lig', 'prot_atom', 'prot_res', 'pharm']
+node_types = ['lig', 'prot_atom', 'prot_res', 'pharm', 'npnde']
 
 # construct the full list of possible edge types
 edge_types = [f"{ntype}_to_{ntype}" for ntype in node_types]
