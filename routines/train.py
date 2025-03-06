@@ -1,12 +1,14 @@
 import hydra
 
 import pytorch_lightning as pl
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from omtra.dataset.data_module import MultiTaskDataModule
+from omtra.load.conf import merge_task_spec
 from omtra.utils import omtra_root
 import torch.multiprocessing as mp
 import multiprocessing
+from pathlib import Path
 
 multiprocessing.set_start_method('spawn', force=True)
 mp.set_start_method("spawn", force=True)
@@ -23,9 +25,11 @@ def train(cfg: DictConfig):
     # set seed everywhere (pytorch, numpy, python)
     pl.seed_everything(cfg.seed, workers=True)
 
-    print(f"⚛ Instantiating datamodule <{cfg.task_group.data._target_}>")
+    cfg = merge_task_spec(cfg)
+
+    # print(f"⚛ Instantiating datamodule <{cfg.task_group.data._target_}>")
     datamodule: MultiTaskDataModule = hydra.utils.instantiate(
-        cfg.task_group.data, 
+        cfg.task_group.datamodule, 
         graph_config=cfg.graph)
 
     datamodule.setup(stage='fit')

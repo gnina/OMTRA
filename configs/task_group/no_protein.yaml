@@ -1,12 +1,14 @@
-# This could be a task group where all the tasks are listed
+# this block must be included in all task_group configs
+# especially the datamodule: default attribue
 defaults:
   - _self_
+  - datamodule: default
 
-  # Load the multitask data config from configs/task_group/data/multitask.yaml
-  - data: multitask
-  # Merge pharmit.yaml directly into the single_dataset_configs dict (which is used for MultiTaskDataModule)
-  - data@data.multitask_dataset_config.single_dataset_configs.pharmit: pharmit
+# define what datasets will be used by this model
+datasets: [pharmit]
 
+
+# define what tasks this model will be trained on and in what proportion. in otherwords this is p(task)
 tasks:
   - name: denovo_ligand
     probability: 0.33
@@ -15,6 +17,8 @@ tasks:
   - name: ligand_conformer
     probability: 0.33
 
+
+# define the coupling between datasets and tasks. in otherwords this is p(dataset|task)
 dataset_task_coupling:
   denovo_ligand:
     - [pharmit, 1.0]

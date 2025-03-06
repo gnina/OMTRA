@@ -3,30 +3,19 @@
 # the parameter single_dataset_configs will be set in the task_group
 _target_: omtra.dataset.data_module.MultiTaskDataModule
 
-tasks: ${task_group.tasks}
+# tasks: ${task_group.tasks}
 
-multitask_dataset_config:
-  single_dataset_configs:
+dataset_config:
+  single_dataset_configs: {}
   dataset_task_coupling: ${task_group.dataset_task_coupling}
+  tasks: ${task_group.tasks}
 
 prior_config: null
-
 edges_per_batch: ${edges_per_batch}
 num_workers: ${num_workers}
 
 lig_atom_type_map: ["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"]
-npnde_atom_type_map: [
-    "C",
-    "N",
-    "O",
-    "S",
-    "F",
-    "P",
-    "Cl",
-    "Br",
-    "I",
-    "Si",
-    "Pd",
+npnde_atom_type_map: ["C","N","O","S","F", "P", "Cl","Br","I","Si","Pd",
     "Ca",
     "Sc",
     "Al",

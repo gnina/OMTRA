@@ -13,17 +13,17 @@ class MultiTaskDataModule(pl.LightningDataModule):
 
     def __init__(
         self, 
-        tasks: List[dict], 
-        multitask_dataset_config: DictConfig, 
+        dataset_config: DictConfig, 
         graph_config: DictConfig,
         prior_config: dict, 
         edges_per_batch: int, 
+        lig_atom_type_map: List[str],
+        npnde_atom_type_map: List[str],
         num_workers: int = 0, 
         distributed: bool = False, 
     ):
         super().__init__()
-        self.tasks = tasks
-        self.multitask_dataset_config = multitask_dataset_config
+        self.dataset_config = dataset_config
         self.distributed = distributed
         self.edges_per_batch = edges_per_batch
         self.num_workers = num_workers
@@ -40,9 +40,8 @@ class MultiTaskDataModule(pl.LightningDataModule):
     def load_dataset(self, split: str):
         # TODO: tasks should just be absored into multitask_dataset_config
         return MultitaskDataSet(split, 
-                             tasks=self.tasks,
                              graph_config=self.graph_config,
-                             **self.multitask_dataset_config)
+                             **self.dataset_config)
     
     def train_dataloader(self):
         batch_sampler = MultiTaskSampler(self.train_dataset, self.edges_per_batch, distributed=self.distributed)
