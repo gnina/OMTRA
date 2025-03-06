@@ -29,6 +29,8 @@ def GetDonorFeatVects(featAtoms, atomsLoc, rdmol):
     for nbor in rdmol.GetAtomWithIdx(atom_idx).GetNeighbors():
         if nbor.GetAtomicNum() == 1:  # hydrogen atom
             nbor_coords = np.array(conf.GetAtomPosition(nbor.GetIdx()))
+            if (nbor_coords == 0).all():
+                raise ValueError("hydrogen addition failed")
             vec = nbor_coords - atom_coords
             vec = vec / np.linalg.norm(vec)
             vectors.append(vec)
