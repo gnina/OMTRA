@@ -135,7 +135,8 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     # Get pharmacophore data
     x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
     # Remove ligands where pharmacophore generation failed
-    if len(failed_pharm_idxs) > 0 :
+    if len(failed_pharm_idxs) > 0:
+        print(f'pharmacophore generation failed for {len(failed_pharm_idxs)} ligands', flush=True)
         xace_mols = [mol for i, mol in enumerate(xace_mols) if i not in failed_pharm_idxs]
         failed_mask = np.zeros(databases.shape[0], dtype=bool)
         failed_mask[failed_pharm_idxs] = True
