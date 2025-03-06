@@ -64,11 +64,7 @@ class ChunkInfoManager():
             c_idx = c_space.index(c)
             v_idx = v_space.index(v)
             p_tcv_unnormalized[t_idx, c_idx, v_idx] = count
-
-        for i, t in enumerate(t_space):
-            for j, c in enumerate(c_space):
-                for k, v in enumerate(v_space):
-                    p_tcv_unnormalized[i, j, k] = tcv_counts[(t, c, v)]
+            
         p_tcv = p_tcv_unnormalized / p_tcv_unnormalized.sum()
 
 
