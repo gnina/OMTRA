@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 _DEFAULT_DISTANCE_RANGE = {
     # Taken from Biotite Python
     # Taken from Allen et al.
@@ -127,7 +129,7 @@ NPNDE_MAP = [
 
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-from __future__ import annotations
+
 
 import inspect
 import logging

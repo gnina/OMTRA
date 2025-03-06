@@ -4,6 +4,11 @@ import multiprocessing as mp
 import time
 from pathlib import Path
 import pandas as pd
+import os
+
+os.environ["LOG_FILE_PATH"] = (
+    "/net/galaxy/home/koes/tjkatz/for_omtra/logs/plinder_link_storage_train.log"
+)
 
 from omtra_pipelines.plinder_dataset.plinder_pipeline import SystemProcessor
 from omtra_pipelines.plinder_dataset.plinder_links_zarr import PlinderLinksZarrConverter

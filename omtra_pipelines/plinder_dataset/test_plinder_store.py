@@ -207,6 +207,20 @@ def check_link(system: SystemData, actual_system: SystemData):
         f"link cif mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
 
+    # check correspondence with receptor
+    assert np.all(system.link.atom_names == system.receptor.atom_names), (
+        f"Atom names mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(system.link.res_ids == system.receptor.res_ids), (
+        f"res ids mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(system.link.res_names == system.receptor.res_names), (
+        f"res names mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(system.link.chain_ids == system.receptor.chain_ids), (
+        f"chain ids mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
 
 def check_system(system: SystemData, actual_system: SystemData):
     check_receptor(system, actual_system)
