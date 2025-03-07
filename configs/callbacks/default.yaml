@@ -1,0 +1,15 @@
+defaults:
+  - model_checkpoint
+  - tqdm_pbar
+  - _self_
+
+model_checkpoint:
+  monitor: "insert something here!"
+  save_last: True
+  mode: "min"
+  save_top_k: 3
+
+early_stopping:
+  monitor: "val/acc"
+  patience: 100
+  mode: "max"

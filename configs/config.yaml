@@ -1,15 +1,31 @@
 defaults:
-# we just need three things to train on: a model, a trainer and a group of tasks
   - _self_
   - model: default
   - trainer: default
   - task_group: no_protein
   - graph: default
+  - callbacks: default
+  - wandb: default
 
 seed: 42
+
+name: i_forgot_to_name_my_run
 
 # global overrides
 edges_per_batch: 10000 # approx 640 edges/gb ram
 num_workers: 2
 
 pharmit_path: ${omtra_root:}/data/pharmit
+
+
+# this is a directory that will symlink wandb 
+# run names and run ids to the actual hydra output directory
+symlink_dir: ./wandb_symlinks
+
+
+# put hydra run id in the output directory so if 2 jobs
+# are started within the same second, they don't overwrite each other
+hydra:
+  run:
+    # Use a timestamp plus the unique job id to form the run directory.
+    dir: ./outputs/${now:%Y-%m-%d_%H-%M-%S}-${hydra.job.id}

@@ -1,18 +1,18 @@
 import hydra
-
+import os
+from typing import List
 import pytorch_lightning as pl
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from omtra.dataset.data_module import MultiTaskDataModule
-from omtra.load.conf import merge_task_spec
+from omtra.load.conf import merge_task_spec, instantiate_callbacks
 from omtra.utils import omtra_root
 import torch.multiprocessing as mp
 import multiprocessing
 from pathlib import Path
+import wandb
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import LearningRateMonitor, TQDMProgressBar
-from pytorch_lightning import seed_everything
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities import rank_zero_only
 
@@ -40,7 +40,24 @@ def train(cfg: DictConfig):
     print(f"⚛ Instantiating model <{cfg.model._target_}>")
     model = hydra.utils.instantiate(cfg.model)
 
+    # figure out if we are resuming a previous run
+    resume = cfg.get("ckpt_path") is not None
+
+
     wandb_config = cfg.wandb
+    if resume:
+        # if we are resuming, we need to read the run_id from the resume_info.yaml file
+        resume_info_file = Path(cfg.hydra.run.dir) / 'resume_info.yaml'
+        with open(resume_info_file, 'r') as f:
+            resume_info = OmegaConf.load(f)
+        run_id = resume_info.run_id
+        wandb_config.resume = 'must'
+    else:
+        # otherwise, we generate a new run_id
+        run_id = wandb.util.generate_id()
+        
+
+    
     # TODO: flowmol sets save dir in wandb config
     # there is some complicated logic around instantiation of the output dir for flowmol
     # this logic has to do with gpu rank as well
@@ -50,14 +67,42 @@ def train(cfg: DictConfig):
     wandb_logger = WandbLogger(
         config=cfg,
         save_dir=cfg.hydra.run.dir,  # ensures logs are stored with the Hydra output dir
+        run_id=run_id,
         **wandb_config
     )
+
+    if not resume and rank_zero_only.rank == 0:
+        # if this is a fresh run, we need to get the run_id and name from wandb
+        # we use this info to create the resume_info.yaml file
+        # and also to create a symlink in the symlink_dir that will
+        # make it easy for us to lookup output directories just from wandb names
+        wandb_logger.experiment # this triggers the creation of the wandb run
+        run_id = wandb_logger.experiment.id
+        resume_info = {}
+        resume_info["run_id"] = run_id
+        resume_info["name"] = wandb_logger.experiment.name
+
+        # write resume info as yaml file to run directory
+        resume_info_file = Path(cfg.hydra.run.dir) / "resume_info.yaml"
+        with open(resume_info_file, "w") as f:
+            OmegaConf.save(resume_info, f)
+
+        # create symlink in symlink_dir
+        symlink_dir = Path(cfg.symlink_dir)
+        symlink_path = symlink_dir / f"{wandb_logger.experiment.name}_{run_id}"
+        os.symlink(cfg.hydra.run.dir, symlink_path)
+
+    # instantiate callbacks
+    callbacks: List[pl.Callback] = instantiate_callbacks(cfg.callbacks)
 
 
     trainer = pl.Trainer(
         logger=wandb_logger, 
         **cfg.trainer, 
-        callbacks=[checkpoint_callback, pbar_callback])
+        callbacks=callbacks
+    )
+
+    trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
 
 
     # datamodule.setup(stage='fit')
@@ -74,7 +119,16 @@ def main(cfg: DictConfig):
 
     cfg is a DictConfig configuration composed by Hydra.
     """
-    cfg = merge_task_spec(cfg)
+
+    resume = cfg.get('ckpt_path') is not None
+    if resume:
+        ckpt_path = Path(cfg.ckpt_path)
+        run_dir = ckpt_path.parent.parent
+        original_cfg_path = run_dir / 'config.yaml'
+        cfg = OmegaConf.load(original_cfg_path)
+        cfg.ckpt_path = str(ckpt_path)
+    else:
+        cfg = merge_task_spec(cfg)
 
 
     print("\n=== Training Config ===")
