@@ -57,13 +57,6 @@ def train(cfg: DictConfig):
         run_id = wandb.util.generate_id()
         
 
-    
-    # TODO: flowmol sets save dir in wandb config
-    # there is some complicated logic around instantiation of the output dir for flowmol
-    # this logic has to do with gpu rank as well
-    # need to remember what this logic is and whether we need it here
-    # our situation here may differ slightly because we don't need to come up with a logging directory
-    # hydra should create it for us?? how do we get access to the logging directory anyways?
     wandb_logger = WandbLogger(
         config=cfg,
         save_dir=cfg.hydra.run.dir,  # ensures logs are stored with the Hydra output dir
