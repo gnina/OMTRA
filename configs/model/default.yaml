@@ -1,4 +1,1 @@
-# Model hyperparameters
-name: omtra
-hidden_dim: 128
-lr: 1e-3
+_target_: omtra.model.omtra.OMTRA

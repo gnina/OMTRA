@@ -10,6 +10,12 @@ import torch.multiprocessing as mp
 import multiprocessing
 from pathlib import Path
 
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import LearningRateMonitor, TQDMProgressBar
+from pytorch_lightning import seed_everything
+from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.utilities import rank_zero_only
+
 multiprocessing.set_start_method('spawn', force=True)
 mp.set_start_method("spawn", force=True)
 
@@ -25,19 +31,41 @@ def train(cfg: DictConfig):
     # set seed everywhere (pytorch, numpy, python)
     pl.seed_everything(cfg.seed, workers=True)
 
-    # print(f"⚛ Instantiating datamodule <{cfg.task_group.data._target_}>")
+    print(f"⚛ Instantiating datamodule <{cfg.task_group.datamodule._target_}>")
     datamodule: MultiTaskDataModule = hydra.utils.instantiate(
         cfg.task_group.datamodule, 
         graph_config=cfg.graph)
 
-    datamodule.setup(stage='fit')
-    # TODO: load dataloader
-    # TODO: turn datamodule instantiation and dataloader test into unit tests
-    dataloader = datamodule.train_dataloader()
-    dataloader_iter = iter(dataloader)
-    n_batches = 5
-    for _ in range(n_batches):
-        g, task_name, dataset_name = next(dataloader_iter)
+    
+    print(f"⚛ Instantiating model <{cfg.model._target_}>")
+    model = hydra.utils.instantiate(cfg.model)
+
+    wandb_config = cfg.wandb
+    # TODO: flowmol sets save dir in wandb config
+    # there is some complicated logic around instantiation of the output dir for flowmol
+    # this logic has to do with gpu rank as well
+    # need to remember what this logic is and whether we need it here
+    # our situation here may differ slightly because we don't need to come up with a logging directory
+    # hydra should create it for us?? how do we get access to the logging directory anyways?
+    wandb_logger = WandbLogger(
+        config=cfg,
+        save_dir=cfg.hydra.run.dir,  # ensures logs are stored with the Hydra output dir
+        **wandb_config
+    )
+
+
+    trainer = pl.Trainer(
+        logger=wandb_logger, 
+        **cfg.trainer, 
+        callbacks=[checkpoint_callback, pbar_callback])
+
+
+    # datamodule.setup(stage='fit')
+    # dataloader = datamodule.train_dataloader()
+    # dataloader_iter = iter(dataloader)
+    # n_batches = 5
+    # for _ in range(n_batches):
+    #     g, task_name, dataset_name = next(dataloader_iter)
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="config")

@@ -4,10 +4,6 @@ defaults:
   - _self_
   - datamodule: default
 
-# define what datasets will be used by this model
-datasets: [pharmit]
-
-
 # define what tasks this model will be trained on and in what proportion. in otherwords this is p(task)
 tasks:
   - name: denovo_ligand
