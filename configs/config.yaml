@@ -26,4 +26,4 @@ symlink_dir: ./wandb_symlinks
 hydra:
   run:
     # make the timestap use milliseconds
-    dir: ./outputs/${now:%Y-%m-%d_%H-%M-%S-%f}
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%Y-%m-%d_%H-%M-%S-%f}
