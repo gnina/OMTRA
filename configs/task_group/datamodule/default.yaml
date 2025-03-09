@@ -5,79 +5,13 @@ _target_: omtra.dataset.data_module.MultiTaskDataModule
 
 # tasks: ${task_group.tasks}
 
+task_phases: ${task_group.task_phases}
+dataset_task_coupling: ${task_group.dataset_task_coupling}
+
+
 dataset_config:
   single_dataset_configs: {}
-  dataset_task_coupling: ${task_group.dataset_task_coupling}
-  tasks: ${task_group.tasks}
 
 prior_config: null
 edges_per_batch: ${edges_per_batch}
 num_workers: ${num_workers}
-
-lig_atom_type_map: ["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"]
-npnde_atom_type_map: ["C","N","O","S","F", "P", "Cl","Br","I","Si","Pd",
-    "Ca",
-    "Sc",
-    "Al",
-    "Pt",
-    "Cr",
-    "Rh",
-    "Mo",
-    "Y",
-    "Cu",
-    "Sm",
-    "Bi",
-    "Ir",
-    "Be",
-    "Pb",
-    "Kr",
-    "As",
-    "Sn",
-    "Lu",
-    "Co",
-    "Ni",
-    "K",
-    "Am",
-    "Rb",
-    "Gd",
-    "Ce",
-    "Ba",
-    "Au",
-    "Na",
-    "Th",
-    "Pr",
-    "Yb",
-    "Ti",
-    "Mg",
-    "Sr",
-    "Cs",
-    "Tl",
-    "B",
-    "Xe",
-    "Cm",
-    "Li",
-    "Zr",
-    "Cf",
-    "Ag",
-    "Cd",
-    "Mn",
-    "Eu",
-    "In",
-    "Hg",
-    "W",
-    "Tb",
-    "La",
-    "Sb",
-    "Te",
-    "Se",
-    "Zn",
-    "Os",
-    "Ga",
-    "Fe",
-    "Nd",
-    "Pu",
-    "V",
-    "U",
-    "Ru",
-    "Re",
-]

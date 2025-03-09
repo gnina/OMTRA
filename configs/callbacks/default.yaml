@@ -8,8 +8,3 @@ model_checkpoint:
   save_last: True
   mode: "min"
   save_top_k: 3
-
-early_stopping:
-  monitor: "val/acc"
-  patience: 100
-  mode: "max"

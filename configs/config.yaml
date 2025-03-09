@@ -23,9 +23,7 @@ pharmit_path: ${omtra_root:}/data/pharmit
 symlink_dir: ./wandb_symlinks
 
 
-# put hydra run id in the output directory so if 2 jobs
-# are started within the same second, they don't overwrite each other
 hydra:
   run:
-    # Use a timestamp plus the unique job id to form the run directory.
-    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}-${hydra.job.id}
+    # make the timestap use milliseconds
+    dir: ./outputs/${now:%Y-%m-%d_%H-%M-%S-%f}

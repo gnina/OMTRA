@@ -7,7 +7,7 @@ defaults:
 
 # Define tasks with time-varying probabilities
 # this is p(task) but p(task) can change through the course of training
-tasks:
+task_phases:
   # Initial phase: heavily train on denovo_ligand
   - duration_batches: 10000  # first 10k batches
     tasks:

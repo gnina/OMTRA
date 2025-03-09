@@ -6,11 +6,15 @@ from typing import Dict, List
 from omtra.dataset.chunk_tracker import GraphChunkTracker
 from omtra.dataset.multitask import MultitaskDataSet
 from omtra.tasks.tasks import Task
+from omtra.load.conf import TaskDatasetCoupling
+from omtra.tasks.register import task_name_to_class
 
 
 class MultiTaskSampler(Sampler):
 
-    def __init__(self, multi_dataset: MultitaskDataSet, 
+    def __init__(self, 
+                 multi_dataset: MultitaskDataSet,
+                 td_coupling: TaskDatasetCoupling,
                  edges_per_batch: int,
                  distributed: bool = False,
                  rank: int = None,
@@ -21,11 +25,15 @@ class MultiTaskSampler(Sampler):
         self.edges_per_batch = edges_per_batch
         
         self.distributed = distributed
-        self.task_names = multi_dataset.task_names
-        self.tasks: List[Task] = multi_dataset.tasks
+
+        # unpack information about the task-dataset coupling
+        self.td_coupling = td_coupling
+        self.task_space = td_coupling.task_space
+        self.dataset_space = td_coupling.dataset_space
+        self.p_dataset_task = td_coupling.p_dataset_task # has shape (n_phases, n_tasks, n_datasets)
+        self.n_phases, self.n_tasks, self.n_datasets = self.p_dataset_task.shape
         self.datasets = multi_dataset.datasets
-        self.dataset_names = multi_dataset.dataset_names
-        self.p_dataset_task = multi_dataset.p_dataset_task
+        self.tasks = [task_name_to_class[task_name] for task_name in self.task_space]
 
         self.batch_idx = 0
 
@@ -44,7 +52,11 @@ class MultiTaskSampler(Sampler):
 
     def sample_task_and_dataset(self):
 
-        p = self.p_dataset_task
+        # find the current phase of training
+        phase_durations = self.td_coupling.phase_durations
+        phase_idx = torch.searchsorted(phase_durations, self.batch_idx, right=True).item()
+
+        p = self.p_dataset_task[phase_idx]
 
         # Flatten the tensor to work with torch.multinomial
         flat_p = p.flatten()
@@ -62,8 +74,12 @@ class MultiTaskSampler(Sampler):
         self.chunk_trackers: Dict[int, GraphChunkTracker] = {}
         self.td_pair_to_chunk_tracker_id = {}
 
-        for dataset_idx, dataset_name in enumerate(self.dataset_names):
-            task_idxs = self.p_dataset_task[:, dataset_idx].nonzero(as_tuple=True)[0]
+        for dataset_idx, dataset_name in enumerate(self.dataset_space):
+            # the following line first selects probabilities across all phases/tasks that pertain to a particular dataset
+            # then sums over the phases; this yields a tensor of shape (n_tasks,) where tasks
+            #  that have some-non-zero probability of being used in the dataset have a non-zero value
+            sum_dataset_probs = self.p_dataset_task[:, :, dataset_idx].sum(dim=0) 
+            task_idxs = sum_dataset_probs.nonzero(as_tuple=True)[0] # get the indices of the non-zero values
             task_idxs = tuple(task_idxs.tolist())
             # tasks = [self.tasks[self.task_names[task_idx]] for task_idx in task_idxs]
 
@@ -80,7 +96,7 @@ class MultiTaskSampler(Sampler):
                 raise NotImplementedError('logic here needs to modified; there are now separate datasets for plinder with/without apo structures')
                 # divide tasks into those that use the apo state and those that don't
                 # and create separate chunk trackers for each
-                tasks = [self.tasks[self.task_names[task_idx]] for task_idx in task_idxs]
+                tasks = [self.tasks[self.task_space[task_idx]] for task_idx in task_idxs]
                 tasks_not_using_apo = [task_idx for task_idx, task in zip(task_idxs, tasks) if not task.uses_apo]
                 tasks_using_apo = [task_idx for task_idx, task in zip(task_idxs, tasks) if task.uses_apo]
 

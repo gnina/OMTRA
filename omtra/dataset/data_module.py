@@ -6,6 +6,7 @@ from omegaconf import DictConfig
 
 from omtra.dataset.multitask import MultitaskDataSet
 from omtra.dataset.samplers import MultiTaskSampler
+from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 import torch.multiprocessing as mp
 
 
@@ -14,11 +15,11 @@ class MultiTaskDataModule(pl.LightningDataModule):
     def __init__(
         self, 
         dataset_config: DictConfig, 
+        task_phases: DictConfig,
+        dataset_task_coupling: DictConfig,
         graph_config: DictConfig,
         prior_config: dict, 
         edges_per_batch: int, 
-        lig_atom_type_map: List[str],
-        npnde_atom_type_map: List[str],
         num_workers: int = 0, 
         distributed: bool = False, 
     ):
@@ -29,6 +30,11 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.prior_config = prior_config
         self.graph_config = graph_config
+
+
+        self.td_coupling: TaskDatasetCoupling = build_td_coupling(task_phases, dataset_task_coupling)
+
+
         self.save_hyperparameters()
 
     def setup(self, stage: str):
@@ -39,11 +45,16 @@ class MultiTaskDataModule(pl.LightningDataModule):
 
             self.train_sampler = MultiTaskSampler(
                 self.train_dataset, 
+                self.td_coupling,
                 self.edges_per_batch, 
                 distributed=self.distributed
             )
+
+            # TODO: how exactly do we want to sample data for validation? we don't actually
+            # need to follow the td_coupling for validation, right?
             self.val_sampler = MultiTaskSampler(
                 self.val_dataset, 
+                self.td_coupling,
                 self.edges_per_batch, 
                 distributed=self.distributed
             )
@@ -51,6 +62,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
     def load_dataset(self, split: str):
         # TODO: tasks should just be absored into multitask_dataset_config
         return MultitaskDataSet(split, 
+                             td_coupling=self.td_coupling,
                              graph_config=self.graph_config,
                              **self.dataset_config)
     

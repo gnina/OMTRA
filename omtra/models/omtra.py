@@ -6,9 +6,13 @@ from collections import defaultdict
 import wandb
 import itertools
 
+from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
+
 class OMTRA(pl.LightningModule):
 
     def __init__(self,
+      task_phases,
+      task_dataset_coupling,
       total_loss_weights: Dict[str, float] = {},            
     ):
         super().__init__()
@@ -18,17 +22,19 @@ class OMTRA(pl.LightningModule):
 
 
         # TODO: actually retrieve tasks and datasets for this dataset
-        tasks = ['task_a', 'task_b']
-        datasets = ['dataset_a', 'dataset_b']
+        self.td_coupling: TaskDatasetCoupling = build_td_coupling(task_phases, task_dataset_coupling)
         self.sample_counts = defaultdict(int)
         if self.global_rank == 0:
             if wandb.run is None:
                 print('Warning: no wandb run found. Setting previous sample counts to 0.')
             previous_sample_count = 0
-            for task, dataset in itertools.product(tasks, datasets):
+            for nonzero_pair in self.td_coupling.support:
+                task_idx, dataset_idx = nonzero_pair.tolist()
+                task, dataset = self.td_coupling.task_space[task_idx], self.td_coupling.dataset_space[dataset_idx]
                 if wandb.run is not None:
                     previous_sample_count = wandb.run.summary.get(f'{task}_{dataset}_sample_count', 0)
                 self.sample_counts[(task, dataset)] = previous_sample_count
+        self.sample_counts = dict(self.sample_counts)
 
         # TODO: implement periodic inference / eval ... how to do this with multiple tasks?
         # for pocket-conditioned tasks we really should do it on the test set too ... 
@@ -51,7 +57,7 @@ class OMTRA(pl.LightningModule):
                 self.sample_counts[(task_name, dataset_name)],
                 rank_zero_only=True,
                 sync_dist=False,
-                commit=False
+                # commit=False
             )
 
         # forward pass

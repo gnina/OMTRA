@@ -39,7 +39,10 @@ def train(cfg: DictConfig):
 
     
     print(f"⚛ Instantiating model <{cfg.model._target_}>")
-    model = hydra.utils.instantiate(cfg.model)
+    model = hydra.utils.instantiate(cfg.model,
+                                    task_phases=cfg.task_group.task_phases,
+                                    task_dataset_coupling=cfg.task_group.dataset_task_coupling,
+                                )
 
     # figure out if we are resuming a previous run
     resume = cfg.get("ckpt_path") is not None
@@ -48,6 +51,7 @@ def train(cfg: DictConfig):
     wandb_config = cfg.wandb
     if resume:
         # if we are resuming, we need to read the run_id from the resume_info.yaml file
+        # we also set the run dir to be the previous run directory
         run_dir = Path(cfg.og_run_dir)
         resume_info_file = run_dir / 'resume_info.yaml'
         with open(resume_info_file, 'r') as f:
@@ -55,16 +59,17 @@ def train(cfg: DictConfig):
         run_id = resume_info.run_id
         wandb_config.resume = 'must'
     else:
+        # get the run directory from hydra
         run_dir = HydraConfig.get().runtime.output_dir
         run_dir = Path(run_dir)
-        # otherwise, we generate a new run_id
+        # generate a new run_id
         run_id = wandb.util.generate_id()
         
 
     wandb_logger = WandbLogger(
-        config=cfg,
+        config=OmegaConf.to_container(cfg, resolve=True),
         save_dir=run_dir,  # ensures logs are stored with the Hydra output dir
-        run_id=run_id,
+        id=run_id,
         **wandb_config
     )
 
@@ -86,6 +91,8 @@ def train(cfg: DictConfig):
 
         # create symlink in symlink_dir
         symlink_dir = Path(cfg.symlink_dir)
+        if not symlink_dir.exists():
+            symlink_dir.mkdir(parents=True, exist_ok=True)
         symlink_path = symlink_dir / f"{wandb_logger.experiment.name}_{run_id}"
         os.symlink(run_dir, symlink_path)
 
