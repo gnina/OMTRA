@@ -169,12 +169,12 @@ def get_pharmacophores(mol, rec=None):
     pharmacophores_dict = get_pharmacophore_dict(mol, rec) if rec else get_pharmacophore_dict(mol)
         
     X, P, V, I = [], [], [], []
-    for type in pharmacophores_dict:
-        pos = pharmacophores_dict[type]['P']
+    for ptype in pharmacophores_dict:
+        pos = pharmacophores_dict[ptype]['P']
         P.extend(pos)
-        V.extend(pharmacophores_dict[type]['V'])
-        I.extend(pharmacophores_dict[type]['I'])
-        type_embed = ph_type_to_idx[type]
+        V.extend(pharmacophores_dict[ptype]['V'])
+        I.extend(pharmacophores_dict[ptype]['I'])
+        type_embed = ph_type_to_idx[ptype]
         X.extend([type_embed]*len(pos))
         
     # V has shape (num_pharm_centers, num_vectors, 3)
@@ -182,6 +182,8 @@ def get_pharmacophores(mol, rec=None):
     # num_vectors = max(len(v) for v in V)
     num_vectors=4
     for i in range(len(V)):
+        if len(V[i]) > num_vectors:
+            raise ValueError("pharmacophore center exceed max number of anticipated vectors")
         V[i].extend([np.zeros(3)] * (num_vectors - len(V[i])))
 
     P = np.array(P) # has shape (num_pharm_centers, 3)

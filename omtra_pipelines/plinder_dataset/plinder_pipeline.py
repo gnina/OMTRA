@@ -1,25 +1,30 @@
-import os
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import biotite.structure as struc
 import biotite.structure.io.pdb as pdb
 import numpy as np
 from biotite.structure.io.pdbx import CIFFile, get_structure
+from omtra.data.pharmacophores import get_pharmacophores
 from omtra.data.xace_ligand import MoleculeTensorizer
-from omtra_pipelines.plinder_dataset.utils import _DEFAULT_DISTANCE_RANGE
+from omtra_pipelines.plinder_dataset.utils import _DEFAULT_DISTANCE_RANGE, setup_logger
+from omtra_pipelines.plinder_dataset.filter import filter
 from plinder.core import PlinderSystem
 from rdkit import Chem
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(
+    __name__,
+)
 
 
 @dataclass
 class StructureData:
     coords: np.ndarray
     atom_names: np.ndarray
+    elements: np.ndarray
     res_ids: np.ndarray
     res_names: np.ndarray
     chain_ids: np.ndarray
@@ -42,15 +47,25 @@ class LigandData:
 
 
 @dataclass
+class PharmacophoreData:
+    coords: np.ndarray
+    types: np.ndarray
+    vectors: np.ndarray
+    interactions: np.ndarray
+
+
+@dataclass
 class SystemData:
     system_id: str
     ligand_id: str
     receptor: StructureData
     ligand: LigandData
+    pharmacophore: PharmacophoreData
     pocket: StructureData
     npndes: Optional[Dict[str, LigandData]] = None
-    apo: Optional[StructureData] = None
-    pred: Optional[StructureData] = None
+    link_id: Optional[str] = None
+    link_type: Optional[str] = None
+    link: Optional[StructureData] = None
 
 
 class PDBWriter:
@@ -111,6 +126,7 @@ class StructureProcessor:
             cif=str(raw_cif),
             coords=receptor.coord,
             atom_names=receptor.atom_name,
+            elements=receptor.element,
             res_ids=receptor.res_id,
             res_names=receptor.res_name,
             chain_ids=receptor.chain_id,
@@ -202,7 +218,7 @@ class StructureProcessor:
                 holo_cropped.protein_atom_array,
                 linked_cropped_superposed.protein_atom_array,
             )
-            if reordered_arr:
+            if reordered_arr is not None:
                 linked_cropped_superposed.protein_atom_array = reordered_arr
             else:
                 return None, None
@@ -271,9 +287,13 @@ class StructureProcessor:
 
     def process_ligands(
         self, system: PlinderSystem, ligand_mols: Dict[str, Chem.rdchem.Mol]
-    ) -> Dict[str, LigandData]:
+    ) -> Tuple[
+        Dict[str, LigandData], Dict[str, PharmacophoreData], Dict[str, Chem.rdchem.Mol]
+    ]:
         keys = list(ligand_mols.keys())
         mols = list(ligand_mols.values())
+
+        receptor_mol = Chem.MolFromPDBFile(system.receptor_pdb)
 
         (xace_mols, failed_idxs, failure_counts, tcv_counts) = (
             self.ligand_tensorizer.featurize_molecules(mols)
@@ -287,6 +307,7 @@ class StructureProcessor:
         ligand_keys = [key for i, key in enumerate(keys) if i not in failed_idxs]
 
         ligands_data = {}
+        pharmacophores_data = {}
         for i, key in enumerate(ligand_keys):
             raw_sdf = Path(system.ligand_sdfs[key]).relative_to(self.raw_data)
             instance, asym_id = key.split(".")
@@ -310,6 +331,23 @@ class StructureProcessor:
                             is_covalent = True
                             linkages = inferred_linkages
 
+            P, X, V, I = get_pharmacophores(mol=ligand_mols[key], rec=receptor_mol)
+            if not np.isfinite(V).all():
+                logger.warning(
+                    f"Non-finite pharmacophore vectors found in system {system.system_id} ligand {key}"
+                )
+                failed_mols[key] = ligand_mols[key]
+                continue
+            if len(I) != len(P):
+                logger.warning(
+                    f"Length mismatch with interactions {len(I)} and pharm centers {len(P)} in system {system.system_id} ligand {key}"
+                )
+                failed_mols[key] = ligand_mols[key]
+                continue
+
+            pharmacophores_data[key] = PharmacophoreData(
+                coords=P, types=X, vectors=V, interactions=I
+            )
 
             ligands_data[key] = LigandData(
                 sdf=str(raw_sdf),
@@ -323,7 +361,7 @@ class StructureProcessor:
                 linkages=linkages,
             )
 
-        return ligands_data, failed_mols
+        return (ligands_data, pharmacophores_data, failed_mols)
 
     def process_npndes(
         self, system: PlinderSystem, npnde_mols: Dict[str, Chem.rdchem.Mol]
@@ -432,6 +470,7 @@ class StructureProcessor:
         return StructureData(
             coords=receptor.coord[pocket_indices],
             atom_names=receptor.atom_name[pocket_indices],
+            elements=receptor.element[pocket_indices],
             res_ids=receptor.res_id[pocket_indices],  # original residue ids
             res_names=receptor.res_name[pocket_indices],
             chain_ids=receptor.chain_id[pocket_indices],
@@ -444,7 +483,7 @@ class SystemProcessor:
         ligand_atom_map: List[str],
         npnde_atom_map: List[str],
         pocket_cutoff: float = 8.0,
-        get_links: bool = True,
+        link_type: str = None,
         raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
     ):
         logger.debug("Initializing SystemProcessor with cutoff=%f", pocket_cutoff)
@@ -454,43 +493,13 @@ class SystemProcessor:
             pocket_cutoff=pocket_cutoff,
             raw_data=raw_data,
         )
-        self.get_links = get_links
+        self.link_type = link_type
         self.pdb_writer = None
 
     def filter_ligands(
         self, system: PlinderSystem
     ) -> (Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]):
-        system_annotation = system.system
-        system_structure = system.holo_structure
-
-        proper_ligand_keys = []
-        npnde_keys = []
-
-        for ligand in system_annotation["ligands"]:
-            lig_key = str(ligand["instance"]) + "." + ligand["asym_id"]
-
-            if ligand["is_ion"] or ligand["is_artifact"]:
-                npnde_keys.append(lig_key)
-            else:
-                num_interacting_res = 0
-                for chain, res_list in ligand["interacting_residues"].items():
-                    num_interacting_res += len(res_list)
-
-                if num_interacting_res > 0:
-                    proper_ligand_keys.append(lig_key)
-
-        if len(proper_ligand_keys) < 1:
-            logger.warning("Skipping %s due to no proper ligands", system.system_id)
-            return None, None
-
-        ligand_mols = {}
-        npnde_mols = {}
-        for key, mol in system_structure.resolved_ligand_mols.items():
-            if key in proper_ligand_keys:
-                ligand_mols[key] = mol
-            elif key in npnde_keys:
-                npnde_mols[key] = mol
-
+        ligand_mols, npnde_mols = filter(system.system_id)
         return ligand_mols, npnde_mols
 
     def process_system(
@@ -505,30 +514,40 @@ class SystemProcessor:
         if not ligand_mols:
             return None
 
-        if self.get_links:
+        if self.link_type == "apo":
             # Get apo ids
             apo_ids = system.linked_structures[
                 system.linked_structures["kind"] == "apo"
             ]["id"].tolist()
 
+            if not apo_ids:
+                logger.warning(
+                    f"Skipping system {system_id} due to no linked apo structures"
+                )
+                return None
+
+        elif self.link_type == "pred":
             # Get pred ids
             pred_ids = system.linked_structures[
                 system.linked_structures["kind"] == "pred"
             ]["id"].tolist()
 
-            if not apo_ids and not pred_ids:
+            if not pred_ids:
                 logger.warning(
-                    f"Skipping system {system_id} due to no linked structures"
+                    f"Skipping system {system_id} due to no linked pred structures"
                 )
                 return None
+
+        elif self.link_type is not None:
+            raise NotImplementedError("link_type must be None, apo, or pred")
 
         result = self.process_structures(
             system_id=system_id,
             system=system,
             ligand_mols=ligand_mols,
             npnde_mols=npnde_mols,
-            apo_ids=apo_ids if self.get_links else None,
-            pred_ids=pred_ids if self.get_links else None,
+            apo_ids=apo_ids if self.link_type == "apo" else None,
+            pred_ids=pred_ids if self.link_type == "pred" else None,
             chain_mapping=system.chain_mapping,
             save_pockets=save_pockets,
         )
@@ -544,6 +563,7 @@ class SystemProcessor:
         system_id: str,
         system: PlinderSystem,
         ligand_data: Dict[str, LigandData],
+        pharmacophore_data: Dict[str, PharmacophoreData],
         link_id: str,
         link_type: str,
         npnde_data: Optional[Dict[str, LigandData]] = None,
@@ -576,7 +596,7 @@ class SystemProcessor:
         for key, ligand in ligand_data.items():
             if key not in receptor_data["pockets"]:
                 continue
-
+            lig_instance, lig_asym_id = key.split(".")
             other_ligands = {k: l for k, l in ligand_data.items() if k != key}
             if other_ligands:
                 for k, l in other_ligands.items():
@@ -596,7 +616,13 @@ class SystemProcessor:
                 for linkage in ligand.linkages:
                     prtnr1, prtnr2 = linkage.split("__")
                     updated_linkage = None
-                    if ligand.ccd in prtnr1:
+                    lig_identifier = f"{ligand.ccd}:{lig_asym_id}"
+                    if lig_identifier in prtnr1 and lig_identifier in prtnr2:
+                        logger.warning(
+                            f"Failed to update linkage in system {system_id} ligand {key}"
+                        )
+                        return None
+                    elif lig_identifier in prtnr1:
                         (
                             rec_auth_resid,
                             rec_resname,
@@ -614,7 +640,20 @@ class SystemProcessor:
                         for chain in rec_chains:
                             if rec_asym_id == chain.split(".")[1]:
                                 chain_id = chain
-                        rec_seq_resid = res_id_mapping[chain_id][rec_seq_resid]
+                        chain_res_map = res_id_mapping.get(chain_id)
+                        if chain_res_map is None:
+                            logger.warning(
+                                f"Failure in system {system_id} {link_type} {link_id} : chain {chain_id} not in res_id_mapping, og_linkage: {linkage}"
+                            )
+                            return None
+
+                        old_id = rec_seq_resid
+                        rec_seq_resid = chain_res_map.get(int(rec_seq_resid))
+                        if rec_seq_resid is None:
+                            logger.warning(
+                                f"Failure in system {system_id} {link_type} {link_id} : res id {old_id} not in res_id_mapping, og_linkage: {linkage}"
+                            )
+                            return None
                         prtnr1 = ":".join(
                             [
                                 lig_auth_resid,
@@ -629,12 +668,12 @@ class SystemProcessor:
                                 rec_auth_resid,
                                 rec_resname,
                                 rec_asym_id,
-                                rec_seq_resid,
+                                str(rec_seq_resid),
                                 rec_atom_name,
                             ]
                         )
                         updated_linkage = "__".join([prtnr1, prtnr2])
-                    elif ligand.ccd in prtnr2:
+                    elif lig_identifier in prtnr2:
                         (
                             rec_auth_resid,
                             rec_resname,
@@ -652,7 +691,20 @@ class SystemProcessor:
                         for chain in rec_chains:
                             if rec_asym_id == chain.split(".")[1]:
                                 chain_id = chain
-                        rec_seq_resid = res_id_mapping[chain_id][rec_seq_resid]
+                        chain_res_map = res_id_mapping.get(chain_id)
+                        if chain_res_map is None:
+                            logger.warning(
+                                f"Failure in system {system_id} {link_type} {link_id} : chain {chain_id} not in res_id_mapping, og_linkage: {linkage}"
+                            )
+                            return None
+
+                        old_id = rec_seq_resid
+                        rec_seq_resid = chain_res_map.get(int(rec_seq_resid))
+                        if rec_seq_resid is None:
+                            logger.warning(
+                                f"Failure in system {system_id} {link_type} {link_id} : res id {old_id} not in res_id_mapping, og_linkage: {linkage}"
+                            )
+                            return None
                         prtnr2 = ":".join(
                             [
                                 lig_auth_resid,
@@ -667,11 +719,16 @@ class SystemProcessor:
                                 rec_auth_resid,
                                 rec_resname,
                                 rec_asym_id,
-                                rec_seq_resid,
+                                str(rec_seq_resid),
                                 rec_atom_name,
                             ]
                         )
                         updated_linkage = "__".join([prtnr1, prtnr2])
+                    else:
+                        logger.warning(
+                            f"Failed to update linkage in system {system_id} ligand {key}"
+                        )
+                        return None
                     if updated_linkage:
                         updated_linkages.append(updated_linkage)
                     else:
@@ -683,10 +740,12 @@ class SystemProcessor:
                 ligand_id=key,
                 receptor=receptor_data["holo"],
                 ligand=ligand,
+                pharmacophore=pharmacophore_data.get(key),
                 pocket=receptor_data["pockets"][key],
                 npndes=temp_npnde_data if temp_npnde_data else None,
-                apo=receptor_data[link_id] if link_type == "apo" else None,
-                pred=receptor_data[link_id] if link_type == "pred" else None,
+                link_type=link_type,
+                link_id=link_id,
+                link=receptor_data[link_id] if link_type else None,
             )
             system_datas.append(system_data)
         return system_datas
@@ -696,6 +755,7 @@ class SystemProcessor:
         system_id: str,
         system: PlinderSystem,
         ligand_data: Dict[str, LigandData],
+        pharmacophore_data: Dict[str, PharmacophoreData],
         npnde_data: Optional[Dict[str, LigandData]] = None,
         chain_mapping: Optional[Dict[str, str]] = None,
         save_pockets: bool = False,
@@ -763,6 +823,7 @@ class SystemProcessor:
                 ligand_id=key,
                 receptor=receptor_data,
                 ligand=ligand,
+                pharmacophore=pharmacophore_data.get(key),
                 pocket=pockets_data[key],
                 npndes=temp_npnde_data if temp_npnde_data else None,
             )
@@ -781,8 +842,8 @@ class SystemProcessor:
         save_pockets: bool = False,
     ) -> Dict[str, Any]:
         # Process ligands
-        ligands_data, failed_mols = self.structure_processor.process_ligands(
-            system, ligand_mols
+        ligands_data, pharmacophores_data, failed_mols = (
+            self.structure_processor.process_ligands(system, ligand_mols)
         )
 
         if failed_mols:
@@ -791,11 +852,12 @@ class SystemProcessor:
         if npnde_mols:
             npnde_data = self.structure_processor.process_npndes(system, npnde_mols)
 
-        if not self.get_links:
+        if not self.link_type:
             systems_data = self.process_structures_no_links(
                 system_id=system_id,
                 system=system,
                 ligand_data=ligands_data,
+                pharmacophore_data=pharmacophores_data,
                 npnde_data=npnde_data if npnde_mols else None,
                 chain_mapping=chain_mapping,
                 save_pockets=save_pockets,
@@ -812,37 +874,41 @@ class SystemProcessor:
             systems_data = {}
             links = False
             apos = {}
-            for apo_id in apo_ids:
-                systems_list = self.process_linked_pair(
-                    system_id=system_id,
-                    system=system,
-                    ligand_data=ligands_data,
-                    npnde_data=npnde_data if npnde_mols else None,
-                    link_id=apo_id,
-                    link_type="apo",
-                    chain_mapping=chain_mapping,
-                )
-                if systems_list:
-                    links = True
-                    apos[apo_id] = systems_list
-            if apos:
-                systems_data["apo"] = apos
+            if self.link_type == "apo":
+                for apo_id in apo_ids:
+                    systems_list = self.process_linked_pair(
+                        system_id=system_id,
+                        system=system,
+                        ligand_data=ligands_data,
+                        pharmacophore_data=pharmacophores_data,
+                        npnde_data=npnde_data if npnde_mols else None,
+                        link_id=apo_id,
+                        link_type="apo",
+                        chain_mapping=chain_mapping,
+                    )
+                    if systems_list:
+                        links = True
+                        apos[apo_id] = systems_list
+                if apos:
+                    systems_data["apo"] = apos
             preds = {}
-            for pred_id in pred_ids:
-                systems_list = self.process_linked_pair(
-                    system_id=system_id,
-                    system=system,
-                    ligand_data=ligands_data,
-                    npnde_data=npnde_data if npnde_mols else None,
-                    link_id=pred_id,
-                    link_type="pred",
-                    chain_mapping=chain_mapping,
-                )
-                if systems_list:
-                    links = True
-                    preds[pred_id] = systems_list
-            if preds:
-                systems_data["pred"] = preds
+            if self.link_type == "pred":
+                for pred_id in pred_ids:
+                    systems_list = self.process_linked_pair(
+                        system_id=system_id,
+                        system=system,
+                        ligand_data=ligands_data,
+                        pharmacophore_data=pharmacophores_data,
+                        npnde_data=npnde_data if npnde_mols else None,
+                        link_id=pred_id,
+                        link_type="pred",
+                        chain_mapping=chain_mapping,
+                    )
+                    if systems_list:
+                        links = True
+                        preds[pred_id] = systems_list
+                if preds:
+                    systems_data["pred"] = preds
             if systems_data:
                 systems_data["links"] = links
                 systems_data["annotation"] = system.system

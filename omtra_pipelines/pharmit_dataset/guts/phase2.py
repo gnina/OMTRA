@@ -57,10 +57,14 @@ class ChunkInfoManager():
         v_space = np.unique(tcv_support[:, 2]).tolist()
 
         p_tcv_unnormalized = np.zeros((len(t_space), len(c_space), len(v_space)))
-        for i, t in enumerate(t_space):
-            for j, c in enumerate(c_space):
-                for k, v in enumerate(v_space):
-                    p_tcv_unnormalized[i, j, k] = tcv_counts[(t, c, v)]
+
+        for unique_tcv, count in tcv_counts.items():
+            t, c, v = unique_tcv
+            t_idx = t_space.index(t)
+            c_idx = c_space.index(c)
+            v_idx = v_space.index(v)
+            p_tcv_unnormalized[t_idx, c_idx, v_idx] = count
+            
         p_tcv = p_tcv_unnormalized / p_tcv_unnormalized.sum()
 
 
