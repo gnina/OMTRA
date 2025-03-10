@@ -54,7 +54,8 @@ class MultiTaskSampler(Sampler):
 
         # find the current phase of training
         phase_durations = self.td_coupling.phase_durations
-        phase_idx = torch.searchsorted(phase_durations, self.batch_idx, right=True).item()
+        phase_boundaries = phase_durations.cumsum(dim=0)
+        phase_idx = torch.searchsorted(phase_boundaries, self.batch_idx, right=True).item()
 
         p = self.p_dataset_task[phase_idx]
 

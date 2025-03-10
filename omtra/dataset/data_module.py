@@ -18,7 +18,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         task_phases: DictConfig,
         dataset_task_coupling: DictConfig,
         graph_config: DictConfig,
-        prior_config: dict, 
+        prior_config: DictConfig, 
         edges_per_batch: int, 
         num_workers: int = 0, 
         distributed: bool = False, 
@@ -64,6 +64,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         return MultitaskDataSet(split, 
                              td_coupling=self.td_coupling,
                              graph_config=self.graph_config,
+                             prior_config=self.prior_config,
                              **self.dataset_config)
     
     def train_dataloader(self):

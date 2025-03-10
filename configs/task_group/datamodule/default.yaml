@@ -12,6 +12,7 @@ dataset_task_coupling: ${task_group.dataset_task_coupling}
 dataset_config:
   single_dataset_configs: {}
 
-prior_config: null
+prior_config: ${prior}
+graph_config: ${graph}
 edges_per_batch: ${edges_per_batch}
 num_workers: ${num_workers}

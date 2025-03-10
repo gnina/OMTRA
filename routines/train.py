@@ -35,7 +35,9 @@ def train(cfg: DictConfig):
     print(f"⚛ Instantiating datamodule <{cfg.task_group.datamodule._target_}>")
     datamodule: MultiTaskDataModule = hydra.utils.instantiate(
         cfg.task_group.datamodule, 
-        graph_config=cfg.graph)
+        # graph_config=cfg.graph,
+        # prior_config=cfg.prior
+    )
 
     
     print(f"⚛ Instantiating model <{cfg.model._target_}>")

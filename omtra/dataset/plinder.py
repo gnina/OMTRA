@@ -8,7 +8,9 @@ from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
-from omtra_pipelines.plinder_dataset.plinder_pipeline import StructureData, LigandData, SystemData, PharmacophoreData
+from omtra.data.plinder import LigandData, PharmacophoreData, StructureData, SystemData
+from typing import List, Dict
+import pandas as pd
 
 class PlinderDataset(ZarrDataset):
     def __init__(self, 

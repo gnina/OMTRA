@@ -17,7 +17,9 @@ class MultitaskDataSet(torch.utils.data.Dataset):
     def __init__(self, split: str, 
                  td_coupling: TaskDatasetCoupling,
                  single_dataset_configs: Dict[str, dict], 
-                 graph_config: DictConfig):
+                 graph_config: DictConfig,
+                 prior_config: DictConfig,
+        ):
         """
         Describing the nature of the inputs, for now:
         
