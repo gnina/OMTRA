@@ -8,7 +8,7 @@ import biotite.structure as struc
 import biotite.structure.io.pdb as pdb
 import numpy as np
 from biotite.structure.io.pdbx import CIFFile, get_structure
-from omtra.data.plinder import LigandData, PharmacophoreData, StructureData, SystemData
+from omtra.data.plinder import LigandData, PharmacophoreData, StructureData, SystemData, BackboneData
 from omtra.data.pharmacophores import get_pharmacophores
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra_pipelines.plinder_dataset.utils import _DEFAULT_DISTANCE_RANGE, setup_logger
@@ -75,6 +75,14 @@ class StructureProcessor:
             chain_ids = [chain_mapping.get(chain, chain) for chain in receptor.chain_id]
             receptor.chain_id = chain_ids
 
+        backbone = receptor[struc.filter_peptide_backbone(receptor)]
+        backbone_data = BackboneData(
+            coords=backbone.coord,
+            res_ids=backbone.res_id,
+            res_names=backbone.res_name,
+            chain_ids=backbone.chain_id,
+        )
+
         return StructureData(
             cif=str(raw_cif),
             coords=receptor.coord,
@@ -83,6 +91,7 @@ class StructureProcessor:
             res_ids=receptor.res_id,
             res_names=receptor.res_name,
             chain_ids=receptor.chain_id,
+            backbone=backbone_data,
         )
 
     def check_ordering(
@@ -284,6 +293,8 @@ class StructureProcessor:
                             is_covalent = True
                             linkages = inferred_linkages
 
+            # TODO: add bad_mol_reporter
+            
             P, X, V, I = get_pharmacophores(mol=ligand_mols[key], rec=receptor_mol)
             if not np.isfinite(V).all():
                 logger.warning(
@@ -395,6 +406,7 @@ class StructureProcessor:
         chain_mapping: Optional[Dict[str, str]] = None,
     ) -> StructureData:
         logger.debug("Extracting pocket")
+
         receptor = receptor[receptor.res_name != "HOH"]
         receptor_cell_list = struc.CellList(receptor, cell_size=self.pocket_cutoff)
 
@@ -419,14 +431,24 @@ class StructureProcessor:
         if chain_mapping is not None:
             chain_ids = [chain_mapping.get(chain, chain) for chain in receptor.chain_id]
             receptor.chain_id = chain_ids
+        
+        pocket = receptor[pocket_indices]
+        backbone = pocket[struc.filter_peptide_backbone(pocket)]
+        backbone_data = BackboneData(
+            coords=backbone.coord,
+            res_ids=backbone.res_id,
+            res_names=backbone.res_name,
+            chain_ids=backbone.chain_id,
+        )
 
         return StructureData(
-            coords=receptor.coord[pocket_indices],
-            atom_names=receptor.atom_name[pocket_indices],
-            elements=receptor.element[pocket_indices],
-            res_ids=receptor.res_id[pocket_indices],  # original residue ids
-            res_names=receptor.res_name[pocket_indices],
-            chain_ids=receptor.chain_id[pocket_indices],
+            coords=pocket.coord,
+            atom_names=pocket.atom_name,
+            elements=pocket.element,
+            res_ids=pocket.res_id,  # original residue ids
+            res_names=pocket.res_name,
+            chain_ids=pocket.chain_id,
+            backbone=backbone_data,
         )
 
 
