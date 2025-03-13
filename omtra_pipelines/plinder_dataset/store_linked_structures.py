@@ -12,7 +12,9 @@ os.environ["LOG_FILE_PATH"] = (
 
 from omtra_pipelines.plinder_dataset.plinder_pipeline import SystemProcessor
 from omtra_pipelines.plinder_dataset.plinder_links_zarr import PlinderLinksZarrConverter
-from omtra_pipelines.plinder_dataset.utils import LIGAND_MAP, NPNDE_MAP, setup_logger
+from omtra.constants import lig_atom_type_map, npnde_atom_type_map
+from omtra_pipelines.plinder_dataset.utils import setup_logger
+
 
 logger = setup_logger(
     __name__,
@@ -73,8 +75,8 @@ def main():
     )
 
     apo_processor = SystemProcessor(
-        ligand_atom_map=LIGAND_MAP,
-        npnde_atom_map=NPNDE_MAP,
+        ligand_atom_map=lig_atom_type_map,
+        npnde_atom_map=npnde_atom_type_map,
         pocket_cutoff=args.pocket_cutoff,
         link_type="apo",
     )
@@ -99,8 +101,8 @@ def main():
     apo_converter.process_dataset(apo_system_ids, max_pending=args.max_pending)
 
     pred_processor = SystemProcessor(
-        ligand_atom_map=LIGAND_MAP,
-        npnde_atom_map=NPNDE_MAP,
+        ligand_atom_map=lig_atom_type_map,
+        npnde_atom_map=npnde_atom_type_map,
         pocket_cutoff=args.pocket_cutoff,
         link_type="pred",
     )

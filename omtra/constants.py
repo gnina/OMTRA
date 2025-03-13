@@ -9,6 +9,8 @@ ph_idx_to_type = [    'Aromatic',
 
 ph_type_to_idx = { val:idx for idx,val in enumerate(ph_idx_to_type) }
 
+protein_element_map = ['C', 'H', 'O', 'N', 'S','P', 'F', 'AS', 'B', 'SE', 'CL', 'X', 'I', 'NE', 'HG', 'D', 'BR', 'V', 'BE']
+
 lig_atom_type_map = ["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"]
 npnde_atom_type_map = ["C","N","O","S","F", "P", "Cl","Br","I","Si","Pd",
     "Ca",
