@@ -498,7 +498,30 @@ class SystemProcessor:
     def filter_ligands(
         self,
     ) -> (Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]):
-        ligand_mols, npnde_mols = filter(self.system_id)
+        # ligand_mols, npnde_mols = filter(self.system_id)
+        filter_parquet = Path(
+            "/net/galaxy/home/koes/tjkatz/OMTRA/omtra_pipelines/plinder_dataset/plinder_filtered.parquet"
+        )
+        df = pd.read_parquet(filter_parquet)
+
+        system_df = df[df['system_id'] == self.system_id]
+    
+        system_structure = self.system.holo_structure
+        ligand_mols = {}
+        npnde_mols = {}
+        
+        ligand_rows = system_df[system_df['ligand_type'] == 'ligand']
+        for _, row in ligand_rows.iterrows():
+            ligand_id = row['ligand_id']
+            if ligand_id in system_structure.resolved_ligand_mols:
+                ligand_mols[ligand_id] = system_structure.resolved_ligand_mols[ligand_id]
+        
+        npnde_rows = system_df[system_df['ligand_type'] == 'npnde']
+        for _, row in npnde_rows.iterrows():
+            ligand_id = row['ligand_id']
+            if ligand_id in system_structure.resolved_ligand_mols:
+                npnde_mols[ligand_id] = system_structure.resolved_ligand_mols[ligand_id]
+        
         return ligand_mols, npnde_mols
 
     def process_system(self, save_pockets: bool = False) -> Dict[str, Any]:
