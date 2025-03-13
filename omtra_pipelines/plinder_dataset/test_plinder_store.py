@@ -32,6 +32,27 @@ def check_receptor(system: SystemData, actual_system: SystemData):
         f"Receptor chain_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
 
+    assert np.all(
+        system.receptor.backbone.coords == actual_system.receptor.backbone.coords
+    ), (
+        f"Receptor backbone coords mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.receptor.backbone.res_ids == actual_system.receptor.backbone.res_ids
+    ), (
+        f"Receptor backbone res_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.receptor.backbone.res_names == system.receptor.backbone.res_names
+    ), (
+        f"Receptor backbone res_names mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.receptor.backbone.chain_ids == actual_system.receptor.backbone.chain_ids
+    ), (
+        f"Receptor backbone chain_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
 
 def check_pocket(system: SystemData, actual_system: SystemData):
     assert len(system.pocket.coords) == len(actual_system.pocket.coords), (
@@ -215,6 +236,23 @@ def check_link(system: SystemData, actual_system: SystemData):
         f"link cif mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
 
+    assert np.all(system.link.backbone.coords == actual_system.link.backbone.coords), (
+        f"link backbone coords mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.link.backbone.res_ids == actual_system.link.backbone.res_ids
+    ), (
+        f"link backbone res_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(system.link.backbone.res_names == system.link.backbone.res_names), (
+        f"link backbone res_names mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.link.backbone.chain_ids == actual_system.link.backbone.chain_ids
+    ), (
+        f"link backbone chain_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
     # check correspondence with receptor
     assert np.all(system.link.atom_names == system.receptor.atom_names), (
         f"Atom names mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
@@ -232,6 +270,20 @@ def check_link(system: SystemData, actual_system: SystemData):
         f"chain ids mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
     )
 
+    assert np.all(system.link.backbone.res_ids == system.receptor.backbone.res_ids), (
+        f"link + receptor backbone res_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.link.backbone.res_names == system.receptor.backbone.res_names
+    ), (
+        f"link+receptor backbone res_names mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.link.backbone.chain_ids == system.receptor.backbone.chain_ids
+    ), (
+        f"link+receptor backbone chain_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
 
 def check_system(system: SystemData, actual_system: SystemData):
     check_receptor(system, actual_system)
@@ -247,13 +299,6 @@ def check_system(system: SystemData, actual_system: SystemData):
 def check_storage(zarr_path):
     retriever = PlinderZarrRetriever(zarr_path=zarr_path)
 
-    apo_processor = SystemProcessor(
-        ligand_atom_map=LIGAND_MAP, npnde_atom_map=NPNDE_MAP, link_type="apo"
-    )
-    pred_processor = SystemProcessor(
-        ligand_atom_map=LIGAND_MAP, npnde_atom_map=NPNDE_MAP, link_type="pred"
-    )
-
     n = retriever.get_length()
     print(f"{n} systems to check")
 
@@ -263,9 +308,11 @@ def check_storage(zarr_path):
         ligand_id = system.ligand_id
         link_id = system.link_id
         if system.link_type == "apo":
-            result = apo_processor.process_system(system_id=system.system_id)
+            processor = SystemProcessor(system_id=system.system_id, link_type="apo")
+            result = processor.process_system()
         elif system.link_type == "pred":
-            result = pred_processor.process_system(system_id=system.system_id)
+            processor = SystemProcessor(system_id=system.system_id, link_type="pred")
+            result = processor.process_system()
         actual_system = None
         for system_data in result[system.link_type][link_id]:
             if system_data.ligand_id == ligand_id:

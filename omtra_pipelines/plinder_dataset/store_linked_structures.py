@@ -7,7 +7,7 @@ import pandas as pd
 import os
 
 os.environ["LOG_FILE_PATH"] = (
-    "/net/galaxy/home/koes/tjkatz/for_omtra/logs/plinder_link_storage_train.log"
+    "/net/galaxy/home/koes/tjkatz/for_omtra/logs/plinder_apo_storage_train.log"
 )
 
 from omtra_pipelines.plinder_dataset.plinder_pipeline import SystemProcessor
@@ -33,6 +33,12 @@ def parse_args():
         type=str,
         required=True,
         help="Split to process (train/val/test/removed/unassigned)",
+    )
+    parser.add_argument(
+        "--type",
+        type=str,
+        required=True,
+        help="Type to process (apo/pred)",
     )
     parser.add_argument("--output", type=str, required=True, help="Path to zarr store")
     parser.add_argument(
@@ -73,47 +79,24 @@ def main():
     logger.info(
         f"Starting processing with {args.num_cpus} CPUs, max_pending={args.max_pending or args.num_cpus * 2}"
     )
+    if args.type not in ["apo", "pred"]:
+        raise NotImplementedError
 
-    apo_processor = SystemProcessor(
-        ligand_atom_map=lig_atom_type_map,
-        npnde_atom_map=npnde_atom_type_map,
-        pocket_cutoff=args.pocket_cutoff,
-        link_type="apo",
-    )
-    apo_converter = PlinderLinksZarrConverter(
+    converter = PlinderLinksZarrConverter(
         output_path=args.output,
-        system_processor=apo_processor,
         num_workers=args.num_cpus,
-        category="apo",
+        category=args.type,
     )
 
     df = pd.read_parquet(args.data).drop_duplicates("system_id")
     df = df[df["split"] == args.split]
-    apo_df = df[df["apo_ids"].notna()]
-    pred_df = df[df["pred_ids"].notna()]
-    apo_system_ids = list(apo_df["system_id"])
-    pred_system_ids = list(pred_df["system_id"])
+    link_df = df[df[f"{args.type}_ids"].notna()]
+    link_system_ids = list(link_df["system_id"])
 
     if args.num_systems:
-        apo_system_ids = apo_system_ids[: args.num_systems]
-        pred_system_ids = pred_system_ids[: args.num_systems]
+        link_system_ids = link_system_ids[: args.num_systems]
 
-    apo_converter.process_dataset(apo_system_ids, max_pending=args.max_pending)
-
-    pred_processor = SystemProcessor(
-        ligand_atom_map=lig_atom_type_map,
-        npnde_atom_map=npnde_atom_type_map,
-        pocket_cutoff=args.pocket_cutoff,
-        link_type="pred",
-    )
-    pred_converter = PlinderLinksZarrConverter(
-        output_path=args.output,
-        system_processor=pred_processor,
-        num_workers=args.num_cpus,
-        category="pred",
-    )
-
-    pred_converter.process_dataset(pred_system_ids, max_pending=args.max_pending)
+    converter.process_dataset(link_system_ids, max_pending=args.max_pending)
 
     end_time = time.time()
     logger.info(f"Processing completed in {end_time - start_time:.2f} seconds")

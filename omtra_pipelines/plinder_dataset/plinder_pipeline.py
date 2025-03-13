@@ -80,31 +80,35 @@ class SystemProcessor:
         self,
         backbone: struc.AtomArray,
     ) -> BackboneData:
-        unique_res = np.unique(backbone.res_id)
-        num_residues = len(unique_res)
+        compound_keys = np.array(
+            [f"{chain}_{res}" for chain, res in zip(backbone.chain_id, backbone.res_id)]
+        )
+        unique_compound_keys = np.unique(compound_keys)
+        num_residues = len(unique_compound_keys)
 
         coords = np.zeros((num_residues, 3, 3))
         res_ids = np.zeros(num_residues, dtype=int)
         res_names = np.empty(num_residues, dtype=str)
         chain_ids = np.empty(num_residues, dtype=str)
 
-        for i, res_id in enumerate(unique_res):
-            res_mask = backbone.res_id == res_id
+        for i, compound_key in enumerate(unique_compound_keys):
+            chain_id, res_id = compound_key.split("_")
+            res_id = int(res_id)
+
+            res_mask = (backbone.chain_id == chain_id) & (backbone.res_id == res_id)
             res_atoms = backbone[res_mask]
 
             res_ids[i] = res_id
             res_names[i] = res_atoms.res_name[0]
-            chain_ids[i] = res_atoms.chain_id[0]
+            chain_ids[i] = chain_id
 
             for j, atom_name in enumerate(["N", "CA", "C"]):
                 atom_mask = res_atoms.atom_name == atom_name
                 if np.any(atom_mask):
                     coords[i, j] = res_atoms.coord[atom_mask][0]
                 else:
-                    logger.warning(
-                        f"Error with {self.system_id} {atom_name} atom missing for residue {res_id}"
-                    )
-                    coords[i, j] = np.zeros(3)
+                    logger.warning(f"Error with {self.system_id} backbone extraction")
+                    return None
 
         backbone_data = BackboneData(
             coords=coords,
@@ -112,7 +116,6 @@ class SystemProcessor:
             res_names=res_names,
             chain_ids=chain_ids,
         )
-
         return backbone_data
 
     def process_receptor(
@@ -132,6 +135,8 @@ class SystemProcessor:
 
         backbone = receptor[struc.filter_peptide_backbone(receptor)]
         backbone_data = self.extract_backbone(backbone)
+        if backbone_data is None:
+            return None
 
         return StructureData(
             cif=str(raw_cif),
@@ -242,6 +247,8 @@ class SystemProcessor:
             str(linked_cropped_superposed.protein_path),
             self.system.chain_mapping,
         )
+        if holo_data is None or linked_data is None:
+            return None, None
         pockets_data = {}
         for key, ligand in ligand_data.items():
             pocket = self.extract_pocket(
@@ -853,6 +860,7 @@ class SystemProcessor:
             apos = {}
             if self.link_type == "apo":
                 for apo_id in apo_ids:
+                    logger.info(f"Processing {self.system_id} {apo_id}")
                     systems_list = self.process_linked_pair(
                         ligand_data=ligands_data,
                         pharmacophore_data=pharmacophores_data,
@@ -869,6 +877,7 @@ class SystemProcessor:
             preds = {}
             if self.link_type == "pred":
                 for pred_id in pred_ids:
+                    logger.info(f"Processing {self.system_id} {pred_id}")
                     systems_list = self.process_linked_pair(
                         ligand_data=ligands_data,
                         pharmacophore_data=pharmacophores_data,
