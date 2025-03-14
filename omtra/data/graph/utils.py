@@ -1,5 +1,6 @@
 import dgl
 import torch
+from typing import Tuple
 
 def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
         """Returns a boolean mask for the edges that lie in the upper triangle of the adjacency matrix for each molecule in the batch."""
@@ -34,7 +35,7 @@ def get_edge_batch_idxs(g: dgl.DGLHeteroGraph):
     for etype in g.etypes:
         edge_batch_idxs[etype] = get_edge_batch_idxs_etype(g, etype)
 
-def get_batch_idxs(g: dgl.DGLHeteroGraph):
+def get_batch_idxs(g: dgl.DGLHeteroGraph) -> Tuple[dict, dict]:
     """Returns two tensors of integers indicating which molecule each node and edge belongs to."""
     node_batch_idx = get_node_batch_idxs(g)
     edge_batch_idx = get_edge_batch_idxs(g)

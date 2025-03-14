@@ -223,7 +223,7 @@ class PlinderDataset(ZarrDataset):
         # indexes into the graph_lookup array, not a node/edge data array
 
         node_types = ['lig']
-        if 'pharmacophore' in task.modalities_present:
+        if 'pharmacophore' in task.modgroups_present:
             node_types.append('pharm')
 
         node_counts = []

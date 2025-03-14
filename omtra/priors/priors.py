@@ -7,8 +7,8 @@ import dgl
 from omtra.priors.register import register_train_prior, register_inference_prior
 from omtra.priors.align import align_prior
 
+# @register_inference_prior("gaussian")
 @register_train_prior("gaussian")
-@register_inference_prior("gaussian")
 def gaussian(x1: torch.Tensor, std: float = 1.0, ot=False):
     """
     Generate a prior feature by sampling from a Gaussian distribution.
@@ -34,6 +34,7 @@ def centered_normal_prior(x1: torch.Tensor, std: float = 1.0):
     """
     Generate a prior feature by sampling from a centered normal distribution.
     """
+    n, d = x1.shape
     prior_feat = torch.randn(n, d) * std
     prior_feat = prior_feat - prior_feat.mean(dim=0, keepdim=True)
     return prior_feat

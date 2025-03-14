@@ -65,7 +65,7 @@ class PharmitDataset(ZarrDataset):
         task_class: Task = task_name_to_class(task_name)
 
         # check if this task includes pharmacophore data
-        include_pharmacophore = 'pharmacophore' in task_class.modalities_present
+        include_pharmacophore = 'pharmacophore' in task_class.modgroups_present
 
         # slice lig node data
         xace_ligand = []
@@ -199,7 +199,7 @@ class PharmitDataset(ZarrDataset):
         # indexes into the graph_lookup array, not a node/edge data array
 
         node_types = ['lig']
-        if 'pharmacophore' in task.modalities_present:
+        if 'pharmacophore' in task.modgroups_present:
             node_types.append('pharm')
 
         node_counts = []

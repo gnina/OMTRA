@@ -7,27 +7,72 @@ import omtra.tasks.prior_collections as pc
 
 from omtra.tasks.register import register_task
 
-canonical_modality_order = ['ligand_identity', 'ligand_structure', 'protein', 'pharmacophore']
+# canonical order of modalitiy GROUPS
+# these are not modalities themselves, but modalities that are grouped together
+# for conceptual purposes
+canonical_mg_order = ['ligand_identity', 'ligand_structure', 'protein', 'pharmacophore']
 canonical_entity_order = ['ligand', 'protein', 'pharmacophore']
 
+# this maps the modality groups to the raw modalities they contain
+canonical_modality_structure = {
+    'ligand_identity': list('ace'),
+    'ligand_structure': ['x'],
+    'pharmacophore': list('xav'),
+    'protein': ['atom_x']
+}
+
+canonical_modality_order = []
+mg_order = []
+raw_modality_order = []
+for mg, modalities in canonical_modality_structure.items():
+    for modality in modalities:
+        canonical_modality_order.append(f'{mg}_{modality}')
+        mg_order.append(mg)
+        raw_modality_order.append(modality)
+   
 class Task:
     protein_state_t0 = 'noise'
 
     @classproperty
+    def t0_modgroup_arr(self) -> torch.Tensor:
+        arr = torch.zeros(len(canonical_mg_order), dtype=bool)
+        for i, modality_group in enumerate(canonical_mg_order):
+            if modality_group in self.observed_at_t0:
+                arr[i] = 1
+        return arr
+    
+    @classproperty
     def t0_modality_arr(self) -> torch.Tensor:
+        """Tensor of length len(canonical_modality_order) indicating which modalities are observed at t=0"""
         arr = torch.zeros(len(canonical_modality_order), dtype=bool)
-        for i, modality in enumerate(canonical_modality_order):
-            if modality in self.observed_at_t0:
+        for modality_idx, mg in enumerate(mg_order):
+            if mg in self.observed_at_t0:
+                arr[modality_idx] = 1
+        return arr
+    
+    @classproperty
+    def t1_modgroup_arr(cls) -> torch.Tensor:
+        arr = torch.zeros(len(canonical_mg_order), dtype=bool)
+        for i, modality in enumerate(canonical_mg_order):
+            if modality in cls.observed_at_t1:
                 arr[i] = 1
         return arr
     
     @classproperty
     def t1_modality_arr(cls) -> torch.Tensor:
+        """Tensor of length len(canonical_modality_order) indicating which modalities are observed at t=1"""
         arr = torch.zeros(len(canonical_modality_order), dtype=bool)
-        for i, modality in enumerate(canonical_modality_order):
-            if modality in cls.observed_at_t1:
-                arr[i] = 1
+        for modality_idx, mg in enumerate(mg_order):
+            if mg in cls.observed_at_t1:
+                arr[modality_idx] = 1
         return arr
+    
+    
+    @classproperty
+    def modgroups_present(self):
+        present_modgroup_mask = self.t0_modgroup_arr | self.t1_modgroup_arr
+        present_modgroup_idxs = torch.where(present_modgroup_mask)[0]
+        return [canonical_mg_order[i] for i in present_modgroup_idxs]
     
     @classproperty
     def modalities_present(self):
