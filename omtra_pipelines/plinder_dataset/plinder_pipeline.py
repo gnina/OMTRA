@@ -854,6 +854,9 @@ class SystemProcessor:
                         )
                         return None
                     if updated_linkage:
+                        logger.info(
+                            f"Updated linkage for {self.system_id} ligand {key}"
+                        )
                         updated_linkages.append(updated_linkage)
                     else:
                         updated_linkages.append(linkage)
