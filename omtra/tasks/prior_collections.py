@@ -3,38 +3,28 @@
 
 # typical prior setup for de novo ligand
 denovo_ligand = {
-    'x': {
+    'lig_x': {
         'type': 'gaussian',
         'params': {'ot': True}
     }
 }
 for modality in 'ace':
-    denovo_ligand[modality] = dict(type='masked')
+    denovo_ligand[f'lig_{modality}'] = dict(type='masked')
 
 # typical prior setup for ligand conformer
 ligand_conformer = {
-    'x': {
+    'lig_x': {
         'type': 'gaussian',
         'params': {'ot': True}
     }
 }
-for modality in 'ace':
-    ligand_conformer[modality] = dict(type='fixed')
 
 # typical prior setup for de novo pharmacophore
 denovo_pharmacophore = {
-    'x': {
+    'pharm_x': {
         'type': 'gaussian',
         'params': {'ot': True}
     },
-    'a': dict(type='masked'),
-    'v': dict(type='gaussian')
-}
-
-
-# fixed pharmacophore
-fixed_pharmacophore = {
-    'x': dict(type='fixed'),
-    'a': dict(type='fixed'),
-    'v': dict(type='fixed')
+    'pharm_a': dict(type='masked'),
+    'pharm_v': dict(type='gaussian')
 }

@@ -65,7 +65,7 @@ class PharmitDataset(ZarrDataset):
         task_class: Task = task_name_to_class(task_name)
 
         # check if this task includes pharmacophore data
-        include_pharmacophore = 'pharmacophore' in task_class.modgroups_present
+        include_pharmacophore = 'pharmacophore' in task_class.groups_present
 
         # slice lig node data
         xace_ligand = []
@@ -111,6 +111,7 @@ class PharmitDataset(ZarrDataset):
         }
 
         # get the prior functions for this task
+        # TODO: redefine priors config file, refactor get_prior
         priors_fns = get_prior(task_class, self.prior_config, train=True)
 
         # sample priors for ligand modalities
