@@ -44,22 +44,38 @@ class PlinderZarrRetriever:
             key = npnde_info["npnde_id"]
 
             atom_start, atom_end = npnde_info["atom_start"], npnde_info["atom_end"]
-            bond_start, bond_end = npnde_info["bond_start"], npnde_info["bond_end"]
+
+            bond_start = (
+                npnde_info["bond_start"]
+                if not pd.isna(npnde_info["bond_start"])
+                else None
+            )
+            bond_end = (
+                npnde_info["bond_end"] if not pd.isna(npnde_info["bond_end"]) else None
+            )
 
             is_covalent = False
             if npnde_info["linkages"]:
                 is_covalent = True
 
             npndes[key] = LigandData(
-                sdf=npnde_info["lig_sdf"],
+                sdf=npnde_info["sdf"],
                 ccd=npnde_info["ccd"],
                 is_covalent=is_covalent,
                 linkages=npnde_info["linkages"],
                 coords=self.root["npnde"]["coords"][atom_start:atom_end],
                 atom_types=self.root["npnde"]["atom_types"][atom_start:atom_end],
                 atom_charges=self.root["npnde"]["atom_charges"][atom_start:atom_end],
-                bond_types=self.root["npnde"]["bond_types"][bond_start:bond_end],
-                bond_indices=self.root["npnde"]["bond_indices"][bond_start:bond_end],
+                bond_types=self.root["npnde"]["bond_types"][
+                    int(bond_start) : int(bond_end)
+                ]
+                if bond_start is not None and bond_end is not None
+                else None,
+                bond_indices=self.root["npnde"]["bond_indices"][
+                    int(bond_start) : int(bond_end)
+                ]
+                if bond_start is not None and bond_end is not None
+                else None,
             )
         return npndes
 

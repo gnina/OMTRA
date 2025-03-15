@@ -194,7 +194,7 @@ def check_npndes(system: SystemData, actual_system: SystemData):
             f"npnde {id} atom charges mismatch {system.system_id} {system.ligand_id} {system.link_id}"
         )
         assert np.all(npnde.bond_types == actual_system.npndes[id].bond_types), (
-            f"npnde {id} bond types mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+            f"npnde {id} bond types mismatch {system.system_id} {system.ligand_id} {system.link_id} {npnde.bond_types} {actual_system.npndes[id].bond_types}"
         )
         assert np.all(npnde.bond_indices == actual_system.npndes[id].bond_indices), (
             f"npnde {id} bond indices mismatch {system.system_id} {system.ligand_id} {system.link_id}"

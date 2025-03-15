@@ -5,7 +5,7 @@ import threading
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,7 @@ class PlinderLinksZarrConverter:
         backbone_chunk_size: int = 150000,
         category: str = None,
         num_workers: int = 1,
+        batch_size: int = 200,
     ):
         self.output_path = Path(output_path)
         self.struc_chunk_size = struc_chunk_size
@@ -48,6 +49,7 @@ class PlinderLinksZarrConverter:
         self.pocket_chunk_size = pocket_chunk_size
         self.category = category
         self.num_workers = num_workers
+        self.batch_size = batch_size
 
         if not self.output_path.exists():
             self.store = zarr.storage.LocalStore(str(self.output_path))
@@ -220,127 +222,199 @@ class PlinderLinksZarrConverter:
             self.npnde = self.root["npnde"]
             self.pharmacophore = self.root["pharmacophore"]
 
-            self.system_lookup = self.root.attrs["system_lookup"]
-            self.npnde_lookup = self.root.attrs["npnde_lookup"]
+            self.system_lookup = list(self.root.attrs["system_lookup"])
+            self.npnde_lookup = list(self.root.attrs["npnde_lookup"])
 
-    def _append_structure_data(
-        self, group: zarr.Group, data: StructureData
-    ) -> Tuple[int, int, int, int]:
-        """
-        Append structure data to arrays and return start and end indices.
+    def _append_structure_data_batch(
+        self, group: zarr.Group, data_batch: List[StructureData]
+    ) -> List[Tuple[int, int, int, int]]:
+        if not data_batch:
+            return []
 
-        Args:
-            group: zarr group to append to
-            data: structure data to append
+        atom_indices = []
+        bb_indices = []
 
-        Returns:
-            tuple[int, int]: (start_idx, end_idx) of the appended structure
-        """
         current_len = group["coords"].shape[0]
-        num_atoms = len(data.coords)
-        new_len = current_len + num_atoms
-
-        # Resize and append atomic data
-        group["coords"].resize((new_len, 3))
-        group["coords"][current_len:] = data.coords
-
-        group["atom_names"].resize((new_len,))
-        group["atom_names"][current_len:] = data.atom_names
-
-        group["elements"].resize((new_len,))
-        group["elements"][current_len:] = data.elements
-
-        group["res_ids"].resize((new_len,))
-        group["res_ids"][current_len:] = data.res_ids
-
-        group["res_names"].resize((new_len,))
-        group["res_names"][current_len:] = data.res_names
-
-        group["chain_ids"].resize((new_len,))
-        group["chain_ids"][current_len:] = data.chain_ids
-
         bb_current_len = group["backbone_coords"].shape[0]
-        bb_num_res = len(data.backbone.coords)
-        bb_new_len = bb_current_len + bb_num_res
 
-        group["backbone_coords"].resize((bb_new_len, 3, 3))
-        group["backbone_coords"][bb_current_len:] = data.backbone.coords
+        atom_counts = [len(data.coords) for data in data_batch]
+        bb_counts = [len(data.backbone.coords) for data in data_batch]
 
-        group["backbone_res_ids"].resize((bb_new_len,))
-        group["backbone_res_ids"][bb_current_len:] = data.backbone.res_ids
+        atom_offsets = [current_len]
+        bb_offsets = [bb_current_len]
 
-        group["backbone_res_names"].resize((bb_new_len,))
-        group["backbone_res_names"][bb_current_len:] = data.backbone.res_names
+        for i in range(len(atom_counts)):
+            atom_offsets.append(atom_offsets[-1] + atom_counts[i])
+            bb_offsets.append(bb_offsets[-1] + bb_counts[i])
 
-        group["backbone_chain_ids"].resize((bb_new_len,))
-        group["backbone_chain_ids"][bb_current_len:] = data.backbone.chain_ids
+        for i in range(len(data_batch)):
+            atom_indices.append(
+                (atom_offsets[i], atom_offsets[i + 1], bb_offsets[i], bb_offsets[i + 1])
+            )
 
-        return current_len, new_len, bb_current_len, bb_new_len
+        all_coords = np.vstack(
+            [data.coords for data in data_batch if len(data.coords) > 0]
+        )
+        all_atom_names = np.concatenate(
+            [data.atom_names for data in data_batch if len(data.atom_names) > 0]
+        )
+        all_elements = np.concatenate(
+            [data.elements for data in data_batch if len(data.elements) > 0]
+        )
+        all_res_ids = np.concatenate(
+            [data.res_ids for data in data_batch if len(data.res_ids) > 0]
+        )
+        all_res_names = np.concatenate(
+            [data.res_names for data in data_batch if len(data.res_names) > 0]
+        )
+        all_chain_ids = np.concatenate(
+            [data.chain_ids for data in data_batch if len(data.chain_ids) > 0]
+        )
 
-    def _append_pharmacophore_data(
-        self, group: zarr.Group, data: PharmacophoreData
-    ) -> Tuple[int, int]:
+        all_bb_coords = np.vstack(
+            [
+                data.backbone.coords
+                for data in data_batch
+                if len(data.backbone.coords) > 0
+            ]
+        )
+        all_bb_res_ids = np.concatenate(
+            [
+                data.backbone.res_ids
+                for data in data_batch
+                if len(data.backbone.res_ids) > 0
+            ]
+        )
+        all_bb_res_names = np.concatenate(
+            [
+                data.backbone.res_names
+                for data in data_batch
+                if len(data.backbone.res_names) > 0
+            ]
+        )
+        all_bb_chain_ids = np.concatenate(
+            [
+                data.backbone.chain_ids
+                for data in data_batch
+                if len(data.backbone.chain_ids) > 0
+            ]
+        )
+
+        group["coords"].append(all_coords)
+        group["atom_names"].append(all_atom_names)
+        group["elements"].append(all_elements)
+        group["res_ids"].append(all_res_ids)
+        group["res_names"].append(all_res_names)
+        group["chain_ids"].append(all_chain_ids)
+
+        group["backbone_coords"].append(all_bb_coords)
+        group["backbone_res_ids"].append(all_bb_res_ids)
+        group["backbone_res_names"].append(all_bb_res_names)
+        group["backbone_chain_ids"].append(all_bb_chain_ids)
+
+        return atom_indices
+
+    def _append_pharmacophore_data_batch(
+        self, group: zarr.Group, data_batch: List[PharmacophoreData]
+    ) -> List[Tuple[Optional[int], Optional[int]]]:
+        valid_data = []
+        valid_indices = []
+
+        for i, data in enumerate(data_batch):
+            if len(data.coords) > 0:
+                valid_data.append(data)
+                valid_indices.append(i)
+
+        if not valid_data:
+            return [(None, None)] * len(data_batch)
+
         current_len = group["coords"].shape[0]
-        num_centers = len(data.coords)
-        if num_centers < 1:
-            return None, None
-        new_len = current_len + num_centers
 
-        group["coords"].resize((new_len, 3))
-        group["coords"][current_len:] = data.coords
+        center_counts = [len(data.coords) for data in valid_data]
 
-        group["types"].resize((new_len,))
-        group["types"][current_len:] = data.types
+        offsets = [current_len]
+        for count in center_counts:
+            offsets.append(offsets[-1] + count)
 
-        group["vectors"].resize((new_len, 4, 3))
-        group["vectors"][current_len:] = data.vectors
+        raw_indices = [(offsets[i], offsets[i + 1]) for i in range(len(valid_data))]
 
-        group["interactions"].resize((new_len,))
-        group["interactions"][current_len:] = data.interactions
+        index_to_range = {
+            valid_indices[i]: raw_indices[i] for i in range(len(valid_indices))
+        }
 
-        return current_len, new_len
+        all_coords = np.vstack([data.coords for data in valid_data])
+        all_types = np.concatenate([data.types for data in valid_data])
+        all_vectors = np.vstack([data.vectors for data in valid_data])
+        all_interactions = np.concatenate([data.interactions for data in valid_data])
 
-    def _append_ligand_data(
-        self, group: zarr.Group, data: LigandData
-    ) -> Tuple[int, int, int, int]:
-        """
-        Append ligand data to arrays
+        group["coords"].append(all_coords)
+        group["types"].append(all_types)
+        group["vectors"].append(all_vectors)
+        group["interactions"].append(all_interactions)
 
-        Args:
-            group: zarr group to append to
-            data: ligand data to append
+        result_indices = []
+        for i in range(len(data_batch)):
+            if i in index_to_range:
+                result_indices.append(index_to_range[i])
+            else:
+                result_indices.append((None, None))
 
-        Returns:
-            tuple[int, int, int, int]: (atom_start, atom_end, bond_start, bond_end) of the appended structure
+        return result_indices
 
-        """
-        current_len = group["coords"].shape[0]
-        num_atoms = len(data.coords)
-        new_len = current_len + num_atoms
+    def _append_ligand_data_batch(
+        self, group: zarr.Group, data_batch: List[LigandData]
+    ) -> List[Tuple[int, int, Optional[int], Optional[int]]]:
+        if not data_batch:
+            return []
 
-        # Resize and append atomic data
-        group["coords"].resize((new_len, 3))
-        group["coords"][current_len:] = data.coords
+        current_atom_len = group["coords"].shape[0]
+        current_bond_len = group["bond_types"].shape[0]
 
-        group["atom_types"].resize((new_len,))
-        group["atom_types"][current_len:] = data.atom_types
+        atom_counts = [len(data.coords) for data in data_batch]
+        bond_counts = [len(data.bond_types) for data in data_batch]
 
-        group["atom_charges"].resize((new_len,))
-        group["atom_charges"][current_len:] = data.atom_charges
+        atom_offsets = [current_atom_len]
+        for count in atom_counts:
+            atom_offsets.append(atom_offsets[-1] + count)
 
-        num_bonds = len(data.bond_indices)
+        bond_offsets = [current_bond_len]
+        for count in bond_counts:
+            bond_offsets.append(bond_offsets[-1] + count)
 
-        bond_current_len, new_bond_len = None, None
-        if num_bonds > 0:
-            bond_current_len = group["bond_types"].shape[0]
-            new_bond_len = bond_current_len + num_bonds
-            group["bond_types"].resize((new_bond_len,))
-            group["bond_types"][-num_bonds:] = data.bond_types
+        indices = []
+        for i, data in enumerate(data_batch):
+            bond_start = bond_offsets[i] if bond_counts[i] > 0 else None
+            bond_end = bond_offsets[i + 1] if bond_counts[i] > 0 else None
+            indices.append((atom_offsets[i], atom_offsets[i + 1], bond_start, bond_end))
 
-            group["bond_indices"].resize((new_bond_len, 2))
-            group["bond_indices"][-num_bonds:] = data.bond_indices
+        all_coords = np.vstack(
+            [data.coords for data in data_batch if len(data.coords) > 0]
+        )
+        all_atom_types = np.concatenate(
+            [data.atom_types for data in data_batch if len(data.atom_types) > 0]
+        )
+        all_atom_charges = np.concatenate(
+            [data.atom_charges for data in data_batch if len(data.atom_charges) > 0]
+        )
 
-        return current_len, new_len, bond_current_len, new_bond_len
+        group["coords"].append(all_coords)
+        group["atom_types"].append(all_atom_types)
+        group["atom_charges"].append(all_atom_charges)
+
+        if sum(bond_counts) > 0:
+            data_with_bonds = [data for data in data_batch if len(data.bond_types) > 0]
+
+            all_bond_types = np.concatenate(
+                [data.bond_types for data in data_with_bonds]
+            )
+            all_bond_indices = np.vstack(
+                [data.bond_indices for data in data_with_bonds]
+            )
+
+            group["bond_types"].append(all_bond_types)
+            group["bond_indices"].append(all_bond_indices)
+
+        return indices
 
     def _process_system(self, system_id: str):
         try:
@@ -352,138 +426,172 @@ class PlinderLinksZarrConverter:
             logging.exception(f"Error processing system {system_id}: {e}")
             return None
 
-    def _write_system(self, system_data: SystemData):
-        """Process a single pair"""
+    def _process_system_batch(self, system_ids: List[str]):
+        results = {}
+        results[self.category] = []
 
-        if not system_data:
+        for system_id in system_ids:
+            try:
+                system_data = self._process_system(system_id)
+                if system_data and system_data.get(self.category):
+                    for link_id, system_list in system_data[self.category].items():
+                        for system in system_list:
+                            results[self.category].append(system)
+            except Exception as e:
+                logger.exception(f"Error processing system batch {system_id}: {e}")
+
+        return results
+
+    def _write_system_batch(self, system_data_batch: List[SystemData]):
+        if not system_data_batch:
             return
-        link_type = system_data.link_type
-        link_cif = None
-        if link_type == "apo":
-            link_cif = system_data.link.cif
-        elif link_type == "pred":
-            link_cif = system_data.link.cif
-        else:
-            return
 
-        # Process holo structure
-        system_idx = len(self.system_lookup)
-        receptor_start, receptor_end, backbone_start, backbone_end = (
-            self._append_structure_data(self.receptor, system_data.receptor)
+        receptor_data = []
+        ligand_data = []
+        pocket_data = []
+        pharm_data = []
+        link_data = []
+        npnde_data = []
+
+        system_info = []
+        for system_data in system_data_batch:
+            link_type = system_data.link_type
+            link_cif = None
+            if link_type == "apo" or link_type == "pred":
+                link_cif = system_data.link.cif
+            else:
+                continue
+
+            system_idx = len(self.system_lookup) + len(system_info)
+            system_entry = {
+                "system_id": system_data.system_id,
+                "ligand_id": system_data.ligand_id,
+                "system_idx": system_idx,
+                "linkages": system_data.ligand.linkages,
+                "ccd": system_data.ligand.ccd,
+                "link_type": link_type,
+                "link_id": system_data.link_id,
+                "link_cif": link_cif,
+                "lig_sdf": system_data.ligand.sdf,
+                "rec_cif": system_data.receptor.cif,
+                "npnde_idxs": None,
+            }
+
+            receptor_data.append(system_data.receptor)
+            ligand_data.append(system_data.ligand)
+            pocket_data.append(system_data.pocket)
+            pharm_data.append(system_data.pharmacophore)
+            link_data.append(system_data.link)
+
+            if system_data.npndes:
+                npnde_idxs = []
+
+                for i, (npnde_id, npnde_data_item) in enumerate(
+                    system_data.npndes.items()
+                ):
+                    npnde_idx = len(self.npnde_lookup) + len(npnde_data)
+                    npnde_data.append(
+                        (
+                            npnde_data_item,
+                            system_idx,
+                            npnde_id,
+                            system_data.system_id,
+                            npnde_idx,
+                        )
+                    )
+                    npnde_idxs.append(npnde_idx)
+
+                system_entry["npnde_idxs"] = npnde_idxs
+
+            system_info.append(system_entry)
+
+        receptor_indices = self._append_structure_data_batch(
+            self.receptor, receptor_data
         )
-        # [{system_id, ligand_id, receptor_idx, ligand_idx, rec_start, rec_end, lig_atom_start, lig_atom_end, lig_bond_start, lig_bond_end, pharmacophore_idx, pharm_start, pharm_end, npnde_idxs, pocket_idx, pocket_start, pocket_end apo_idx, pred_idx, link_start, link_end, cif, sdf}]
-        system_entry = {
-            "system_id": system_data.system_id,
-            "ligand_id": system_data.ligand_id,
-            "system_idx": system_idx,
-            "rec_start": receptor_start,
-            "rec_end": receptor_end,
-            "backbone_start": backbone_start,
-            "backbone_end": backbone_end,
-            "lig_atom_start": None,
-            "lig_atom_end": None,
-            "lig_bond_start": None,
-            "lig_bond_end": None,
-            "linkages": None,
-            "ccd": None,
-            "pocket_start": None,
-            "pocket_end": None,
-            "pocket_bb_start": None,
-            "pocket_bb_end": None,
-            "pharm_start": None,
-            "pharm_end": None,
-            "npnde_idxs": None,
-            "link_type": link_type,
-            "link_id": system_data.link_id,
-            "link_start": None,
-            "link_end": None,
-            "link_bb_start": None,
-            "link_bb_end": None,
-            "link_cif": link_cif,
-            "lig_sdf": system_data.ligand.sdf,
-            "rec_cif": system_data.receptor.cif,
-        }
-
-        # Process ligand
-        lig_atom_start, lig_atom_end, lig_bond_start, lig_bond_end = (
-            self._append_ligand_data(self.ligand, system_data.ligand)
+        ligand_indices = self._append_ligand_data_batch(self.ligand, ligand_data)
+        pocket_indices = self._append_structure_data_batch(self.pocket, pocket_data)
+        pharm_indices = self._append_pharmacophore_data_batch(
+            self.pharmacophore, pharm_data
         )
-        system_entry["lig_atom_start"] = lig_atom_start
-        system_entry["lig_atom_end"] = lig_atom_end
-        system_entry["lig_bond_start"] = lig_bond_start
-        system_entry["lig_bond_end"] = lig_bond_end
-        system_entry["linkages"] = system_data.ligand.linkages
-        system_entry["ccd"] = system_data.ligand.ccd
 
-        # Process corresponding pocket
-        pocket_start, pocket_end, pocket_bb_start, pocket_bb_end = (
-            self._append_structure_data(self.pocket, system_data.pocket)
-        )
-        system_entry["pocket_start"] = pocket_start
-        system_entry["pocket_end"] = pocket_end
-        system_entry["pocket_bb_start"] = pocket_bb_start
-        system_entry["pocket_bb_end"] = pocket_bb_end
+        link_indices = None
+        if self.category == "apo":
+            link_indices = self._append_structure_data_batch(self.apo, link_data)
+        elif self.category == "pred":
+            link_indices = self._append_structure_data_batch(self.pred, link_data)
 
-        pharm_start, pharm_end = self._append_pharmacophore_data(
-            self.pharmacophore, system_data.pharmacophore
-        )
-        system_entry["pharm_start"] = pharm_start
-        system_entry["pharm_end"] = pharm_end
+        npnde_entries = []
+        if npnde_data:
+            npnde_data_objects = [item[0] for item in npnde_data]
+            npnde_indices = self._append_ligand_data_batch(
+                self.npnde, npnde_data_objects
+            )
 
-        # process npndes
-        if system_data.npndes:
-            npnde_idxs = []
-            for npnde_id, npnde_data in system_data.npndes.items():
-                npnde_idx = len(self.npnde_lookup)
-                npnde_idxs.append(npnde_idx)
+            for i, (atom_start, atom_end, bond_start, bond_end) in enumerate(
+                npnde_indices
+            ):
+                _, system_idx, npnde_id, system_id, npnde_idx = npnde_data[i]
 
-                atom_start, atom_end, bond_start, bond_end = self._append_ligand_data(
-                    self.npnde, npnde_data
-                )
-                self.npnde_lookup.append(
+                npnde_entries.append(
                     {
-                        "system_id": system_data.system_id,
+                        "system_id": system_id,
                         "npnde_id": npnde_id,
-                        "receptor_idx": receptor_idx,
+                        "system_idx": system_idx,
                         "npnde_idx": npnde_idx,
                         "atom_start": atom_start,
                         "atom_end": atom_end,
                         "bond_start": bond_start,
                         "bond_end": bond_end,
-                        "linkages": npnde_data.linkages,
-                        "ccd": npnde_data.ccd,
-                        "sdf": npnde_data.sdf,
+                        "linkages": npnde_data[i][0].linkages,
+                        "ccd": npnde_data[i][0].ccd,
+                        "sdf": npnde_data[i][0].sdf,
                     }
                 )
-                self.root.attrs["npnde_lookup"] = self.npnde_lookup
-            system_entry["npnde_idxs"] = npnde_idxs
 
-        # Process apo structure
-        if link_type == "apo":
-            apo_start, apo_end, apo_bb_start, apo_bb_end = self._append_structure_data(
-                self.apo, system_data.link
-            )
-            system_entry["link_start"] = apo_start
-            system_entry["link_end"] = apo_end
-            system_entry["link_bb_start"] = apo_bb_start
-            system_entry["link_bb_end"] = apo_bb_end
+        for i, entry in enumerate(system_info):
+            (
+                entry["rec_start"],
+                entry["rec_end"],
+                entry["backbone_start"],
+                entry["backbone_end"],
+            ) = receptor_indices[i]
+            (
+                entry["lig_atom_start"],
+                entry["lig_atom_end"],
+                entry["lig_bond_start"],
+                entry["lig_bond_end"],
+            ) = ligand_indices[i]
+            (
+                entry["pocket_start"],
+                entry["pocket_end"],
+                entry["pocket_bb_start"],
+                entry["pocket_bb_end"],
+            ) = pocket_indices[i]
+            entry["pharm_start"], entry["pharm_end"] = pharm_indices[i]
 
-        # Process pred structure
-        if link_type == "pred":
-            pred_start, pred_end, pred_bb_start, pred_bb_end = (
-                self._append_structure_data(self.pred, system_data.link)
-            )
-            system_entry["link_start"] = pred_start
-            system_entry["link_end"] = pred_end
-            system_entry["link_bb_start"] = pred_bb_start
-            system_entry["link_bb_end"] = pred_bb_end
+            if link_indices:
+                (
+                    entry["link_start"],
+                    entry["link_end"],
+                    entry["link_bb_start"],
+                    entry["link_bb_end"],
+                ) = link_indices[i]
+            else:
+                (
+                    entry["link_start"],
+                    entry["link_end"],
+                    entry["link_bb_start"],
+                    entry["link_bb_end"],
+                ) = None, None, None, None
 
-        curr_num = len(self.root.attrs["system_lookup"])
-        logger.info(
-            f"Wrote system {curr_num + 1}: {system_data.system_id} ligand {system_data.ligand_id} link {system_data.link_id} to zarr store"
-        )
-        self.system_lookup.append(system_entry)
+        self.system_lookup.extend(system_info)
         self.root.attrs["system_lookup"] = self.system_lookup
+
+        if npnde_entries:
+            self.npnde_lookup.extend(npnde_entries)
+            self.root.attrs["npnde_lookup"] = self.npnde_lookup
+
+        logger.info(f"Wrote batch of {len(system_info)} systems to zarr store")
 
     def process_dataset(self, system_ids: List[str], max_pending=None):
         if max_pending is None:
@@ -494,9 +602,15 @@ class PlinderLinksZarrConverter:
             f"Processing {len(system_ids)} systems with {self.num_workers} workers"
         )
 
+        batches = [
+            system_ids[i : i + self.batch_size]
+            for i in range(0, len(system_ids), self.batch_size)
+        ]
+
         with mp.Manager() as manager:
             lock = manager.Lock()
             result_queue = manager.Queue()
+            error_counter = manager.Value("i", 0)
 
             def _write_results_worker():
                 while True:
@@ -506,23 +620,20 @@ class PlinderLinksZarrConverter:
                             break
 
                         with lock:
-                            if result.get("apo"):
-                                for apo_id, system_list in result["apo"].items():
-                                    for system in system_list:
-                                        self._write_system(system)
-                            if result.get("pred"):
-                                for pred_id, system_list in result["pred"].items():
-                                    for system in system_list:
-                                        self._write_system(system)
+                            if result.get(self.category):
+                                self._write_system_batch(result[self.category])
 
                     except queue.Empty:
                         continue
+                    except Exception as e:
+                        logger.exception(f"Error in writer thread: {e}")
+                        error_counter.value += 1
 
             writer_thread = threading.Thread(target=_write_results_worker)
             writer_thread.start()
 
             pbar = tqdm(
-                total=len(system_ids), desc="Processing systems", unit="systems"
+                total=len(batches), desc="Processing system batches", unit="batches"
             )
             successful_count = [0]
             failed_count = [0]
@@ -538,17 +649,29 @@ class PlinderLinksZarrConverter:
                 )
                 pbar.update(1)
 
+            def error_callback(error):
+                logger.exception(f"Error in processing: {error}")
+                traceback.print_exception(type(error), error, error.__traceback__)
+                failed_count[0] += 1
+                pbar.set_postfix(
+                    {"success": successful_count[0], "failed": failed_count[0]}
+                )
+                pbar.update(1)
+
             with mp.Pool(processes=self.num_workers) as pool:
                 pending_jobs = []
 
-                for sid in system_ids:
+                for batch in batches:
                     while len(pending_jobs) >= max_pending:
                         pending_jobs = [job for job in pending_jobs if not job.ready()]
                         if len(pending_jobs) >= max_pending:
                             time.sleep(0.1)
 
                     job = pool.apply_async(
-                        self._process_system, args=(sid,), callback=process_callback
+                        self._process_system_batch,
+                        args=(batch,),
+                        callback=process_callback,
+                        error_callback=error_callback,
                     )
                     pending_jobs.append(job)
 
