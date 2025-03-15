@@ -18,6 +18,7 @@ from omtra.data.plinder import (
 )
 from omtra.data.pharmacophores import get_pharmacophores
 from omtra.data.xace_ligand import MoleculeTensorizer
+from omtra.utils.misc import bad_mol_reporter
 from omtra.constants import lig_atom_type_map, npnde_atom_type_map
 from omtra_pipelines.plinder_dataset.utils import _DEFAULT_DISTANCE_RANGE, setup_logger
 from omtra_pipelines.plinder_dataset.filter import filter
@@ -434,18 +435,23 @@ class SystemProcessor:
                             is_covalent = True
                             linkages = inferred_linkages
 
-            # TODO: add bad_mol_reporter
-
             P, X, V, I = get_pharmacophores(mol=ligand_mols[key], rec=receptor_mol)
             if not np.isfinite(V).all():
                 logger.warning(
                     f"Non-finite pharmacophore vectors found in system {self.system_id} ligand {key}"
+                )
+                bad_mol_reporter(
+                    ligand_mols[key],
+                    note="Pharmacophore vectors contain non-finite values",
                 )
                 failed_mols[key] = ligand_mols[key]
                 continue
             if len(I) != len(P):
                 logger.warning(
                     f"Length mismatch with interactions {len(I)} and pharm centers {len(P)} in system {self.system_id} ligand {key}"
+                )
+                bad_mol_reporter(
+                    ligand_mols[key], note="Length mismatch interactions/pharm centers"
                 )
                 failed_mols[key] = ligand_mols[key]
                 continue
@@ -689,6 +695,9 @@ class SystemProcessor:
         has_covalent = False
         for lig_ann in annotation["ligands"]:
             if lig_ann["is_covalent"]:
+                has_covalent = True
+        for ligand in ligand_data.values():
+            if ligand.is_covalent:
                 has_covalent = True
 
         receptor_data, res_id_mapping = self.process_linked_structure(
