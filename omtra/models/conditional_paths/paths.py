@@ -1,6 +1,8 @@
 import dgl
 import torch
+from omtra.models.conditional_paths.path_register import register_conditional_path
 
+@register_conditional_path("continuous_delta")
 def sample_continuous_interpolant(
         x_0: torch.Tensor, 
         x_1: torch.Tensor, 
@@ -15,14 +17,17 @@ def sample_continuous_interpolant(
     
     return x_t
 
+@register_conditional_path("two_state_mask")
 def sample_masked_ctmc(
-        x_1: torch.Tensor,
-        p_mask: torch.Tensor, # p_mask for each node/edge
+        x_0: torch.Tensor, 
+        x_1: torch.Tensor, 
+        alpha_t: torch.Tensor, # for each node/edge
+        beta_t: torch.Tensor, # for each node/edge
         n_categories: int,
-        ue_mask: torch.Tensor = None
+        ue_mask: torch.Tensor = None,
     ):
     x_t = x_1.clone()
-    x_t[ torch.rand_like(x_t) < p_mask ] = n_categories
+    x_t[ torch.rand_like(x_t) < beta_t ] = n_categories
     
     if ue_mask is not None:
         x_t[~ue_mask] = x_t[ue_mask]

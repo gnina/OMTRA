@@ -11,6 +11,7 @@ from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph.utils import get_batch_idxs, get_upper_edge_mask
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
+from omtra.tasks.modalities import Modality, name_to_modality
 from omtra.constants import lig_atom_type_map, ph_idx_to_type
 import omtra.models.conditional_paths as cond_paths
 
@@ -131,8 +132,12 @@ class OMTRA(pl.LightningModule):
         
 
         # TODO: support arbitrary alpha and beta functions, independently for each modality
-        alpha_t = {modality: t for modality in task_class.modalities_present}
-        beta_t = {modality: 1-t for modality in task_class.modalities_present}
+        modalities_generated = task_class.modalities_generated
+        alpha_t = {modality: t for modality in modalities_generated}
+        beta_t = {modality: 1-t for modality in modalities_generated}
+
+        for modality_name in modalities_generated:
+            modality: Modality = name_to_modality(modality_name)
 
         # interpolate ligand positions (ligand, continuous)
         if 'ligand_structure' in task_class.modgroups_present:

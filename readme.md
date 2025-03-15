@@ -13,3 +13,8 @@ mamba activate omtra
 chmod +x build_env.sh
 ./build_env.sh
 ```
+
+# TODO:
+- [ ] add npnde to protein modality group
+- [ ] finish adding conditional paths to task definitions
+- [ ] write factory function a task's conditional paths

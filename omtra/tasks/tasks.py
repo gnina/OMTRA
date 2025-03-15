@@ -5,6 +5,7 @@ from copy import deepcopy
 from typing import List
 
 import omtra.tasks.prior_collections as pc
+import omtra.tasks.cond_path_collections as cpc
 
 from omtra.tasks.register import register_task
 import omtra.tasks.modalities as modal
@@ -46,12 +47,15 @@ class DeNovoLigand(Task):
 
     priors = pc.denovo_ligand
 
+    conditional_paths = cpc.denovo_ligand
+
 @register_task("ligand_conformer")
 class LigandConformer(Task):
     groups_fixed = ['ligand_identity']
     groups_generated = ['ligand_structure']
 
     priors = pc.ligand_conformer
+    conditional_paths = cpc.ligand_conformer
 
 ## 
 # tasks with ligand + pharmacophore
@@ -62,6 +66,7 @@ class DeNovoLigandPharmacophore(Task):
     groups_generated = ['ligand_identity', 'ligand_structure', 'pharmacophore']
 
     priors = dict(**pc.denovo_ligand, **pc.denovo_pharmacophore)
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.denovo_pharmacophore)
 
 @register_task("denovo_ligand_from_pharmacophore")
 class DeNovoLigandFromPharmacophore(Task):
@@ -69,6 +74,7 @@ class DeNovoLigandFromPharmacophore(Task):
     groups_generated = ['ligand_identity', 'ligand_structure']
 
     priors = pc.denovo_ligand
+    conditional_paths = cpc.denovo_ligand
 
 ##
 # tasks with ligand+protein and no pharmacophore
@@ -82,6 +88,7 @@ class ProteinLigandDeNovo(Task):
     priors['prot_atom'] = {
         'type': 'target_dependent_gaussian',
     }
+    
 
 
 @register_task("exp_apo_conditioned_denovo_ligand")

@@ -11,6 +11,7 @@ from omtra.data.graph import build_complex_graph
 from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
+from omtra.tasks.modalities import name_to_modality
 from omtra.utils.misc import classproperty
 from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.priors.prior_factory import get_prior
@@ -33,14 +34,10 @@ class PharmitDataset(ZarrDataset):
         lig_c_idx_to_val = dists_dict['p_tcv_c_space'] # a list of unique charges that appear in the dataset
 
         self.n_categories_dict = {
-            'lig': {
-                'a': len(lig_atom_type_map),
-                'c': len(lig_c_idx_to_val),
-                'e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
-            },
-            'pharm': {
-                'a': len(ph_idx_to_type),
-            }
+            'lig_a': len(lig_atom_type_map),
+            'lig_c': len(lig_c_idx_to_val),
+            'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
+            'pharm_a': len(ph_idx_to_type),
         }
 
     @classproperty
@@ -110,31 +107,6 @@ class PharmitDataset(ZarrDataset):
             'lig_to_lig': lig_edge_idxs,
         }
 
-        # get the prior functions for this task
-        # TODO: redefine priors config file, refactor get_prior
-        priors_fns = get_prior(task_class, self.prior_config, train=True)
-
-        # sample priors for ligand modalities
-        # TODO: this logic will probably be duplicated within this dataset, in other dataset classes,
-        # and also probably in the model class itself for inference, so we should probably make it modular
-        for modalitiy in 'xace':
-            prior_name, prior_func = priors_fns['lig'][modalitiy]
-
-            if prior_name == 'masked':
-                prior_func = functools.partial(prior_func, n_categories=self.n_categories_dict['lig'][modalitiy])
-            
-            if modalitiy == 'e':
-                upper_edge_mask = torch.zeros_like(lig_e, dtype=torch.bool)
-                upper_edge_mask[:lig_e.shape[0]//2] = 1
-                upper_edge_prior = prior_func(lig_e[upper_edge_mask])
-                edge_prior = torch.zeros_like(lig_e)
-                edge_prior[upper_edge_mask] = upper_edge_prior
-                edge_prior[~upper_edge_mask] = upper_edge_prior
-                g_edge_data['lig_to_lig']['e_0'] = edge_prior
-            else:
-                target_data = g_node_data['lig'][f'{modalitiy}_1_true']
-                g_node_data['lig'][f'{modalitiy}_0'] = prior_func(target_data)
-
         # if this task includes pharmacophore data, then we need to slice and add that data to the graph
         if include_pharmacophore:
             # read pharmacophore data from zarr store
@@ -153,20 +125,46 @@ class PharmitDataset(ZarrDataset):
                 'v_1_true': pharm_v
             }
 
-            # now sample priors for pharmacophore modalities
-            for modality in 'xav':
-                prior_name, prior_func = priors_fns['pharm'][modality]
-
-                if prior_name == 'masked':
-                    prior_func = functools.partial(prior_func, n_categories=self.n_categories_dict['pharm'][modality])
-
-                g_node_data['pharm'][f'{modality}_0'] = prior_func(pharm_x)
-
             assert self.graph_config.edges['pharm_to_pharm']['type'] == 'complete', 'the following code assumes complete pharm-pharm graph'
             g_edge_idxs['pharm_to_pharm'] = edge_builders.complete_graph(pharm_x)
 
         # for now, we assume lig-pharm edges are built on the fly
         g = build_complex_graph(node_data=g_node_data, edge_idxs=g_edge_idxs, edge_data=g_edge_data)
+
+
+        # get the prior functions for this task
+        # TODO: with our new modality system, its entirely possible that this code could be put into 
+        # its own function and reused for other datasets
+        # if the prior function is like apo_exp or apo_pred then we have to add some extra logic
+        # because we would need to fetch the actual apo structure, so centralized prior sampling logic
+        # will look a little different when we support systems with proteins
+        priors_fns = get_prior(task_class, self.prior_config, train=True)
+
+        # sample priors
+        for modality_name in priors_fns:
+            prior_name, prior_func = priors_fns[modality_name] # get prior name and function
+            modality = name_to_modality(modality_name) # get the modality object
+
+            # fetch the target data from the graph object
+            g_data_loc = g.nodes if modality.graph_entity == 'node' else g.edges
+            target_data = g_data_loc[modality.entity_name][f'{modality.data_key}_1_true']
+
+            # if the prior is masked, we need to pass the number of categories for this modality to the prior function
+            if prior_name == 'masked':
+                prior_func = functools.partial(prior_func, n_categories=self.n_categories_dict[modality_name])
+
+            # draw a sample from the prior
+            prior_sample = prior_func(target_data)
+
+            # for edge features, make sure upper and lower triangle are the same
+            # TODO: this logic may change if we decide to do something other fully-connected lig-lig edges
+            if modality.graph_entity == 'edge':
+                upper_edge_mask = torch.zeros_like(target_data, dtype=torch.bool)
+                upper_edge_mask[:target_data.shape[0]//2] = 1
+                prior_sample[~upper_edge_mask] = prior_sample[upper_edge_mask]
+
+            # add the prior sample to the graph
+            g_data_loc[modality.entity_name][f'{modality.data_key}_0'] = prior_sample
 
         return g
     

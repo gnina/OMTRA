@@ -8,7 +8,10 @@
 #     type: some_string_name
 #     params: {some_param_name: some_param_value, ...}
 
+# note that task_name must be a registered task name (see omtra.tasks.tasks)
+# and modality_name must be a registered modality name (see omtra.tasks.modalities)
+
 # below is an example that would override the prior distribution on ligand atom positions for unconditional de novo ligand design
 # just uncomment then next two lines for it to take effect
 # denovo_ligand:
-#   x: {type: gaussian, params: {ot: True}}
+#   lig_x: {type: gaussian, params: {ot: True}}
