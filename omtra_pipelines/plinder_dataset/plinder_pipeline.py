@@ -90,8 +90,8 @@ class SystemProcessor:
 
         coords = np.zeros((num_residues, 3, 3))
         res_ids = np.zeros(num_residues, dtype=int)
-        res_names = np.empty(num_residues, dtype=str)
-        chain_ids = np.empty(num_residues, dtype=str)
+        res_names_list = []
+        chain_ids_list = []
 
         for i, compound_key in enumerate(unique_compound_keys):
             chain_id, res_id = compound_key.split("_")
@@ -101,8 +101,8 @@ class SystemProcessor:
             res_atoms = backbone[res_mask]
 
             res_ids[i] = res_id
-            res_names[i] = res_atoms.res_name[0]
-            chain_ids[i] = chain_id
+            res_names_list.append(res_atoms.res_name[0])
+            chain_ids_list.append(chain_id)
 
             for j, atom_name in enumerate(["N", "CA", "C"]):
                 atom_mask = res_atoms.atom_name == atom_name
@@ -111,6 +111,9 @@ class SystemProcessor:
                 else:
                     logger.warning(f"Error with {self.system_id} backbone extraction")
                     return None
+
+        res_names = np.array(res_names_list)
+        chain_ids = np.array(chain_ids_list)
 
         backbone_data = BackboneData(
             coords=coords,
