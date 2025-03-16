@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 @dataclass
 class BackboneData:
-    coords: np.ndarray
+    coords: np.ndarray # (num_res, 3, 3)
     res_ids: np.ndarray
     res_names: np.ndarray
     chain_ids: np.ndarray
