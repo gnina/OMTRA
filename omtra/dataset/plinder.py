@@ -472,6 +472,13 @@ class PlinderDataset(ZarrDataset):
             "pocket_mask": backbone_pocket_mask,
         }
 
+        # NOTE: change later?
+        edge_idxs["prot_atom_to_prot_atom"] = edge_builders.radius_graph(
+            prot_coords, 
+            radius=5.0, 
+            max_num_neighbors=1000
+        )
+
         return node_data, edge_idxs, edge_data
 
     def convert_ligand(
@@ -602,6 +609,39 @@ class PlinderDataset(ZarrDataset):
                     )
                 }
 
+        return node_data, edge_idxs, edge_data
+    
+    def connect_ligand_to_pocket(
+        self,
+        node_data: Dict[str, Dict[str, torch.Tensor]],
+        edge_idxs: Dict[str, torch.Tensor],
+        edge_data: Dict[str, Dict[str, torch.Tensor]],
+    ) -> Tuple[
+        Dict[str, Dict[str, torch.Tensor]],
+        Dict[str, torch.Tensor],
+        Dict[str, Dict[str, torch.Tensor]],
+    ]:
+        prot_node_data = node_data['prot_atom']
+        lig_node_data = node_data["lig"]
+
+        pocket_mask = prot_node_data["pocket_mask"]
+        pocket_atom_indices = torch.nonzero(pocket_mask, as_tuple=True)[0]
+        
+        num_lig_atoms = lig_node_data["x"].shape[0]
+        
+        prot_to_lig_edges = []
+        
+        for lig_idx in range(num_lig_atoms):
+            for prot_idx in pocket_atom_indices:
+                prot_to_lig_edges.append((prot_idx.item(), lig_idx))
+        
+        if prot_to_lig_edges:
+            prot_to_lig_tensor = torch.tensor(prot_to_lig_edges, dtype=torch.long).t()
+            edge_idxs["prot_atom_to_lig"] = prot_to_lig_tensor
+            edge_data["prot_atom_to_lig"] = {
+                "e": torch.zeros((prot_to_lig_tensor.shape[1], 1), dtype=torch.float)
+            }
+        
         return node_data, edge_idxs, edge_data
 
     def convert_npndes(
@@ -858,6 +898,8 @@ class PlinderDataset(ZarrDataset):
             node_data.update(pharm_node_data)
             edge_idxs.update(pharm_edge_idxs)
             edge_data.update(pharm_edge_data)
+        
+        node_data, edge_idxs, edge_data = self.connect_ligand_to_pocket(node_data, edge_idxs, edge_data)
 
         return node_data, edge_idxs, edge_data
 
