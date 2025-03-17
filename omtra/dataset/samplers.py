@@ -33,7 +33,7 @@ class MultiTaskSampler(Sampler):
         self.p_dataset_task = td_coupling.p_dataset_task # has shape (n_phases, n_tasks, n_datasets)
         self.n_phases, self.n_tasks, self.n_datasets = self.p_dataset_task.shape
         self.datasets = multi_dataset.datasets
-        self.tasks = [task_name_to_class[task_name] for task_name in self.task_space]
+        self.tasks = [task_name_to_class(task_name) for task_name in self.task_space]
 
         self.batch_idx = 0
 

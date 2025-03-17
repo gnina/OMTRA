@@ -241,7 +241,8 @@ class ZarrStore:
         chunk_size = self.root[array_name].chunks[0]
         start_chunk_id, start_chunk_idx = divmod(start_idx, chunk_size)
         end_chunk_id, end_chunk_idx = divmod(end_idx, chunk_size)
-        chunk_idxs = list(range(start_chunk_id, end_chunk_id + 1))
+        n_chunks = self.n_zarr_chunks(array_name)
+        chunk_idxs = list(range(start_chunk_id, end_chunk_id + int(end_chunk_id != n_chunks)))
         return chunk_idxs
 
     def display_structure(self):

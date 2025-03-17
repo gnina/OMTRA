@@ -1,16 +1,32 @@
-import inspect
-import omtra.tasks.tasks as tasks
 from typing import Dict
 
-task_classes = [cls_obj 
-                for cls_name, cls_obj in inspect.getmembers(tasks, inspect.isclass) 
-                if issubclass(cls_obj, tasks.Task) and cls_obj is not tasks.Task]
 
-task_name_to_class: Dict[str, tasks.Task] = {cls_obj.name: cls_obj for cls_obj in task_classes}
+TASK_REGISTER = {}
+
+def register_task(name: str):
+    """
+    Decorator to register a task class with a given name.
+    Also attaches the key to the class as an attribute.
+    :param name: A unique name for the task.
+    """
+    def decorator(cls):
+        cls.name = name  # Attach the key to the class.
+        TASK_REGISTER[name] = cls
+        return cls
+    return decorator
+
+
+def task_name_to_class(name: str):
+    """
+    Get the task class associated with a given name.
+    :param name: The name of the task.
+    :return: The task class associated with the name.
+    """
+    return TASK_REGISTER[name]
+
 
 def display_tasks():
-    task_names = [cls_obj.name for cls_obj in task_classes]
-    for task_class, task_name in zip(task_classes, task_names):
+    for task_name, task_class in TASK_REGISTER.items():
         print(f"Task class: {task_class}")
         print(f"Task name: {task_name}")
         print()

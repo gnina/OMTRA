@@ -13,7 +13,7 @@ task_phases:
     tasks:
       - name: denovo_ligand
         probability: 0.8
-      - name: denovo_ligand_pharmacophore
+      - name: denovo_ligand_from_pharmacophore
         probability: 0.1
       - name: ligand_conformer
         probability: 0.1
@@ -23,7 +23,7 @@ task_phases:
     tasks:
       - name: denovo_ligand
         probability: 0.33
-      - name: denovo_ligand_pharmacophore
+      - name: denovo_ligand_from_pharmacophore
         probability: 0.33
       - name: ligand_conformer
         probability: 0.34
@@ -33,7 +33,7 @@ task_phases:
     tasks:
       - name: denovo_ligand
         probability: 0.1
-      - name: denovo_ligand_pharmacophore
+      - name: denovo_ligand_from_pharmacophore
         probability: 0.2
       - name: ligand_conformer
         probability: 0.7
@@ -42,7 +42,7 @@ task_phases:
 dataset_task_coupling:
   denovo_ligand:
     - [pharmit, 1.0]
-  denovo_ligand_pharmacophore:
+  denovo_ligand_from_pharmacophore:
     - [pharmit, 1.0]
   ligand_conformer:
     - [pharmit, 1.0]

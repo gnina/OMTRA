@@ -27,8 +27,8 @@ from omtra_pipelines.pharmit_dataset.guts.phase2 import *
 
 def parse_args():
     p = argparse.ArgumentParser(description='Build Zarr store')
-    p.add_argument('--output_dir', type=Path, help='Directory for store.',  default=Path('./outputs/'))
-    p.add_argument('--store_name', type=Path, help='Name of store.',  default=Path('store.zarr'))
+    p.add_argument('--output_dir', type=Path, help='Directory for store.',  default=Path('./outputs/')) # where to read chunk data from
+    p.add_argument('--store_name', type=Path, help='Name of store.',  default=Path('store.zarr')) # name of the store file
 
     p.add_argument('--n_cpus', type=int, default=1, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--n_chunks_zarr', type=int, default=1000, help='Number of chunks for zarr arrays.')
@@ -36,7 +36,7 @@ def parse_args():
     p.add_argument('--overwrite', action='store_true', help='Overwrite existing store.')
     p.add_argument('--seed', type=int, default=42, help='Random seed for shuffling.')
     
-    p.add_argument('--store_dir', type=Path, help='Directory for store.',  default=None)
+    p.add_argument('--store_dir', type=Path, help='Directory for store.',  default=None) # where to write the store
     # p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"])
 
     args = p.parse_args()
@@ -60,7 +60,13 @@ def get_all_locks(arr_name: str, zchunk_ids: List[int]):
     acquired_locks = []
     try:
         for lock_id in sorted_ids:
-            lock = global_lock_register[arr_name][lock_id]
+            try:
+                lock = global_lock_register[arr_name][lock_id]
+            except IndexError as e:
+                print(f"Error: lock_id {lock_id} out of range for array {arr_name}")
+                print(global_lock_register[arr_name])
+                print(sorted_ids)
+                raise e
             lock.acquire()  # Blocking call to acquire the lock.
             acquired_locks.append(lock)
         # print(f"Acquired locks for {arr_name} chunks ids: {sorted_ids}")

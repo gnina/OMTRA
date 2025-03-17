@@ -45,13 +45,13 @@ def rigid_alignment(A, B):
     return A_aligned
 
 
-def edge_prior(upper_edge_mask: torch.Tensor, edge_prior_config: dict):
+# def edge_prior(upper_edge_mask: torch.Tensor, edge_prior_config: dict):
 
-    n_upper_edges = upper_edge_mask.sum().item()
-    prior_fn = train_prior_register[edge_prior_config['type']]
-    upper_edge_prior = prior_fn(n_upper_edges, 5, **edge_prior_config['kwargs'])
+#     n_upper_edges = upper_edge_mask.sum().item()
+#     prior_fn = train_prior_register[edge_prior_config['type']]
+#     upper_edge_prior = prior_fn(n_upper_edges, 5, **edge_prior_config['kwargs'])
 
-    edge_prior = torch.zeros(upper_edge_mask.shape[0], upper_edge_prior.shape[1])
-    edge_prior[upper_edge_mask] = upper_edge_prior
-    edge_prior[~upper_edge_mask] = upper_edge_prior
-    return edge_prior
+#     edge_prior = torch.zeros(upper_edge_mask.shape[0], upper_edge_prior.shape[1])
+#     edge_prior[upper_edge_mask] = upper_edge_prior
+#     edge_prior[~upper_edge_mask] = upper_edge_prior
+#     return edge_prior

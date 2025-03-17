@@ -31,6 +31,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         """
         self.split = split
         self.graph_config = graph_config
+        self.prior_config = prior_config
         self.single_dataset_configs = single_dataset_configs
         self.td_coupling = td_coupling
 
@@ -46,6 +47,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
             self.datasets[dataset_name] = dataset_class(
                 split=self.split, 
                 graph_config=self.graph_config,
+                prior_config=self.prior_config,
                 **single_dataset_config)
 
 

@@ -904,9 +904,8 @@ class PlinderDataset(ZarrDataset):
         return node_data, edge_idxs, edge_data
 
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
-        # task_name, idx = index
-        # task_class: Task = task_name_to_class[task_name]
-        # self.include_pharmacophore = "pharmacophore" in task_class.modalities_present
+        task_name, idx = index
+        task_class: Task = task_name_to_class(task_name)
 
         system = self.get_system(index)
 

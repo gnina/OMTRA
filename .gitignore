@@ -4,6 +4,7 @@ data/pharmit_dev/
 local/
 .vscode/
 wandb/
+wandb_symlinks/
 
 
 # Byte-compiled / optimized / DLL files
