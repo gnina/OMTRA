@@ -205,9 +205,7 @@ def setup_logger(
         logger.addHandler(handler)
 
     if log_file is None:
-        log_file = os.environ.get(
-            "LOG_FILE_PATH", "/net/galaxy/home/koes/tjkatz/for_omtra/logs/default.log"
-        )
+        log_file = os.environ.get("LOG_FILE_PATH", "default.log")
 
     if log_file is not None:
         file_handler = logging.FileHandler(log_file)

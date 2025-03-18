@@ -32,6 +32,33 @@ def check_receptor(system: SystemData, actual_system: SystemData):
         f"Receptor chain_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
 
+    assert np.all(
+        system.receptor.backbone_mask == actual_system.receptor.backbone_mask
+    ), (
+        f"Receptor backbone_mask mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
+    assert np.all(
+        system.receptor.backbone.coords == actual_system.receptor.backbone.coords
+    ), (
+        f"Receptor backbone coords mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.receptor.backbone.res_ids == actual_system.receptor.backbone.res_ids
+    ), (
+        f"Receptor backbone res_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.receptor.backbone.res_names == system.receptor.backbone.res_names
+    ), (
+        f"Receptor backbone res_names mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.receptor.backbone.chain_ids == actual_system.receptor.backbone.chain_ids
+    ), (
+        f"Receptor backbone chain_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
 
 def check_pocket(system: SystemData, actual_system: SystemData):
     assert len(system.pocket.coords) == len(actual_system.pocket.coords), (
@@ -48,6 +75,7 @@ def check_pocket(system: SystemData, actual_system: SystemData):
             system.pocket.atom_names[i],
             system.pocket.elements[i],
             system.pocket.chain_ids[i],
+            system.pocket.backbone_mask[i],
         )
         system_atoms[atom_id] = system.pocket.coords[i]
 
@@ -58,6 +86,7 @@ def check_pocket(system: SystemData, actual_system: SystemData):
             actual_system.pocket.atom_names[i],
             actual_system.pocket.elements[i],
             actual_system.pocket.chain_ids[i],
+            actual_system.pocket.backbone_mask[i],
         )
         actual_system_atoms[atom_id] = actual_system.pocket.coords[i]
 
@@ -117,23 +146,33 @@ def check_pharmacophore(system: SystemData, actual_system: SystemData):
     actual_system_features = []
 
     for i in range(len(system.pharmacophore.coords)):
+        coords_tuple = tuple(float(x) for x in system.pharmacophore.coords[i])
+        vector_tuple = None
+        if system.pharmacophore.vectors[i] is not None:
+            vector_tuple = tuple(
+                float(x) for x in system.pharmacophore.vectors[i].flatten()
+            )
+
         feature = (
-            tuple(system.pharmacophore.coords[i]),
+            coords_tuple,
             system.pharmacophore.types[i],
-            tuple(system.pharmacophore.vectors[i])
-            if system.pharmacophore.vectors[i] is not None
-            else None,
+            vector_tuple,
             system.pharmacophore.interactions[i],
         )
         system_features.append(feature)
 
     for i in range(len(actual_system.pharmacophore.coords)):
+        coords_tuple = tuple(float(x) for x in actual_system.pharmacophore.coords[i])
+        vector_tuple = None
+        if actual_system.pharmacophore.vectors[i] is not None:
+            vector_tuple = tuple(
+                float(x) for x in actual_system.pharmacophore.vectors[i].flatten()
+            )
+
         feature = (
-            tuple(actual_system.pharmacophore.coords[i]),
+            coords_tuple,
             actual_system.pharmacophore.types[i],
-            tuple(actual_system.pharmacophore.vectors[i])
-            if actual_system.pharmacophore.vectors[i] is not None
-            else None,
+            vector_tuple,
             actual_system.pharmacophore.interactions[i],
         )
         actual_system_features.append(feature)
@@ -145,12 +184,15 @@ def check_pharmacophore(system: SystemData, actual_system: SystemData):
         sys_feat = system_features[i]
         actual_feat = actual_system_features[i]
 
-        coords_match = np.allclose(sys_feat[0], actual_feat[0], atol=1e-6)
-
+        coords_match = sys_feat[0] == actual_feat[0] or np.allclose(
+            sys_feat[0], actual_feat[0], atol=1e-6
+        )
         types_match = sys_feat[1] == actual_feat[1]
 
         if sys_feat[2] is not None and actual_feat[2] is not None:
-            vectors_match = np.allclose(sys_feat[2], actual_feat[2], atol=1e-6)
+            vectors_match = sys_feat[2] == actual_feat[2] or np.allclose(
+                sys_feat[2], actual_feat[2], atol=1e-6
+            )
         else:
             vectors_match = sys_feat[2] == actual_feat[2]
 
@@ -173,7 +215,7 @@ def check_npndes(system: SystemData, actual_system: SystemData):
             f"npnde {id} atom charges mismatch {system.system_id} {system.ligand_id} {system.link_id}"
         )
         assert np.all(npnde.bond_types == actual_system.npndes[id].bond_types), (
-            f"npnde {id} bond types mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+            f"npnde {id} bond types mismatch {system.system_id} {system.ligand_id} {system.link_id} {npnde.bond_types} {actual_system.npndes[id].bond_types}"
         )
         assert np.all(npnde.bond_indices == actual_system.npndes[id].bond_indices), (
             f"npnde {id} bond indices mismatch {system.system_id} {system.ligand_id} {system.link_id}"
@@ -211,8 +253,28 @@ def check_link(system: SystemData, actual_system: SystemData):
     assert np.all(system.link.chain_ids == actual_system.link.chain_ids), (
         f"link chain ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
+    assert np.all(system.link.backbone_mask == actual_system.link.backbone_mask), (
+        f"link backbone_mask mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
     assert system.link.cif == actual_system.link.cif, (
         f"link cif mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
+    assert np.all(system.link.backbone.coords == actual_system.link.backbone.coords), (
+        f"link backbone coords mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.link.backbone.res_ids == actual_system.link.backbone.res_ids
+    ), (
+        f"link backbone res_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(system.link.backbone.res_names == system.link.backbone.res_names), (
+        f"link backbone res_names mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.link.backbone.chain_ids == actual_system.link.backbone.chain_ids
+    ), (
+        f"link backbone chain_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
 
     # check correspondence with receptor
@@ -232,6 +294,24 @@ def check_link(system: SystemData, actual_system: SystemData):
         f"chain ids mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
     )
 
+    assert np.all(system.link.backbone.res_ids == system.receptor.backbone.res_ids), (
+        f"link + receptor backbone res_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.link.backbone.res_names == system.receptor.backbone.res_names
+    ), (
+        f"link+receptor backbone res_names mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(
+        system.link.backbone.chain_ids == system.receptor.backbone.chain_ids
+    ), (
+        f"link+receptor backbone chain_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
+    assert np.all(system.link.backbone_mask == system.receptor.backbone_mask), (
+        f"link+receptor backbone_mask mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
 
 def check_system(system: SystemData, actual_system: SystemData):
     check_receptor(system, actual_system)
@@ -247,13 +327,6 @@ def check_system(system: SystemData, actual_system: SystemData):
 def check_storage(zarr_path):
     retriever = PlinderZarrRetriever(zarr_path=zarr_path)
 
-    apo_processor = SystemProcessor(
-        ligand_atom_map=LIGAND_MAP, npnde_atom_map=NPNDE_MAP, link_type="apo"
-    )
-    pred_processor = SystemProcessor(
-        ligand_atom_map=LIGAND_MAP, npnde_atom_map=NPNDE_MAP, link_type="pred"
-    )
-
     n = retriever.get_length()
     print(f"{n} systems to check")
 
@@ -263,9 +336,11 @@ def check_storage(zarr_path):
         ligand_id = system.ligand_id
         link_id = system.link_id
         if system.link_type == "apo":
-            result = apo_processor.process_system(system_id=system.system_id)
+            processor = SystemProcessor(system_id=system.system_id, link_type="apo")
+            result = processor.process_system()
         elif system.link_type == "pred":
-            result = pred_processor.process_system(system_id=system.system_id)
+            processor = SystemProcessor(system_id=system.system_id, link_type="pred")
+            result = processor.process_system()
         actual_system = None
         for system_data in result[system.link_type][link_id]:
             if system_data.ligand_id == ligand_id:

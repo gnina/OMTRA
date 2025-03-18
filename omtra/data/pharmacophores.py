@@ -155,13 +155,13 @@ def get_pharmacophore_dict(ligand, receptor=None):
                         all_ligand_vectors[i] = updated_vectors[i]
 
                 pharmacophores[feature]['I'].extend(interaction)
-                receptor = Chem.RemoveHs(receptor)
+                # receptor = Chem.RemoveHs(receptor)
             
             pharmacophores[feature]['P'].extend(all_ligand_positions)
             pharmacophores[feature]['V'].extend(all_ligand_vectors)            
     
     ligand = Chem.RemoveHs(ligand)
-    if receptor: receptor = Chem.RemoveHs(receptor)                
+    # if receptor: receptor = Chem.RemoveHs(receptor)                
                 
     return pharmacophores
 

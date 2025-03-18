@@ -23,6 +23,8 @@ logger = setup_logger(
     __name__,
 )
 
+# TODO: add fraction ligand within 4A receptor threshold, add step to pull from parquet
+
 
 def check_atom_map(mol: Chem.rdchem.Mol, allowed_atoms: List[str] = LIGAND_MAP) -> bool:
     for atom in mol.GetAtoms():
@@ -32,8 +34,6 @@ def check_atom_map(mol: Chem.rdchem.Mol, allowed_atoms: List[str] = LIGAND_MAP) 
 
 
 def filter(system_id: str) -> (Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]):
-    from omtra_pipelines.plinder_dataset.plinder_pipeline import StructureProcessor
-
     try:
         output_path = Path(
             f"/net/galaxy/home/koes/tjkatz/for_omtra/preprocessed_pkls/{system_id}.pkl"

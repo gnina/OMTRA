@@ -16,6 +16,7 @@ from omtra_pipelines.plinder_dataset.plinder_pipeline import (
     PharmacophoreData,
     SystemData,
     SystemProcessor,
+    BackboneData,
 )
 from tqdm import tqdm
 
@@ -43,22 +44,38 @@ class PlinderZarrRetriever:
             key = npnde_info["npnde_id"]
 
             atom_start, atom_end = npnde_info["atom_start"], npnde_info["atom_end"]
-            bond_start, bond_end = npnde_info["bond_start"], npnde_info["bond_end"]
+
+            bond_start = (
+                npnde_info["bond_start"]
+                if not pd.isna(npnde_info["bond_start"])
+                else None
+            )
+            bond_end = (
+                npnde_info["bond_end"] if not pd.isna(npnde_info["bond_end"]) else None
+            )
 
             is_covalent = False
             if npnde_info["linkages"]:
                 is_covalent = True
 
             npndes[key] = LigandData(
-                sdf=npnde_info["lig_sdf"],
+                sdf=npnde_info["sdf"],
                 ccd=npnde_info["ccd"],
                 is_covalent=is_covalent,
                 linkages=npnde_info["linkages"],
                 coords=self.root["npnde"]["coords"][atom_start:atom_end],
                 atom_types=self.root["npnde"]["atom_types"][atom_start:atom_end],
                 atom_charges=self.root["npnde"]["atom_charges"][atom_start:atom_end],
-                bond_types=self.root["npnde"]["bond_types"][bond_start:bond_end],
-                bond_indices=self.root["npnde"]["bond_indices"][bond_start:bond_end],
+                bond_types=self.root["npnde"]["bond_types"][
+                    int(bond_start) : int(bond_end)
+                ]
+                if bond_start is not None and bond_end is not None
+                else None,
+                bond_indices=self.root["npnde"]["bond_indices"][
+                    int(bond_start) : int(bond_end)
+                ]
+                if bond_start is not None and bond_end is not None
+                else None,
             )
         return npndes
 
@@ -68,6 +85,10 @@ class PlinderZarrRetriever:
         ].iloc[0]
 
         rec_start, rec_end = system_info["rec_start"], system_info["rec_end"]
+        backbone_start, backbone_end = (
+            system_info["backbone_start"],
+            system_info["backbone_end"],
+        )
         lig_atom_start, lig_atom_end = (
             system_info["lig_atom_start"],
             system_info["lig_atom_end"],
@@ -81,8 +102,33 @@ class PlinderZarrRetriever:
             system_info["pocket_start"],
             system_info["pocket_end"],
         )
+        pocket_bb_start, pocket_bb_end = (
+            system_info["pocket_bb_start"],
+            system_info["pocket_bb_end"],
+        )
+
         link_start, link_end = system_info["link_start"], system_info["link_end"]
+        link_bb_start, link_bb_end = (
+            system_info["link_bb_start"],
+            system_info["link_bb_end"],
+        )
+
         link_type = system_info["link_type"]
+
+        backbone = BackboneData(
+            coords=self.root["receptor"]["backbone_coords"][
+                backbone_start:backbone_end
+            ],
+            res_ids=self.root["receptor"]["backbone_res_ids"][
+                backbone_start:backbone_end
+            ],
+            res_names=self.root["receptor"]["backbone_res_names"][
+                backbone_start:backbone_end
+            ].astype(str),
+            chain_ids=self.root["receptor"]["backbone_chain_ids"][
+                backbone_start:backbone_end
+            ].astype(str),
+        )
 
         receptor = StructureData(
             coords=self.root["receptor"]["coords"][rec_start:rec_end],
@@ -93,7 +139,9 @@ class PlinderZarrRetriever:
             res_ids=self.root["receptor"]["res_ids"][rec_start:rec_end],
             res_names=self.root["receptor"]["res_names"][rec_start:rec_end].astype(str),
             chain_ids=self.root["receptor"]["chain_ids"][rec_start:rec_end].astype(str),
+            backbone_mask=self.root["receptor"]["backbone_mask"][rec_start:rec_end],
             cif=system_info["rec_cif"],
+            backbone=backbone,
         )
 
         is_covalent = False
@@ -124,6 +172,20 @@ class PlinderZarrRetriever:
                 pharm_start:pharm_end
             ],
         )
+        pocket_backbone = BackboneData(
+            coords=self.root["pocket"]["backbone_coords"][
+                pocket_bb_start:pocket_bb_end
+            ],
+            res_ids=self.root["pocket"]["backbone_res_ids"][
+                pocket_bb_start:pocket_bb_end
+            ],
+            res_names=self.root["pocket"]["backbone_res_names"][
+                pocket_bb_start:pocket_bb_end
+            ].astype(str),
+            chain_ids=self.root["pocket"]["backbone_chain_ids"][
+                pocket_bb_start:pocket_bb_end
+            ].astype(str),
+        )
 
         pocket = StructureData(
             coords=self.root["pocket"]["coords"][pocket_start:pocket_end],
@@ -140,7 +202,10 @@ class PlinderZarrRetriever:
             chain_ids=self.root["pocket"]["chain_ids"][pocket_start:pocket_end].astype(
                 str
             ),
+            backbone_mask=self.root["pocket"]["backbone_mask"][pocket_start:pocket_end],
+            backbone=pocket_backbone,
         )
+
         npndes = None
         if system_info["npnde_idxs"]:
             npndes = self.get_npndes(system_info["npnde_idxs"])
@@ -148,6 +213,16 @@ class PlinderZarrRetriever:
         apo = None
         pred = None
         if link_type == "apo":
+            apo_backbone = BackboneData(
+                coords=self.root["apo"]["backbone_coords"][link_bb_start:link_bb_end],
+                res_ids=self.root["apo"]["backbone_res_ids"][link_bb_start:link_bb_end],
+                res_names=self.root["apo"]["backbone_res_names"][
+                    link_bb_start:link_bb_end
+                ].astype(str),
+                chain_ids=self.root["apo"]["backbone_chain_ids"][
+                    link_bb_start:link_bb_end
+                ].astype(str),
+            )
             apo = StructureData(
                 coords=self.root["apo"]["coords"][link_start:link_end],
                 atom_names=self.root["apo"]["atom_names"][link_start:link_end].astype(
@@ -161,9 +236,23 @@ class PlinderZarrRetriever:
                 chain_ids=self.root["apo"]["chain_ids"][link_start:link_end].astype(
                     str
                 ),
+                backbone_mask=self.root["apo"]["backbone_mask"][link_start:link_end],
                 cif=system_info["link_cif"],
+                backbone=apo_backbone,
             )
         elif link_type == "pred":
+            pred_backbone = BackboneData(
+                coords=self.root["pred"]["backbone_coords"][link_bb_start:link_bb_end],
+                res_ids=self.root["pred"]["backbone_res_ids"][
+                    link_bb_start:link_bb_end
+                ],
+                res_names=self.root["pred"]["backbone_res_names"][
+                    link_bb_start:link_bb_end
+                ].astype(str),
+                chain_ids=self.root["pred"]["backbone_chain_ids"][
+                    link_bb_start:link_bb_end
+                ].astype(str),
+            )
             pred = StructureData(
                 coords=self.root["pred"]["coords"][link_start:link_end],
                 atom_names=self.root["pred"]["atom_names"][link_start:link_end].astype(
@@ -177,7 +266,9 @@ class PlinderZarrRetriever:
                 chain_ids=self.root["pred"]["chain_ids"][link_start:link_end].astype(
                     str
                 ),
+                backbone_mask=self.root["apo"]["backbone_mask"][link_start:link_end],
                 cif=system_info["link_cif"],
+                backbone=pred_backbone,
             )
 
         system = SystemData(
