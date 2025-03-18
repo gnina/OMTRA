@@ -15,7 +15,7 @@ class HeteroGVPConv(nn.module):
         self,
         node_types: List[str],
         edge_types: List[str],
-        scalar_size: Dict[str, int],  # TODO: consider fixed sizes across all node types
+        scalar_size: Dict[str, int],  # NOTE: consider fixed sizes across all node types
         vector_size: Dict[str, int],
         n_cp_feats: int = 0,
         scalar_activation=nn.SiLU,
@@ -135,10 +135,10 @@ class HeteroGVPConv(nn.module):
     def forward(
         self,
         g: dgl.DGLGraph,
-        scalar_feats: torch.Tensor,
-        coord_feats: torch.Tensor,
-        vec_feats: torch.Tensor,
-        edge_feats: torch.Tensor = None,
+        scalar_feats: Dict[str, torch.Tensor],
+        coord_feats: Dict[str, torch.Tensor],
+        vec_feats: Dict[str, torch.Tensor],
+        edge_feats: Dict[str, torch.Tensor] = None,
         x_diff: Dict[str, torch.Tensor] = None,
         d: torch.Tensor = None,
         passing_edges: List[str] = None,
@@ -150,13 +150,13 @@ class HeteroGVPConv(nn.module):
                 # TODO: make sure node attributes are safe across tasks/ntypes e.g. pharm nodes have a 'v', 'x' vs 'x_0' vs 'x_1_true'
                 g.nodes[ntype].data["h"] = scalar_feats[ntype]
                 g.nodes[ntype].data["x"] = coord_feats[ntype]
-                g.nodes[ntype].data["v"]
+                g.nodes[ntype].data["v"] = vec_feats[ntype]
 
             # edge feature
-            if self.edge_feat_size > 0:  # TODO: change this from dict
-                assert edge_feats is not None, "Edge features must be provided."
-                for etype, feat in edge_feats.items():
-                    g.edges[etype].data["a"] = feat
+            for etype in self.edge_types:
+                if self.edge_feat_size[etype] > 0:
+                    assert edge_feats.get(etype) is not None, "Edge features must be provided."
+                    g.edges[etype].data["a"] = edge_feats[etype]
 
             # normalize x_diff and compute rbf embedding of edge distance
             # dij = torch.norm(g.edges[self.edge_type].data['x_diff'], dim=-1, keepdim=True)
