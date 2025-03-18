@@ -68,18 +68,18 @@ Modality.register(MODALITY_REGISTER,
 )
 
 Modality.register(MODALITY_REGISTER,
-    name='pharm_e',
-    group='pharmacophore',
-    graph_entity='edge',
-    entity_name='pharm_to_pharm',
-    data_key='e'
-)
-
-Modality.register(MODALITY_REGISTER,
     name='prot_atom',
     group='protein_structure',
     graph_entity='node',
     entity_name='prot_atom',
+    data_key='x'
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='npnde_x',
+    group='protein_structure',
+    graph_entity='node',
+    entity_name='npnde',
     data_key='x'
 )
 

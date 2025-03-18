@@ -11,3 +11,11 @@ def register_conditional_path(name: str):
         COND_PATH_REGISTER[name] = fn
         return fn
     return decorator
+
+def condpath_name_to_fn(name: str) -> Callable:
+    """
+    Get the conditional path function by name.
+    :param name: The name of the conditional path.
+    :return: The conditional path function.
+    """
+    return COND_PATH_REGISTER[name]

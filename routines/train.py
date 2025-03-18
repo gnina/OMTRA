@@ -44,6 +44,8 @@ def train(cfg: DictConfig):
     model = hydra.utils.instantiate(cfg.model,
                                     task_phases=cfg.task_group.task_phases,
                                     task_dataset_coupling=cfg.task_group.dataset_task_coupling,
+                                    graph_config=cfg.graph,
+                                    conditional_path_config=cfg.conditional_paths,
                                 )
 
     # figure out if we are resuming a previous run

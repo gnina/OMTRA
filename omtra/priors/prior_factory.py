@@ -15,7 +15,6 @@ def get_prior(task_cls, config_prior=None, train=False) -> dict:
         register = inference_prior_register
 
     task_name = task_cls.name
-
     prior_fn_output = {}
     for modality in task_cls.modalities_generated:
         try:

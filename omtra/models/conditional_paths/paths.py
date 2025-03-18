@@ -2,7 +2,7 @@ import dgl
 import torch
 from omtra.models.conditional_paths.path_register import register_conditional_path
 
-@register_conditional_path("continuous_delta")
+@register_conditional_path("continuous_interpolant")
 def sample_continuous_interpolant(
         x_0: torch.Tensor, 
         x_1: torch.Tensor, 
@@ -17,7 +17,7 @@ def sample_continuous_interpolant(
     
     return x_t
 
-@register_conditional_path("two_state_mask")
+@register_conditional_path("ctmc_mask")
 def sample_masked_ctmc(
         x_0: torch.Tensor, 
         x_1: torch.Tensor, 
@@ -26,6 +26,7 @@ def sample_masked_ctmc(
         n_categories: int,
         ue_mask: torch.Tensor = None,
     ):
+    raise NotImplementedError("need to alpha_t and beta_t conventions are set correctly, or design a better convention")
     x_t = x_1.clone()
     x_t[ torch.rand_like(x_t) < beta_t ] = n_categories
     
