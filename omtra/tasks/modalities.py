@@ -63,6 +63,14 @@ Modality.register(MODALITY_REGISTER,
 )
 
 Modality.register(MODALITY_REGISTER,
+    name='pharm_a',
+    group='pharmacophore',
+    graph_entity='node',
+    entity_name='pharm',
+    data_key='a'
+)
+
+Modality.register(MODALITY_REGISTER,
     name='pharm_v',
     group='pharmacophore',
     graph_entity='node',
