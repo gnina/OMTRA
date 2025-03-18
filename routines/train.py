@@ -39,11 +39,17 @@ def train(cfg: DictConfig):
         # prior_config=cfg.prior
     )
 
+    # get dists file from pharmit dir
+    # TODO: this is bad as it requires pharmit dataset to be in place
+    dists_file = Path(cfg.pharmit_path) / 'train_dists.npz'
+
     
     print(f"⚛ Instantiating model <{cfg.model._target_}>")
     model = hydra.utils.instantiate(cfg.model,
                                     task_phases=cfg.task_group.task_phases,
                                     task_dataset_coupling=cfg.task_group.dataset_task_coupling,
+                                    graph_config=cfg.graph,
+                                    dists_file=dists_file,
                                 )
 
     # figure out if we are resuming a previous run

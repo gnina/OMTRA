@@ -9,12 +9,15 @@ class Modality:
     graph_entity: str
     entity_name: str
     data_key: str
-    conditional_path: str
 
     @classmethod
     def register(cls, register: Dict[str, "Modality"], **kwargs):
         """Ensures that the register key matches the name attribute when registering a Modality."""
         key = kwargs['name']
+
+        if key in register:
+            raise ValueError(f"Modality with name {key} already exists in register.")
+
         register[key] = cls(**kwargs)
 
 MODALITY_REGISTER: Dict[str, Modality] = {}
@@ -60,6 +63,14 @@ Modality.register(MODALITY_REGISTER,
 )
 
 Modality.register(MODALITY_REGISTER,
+    name='pharm_a',
+    group='pharmacophore',
+    graph_entity='node',
+    entity_name='pharm',
+    data_key='a'
+)
+
+Modality.register(MODALITY_REGISTER,
     name='pharm_v',
     group='pharmacophore',
     graph_entity='node',
@@ -68,18 +79,18 @@ Modality.register(MODALITY_REGISTER,
 )
 
 Modality.register(MODALITY_REGISTER,
-    name='pharm_e',
-    group='pharmacophore',
-    graph_entity='edge',
-    entity_name='pharm_to_pharm',
-    data_key='e'
-)
-
-Modality.register(MODALITY_REGISTER,
     name='prot_atom',
     group='protein_structure',
     graph_entity='node',
     entity_name='prot_atom',
+    data_key='x'
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='npnde_x',
+    group='protein_structure',
+    graph_entity='node',
+    entity_name='npnde',
     data_key='x'
 )
 

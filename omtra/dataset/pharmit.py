@@ -147,7 +147,7 @@ class PharmitDataset(ZarrDataset):
 
             # fetch the target data from the graph object
             g_data_loc = g.nodes if modality.graph_entity == 'node' else g.edges
-            target_data = g_data_loc[modality.entity_name][f'{modality.data_key}_1_true']
+            target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
 
             # if the prior is masked, we need to pass the number of categories for this modality to the prior function
             if prior_name == 'masked':
@@ -164,7 +164,7 @@ class PharmitDataset(ZarrDataset):
                 prior_sample[~upper_edge_mask] = prior_sample[upper_edge_mask]
 
             # add the prior sample to the graph
-            g_data_loc[modality.entity_name][f'{modality.data_key}_0'] = prior_sample
+            g_data_loc[modality.entity_name].data[f'{modality.data_key}_0'] = prior_sample
 
         return g
     
@@ -198,7 +198,7 @@ class PharmitDataset(ZarrDataset):
         # indexes into the graph_lookup array, not a node/edge data array
 
         node_types = ['lig']
-        if 'pharmacophore' in task.modgroups_present:
+        if 'pharmacophore' in task.groups_present:
             node_types.append('pharm')
 
         node_counts = []

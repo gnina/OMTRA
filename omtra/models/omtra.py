@@ -1,11 +1,12 @@
 import torch
 import pytorch_lightning as pl
 import dgl
-from typing import Dict, List
+from typing import Dict, List, Callable, Tuple
 from collections import defaultdict
 import wandb
 import itertools
 import numpy as np
+from functools import partial
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph.utils import get_batch_idxs, get_upper_edge_mask
@@ -13,7 +14,8 @@ from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
 from omtra.constants import lig_atom_type_map, ph_idx_to_type
-import omtra.models.conditional_paths as cond_paths
+from omtra.models.conditional_paths.path_factory import get_conditional_path_fns
+from omegaconf import DictConfig
 
 class OMTRA(pl.LightningModule):
 
@@ -21,11 +23,15 @@ class OMTRA(pl.LightningModule):
       task_phases,
       task_dataset_coupling,
       dists_file: str,
-      total_loss_weights: Dict[str, float] = {},            
+      graph_config: DictConfig,
+      conditional_paths: DictConfig,  
+      total_loss_weights: Dict[str, float] = {},          
     ):
         super().__init__()
 
         self.dists_file = dists_file
+        self.graph_config = graph_config
+        self.conditional_path_config = conditional_paths
         
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -54,14 +60,10 @@ class OMTRA(pl.LightningModule):
         dists_dict = np.load(self.dists_file)
         lig_c_idx_to_val = dists_dict['p_tcv_c_space'] # a list of unique charges that appear in the dataset
         self.n_categories_dict = {
-            'lig': {
-                'a': len(lig_atom_type_map),
-                'c': len(lig_c_idx_to_val),
-                'e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
-            },
-            'pharm': {
-                'a': len(ph_idx_to_type),
-            }
+            'lig_a': len(lig_atom_type_map),
+            'lig_c': len(lig_c_idx_to_val),
+            'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
+            'pharm_a': len(ph_idx_to_type),
         }
 
     def training_step(self, batch_data, batch_idx):
@@ -113,7 +115,7 @@ class OMTRA(pl.LightningModule):
 
         # sample conditional path
         task_class: Task = task_name_to_class(task_name) 
-        g = self.sample_conditional_path(g, task_class, t)
+        g = self.sample_conditional_path(g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask)
 
 
     def configure_optimizers(self):
@@ -127,67 +129,46 @@ class OMTRA(pl.LightningModule):
             node_batch_idxs: Dict[str, torch.Tensor],
             edge_batch_idxs: Dict[str, torch.Tensor],
             lig_ue_mask: torch.Tensor
-    ):
-        # sample the conditional path
-        
-
+    ):  
         # TODO: support arbitrary alpha and beta functions, independently for each modality
         modalities_generated = task_class.modalities_generated
-        alpha_t = {modality: t for modality in modalities_generated}
-        beta_t = {modality: 1-t for modality in modalities_generated}
+        alpha_t = {modality.name: t for modality in modalities_generated}
+        beta_t = {modality.name: 1-t for modality in modalities_generated}
 
-        for modality_name in modalities_generated:
+        # for all modalities being generated, sample the conditional path
+        conditonal_path_fns = get_conditional_path_fns(task_class, self.conditional_path_config)
+        for modality_name in conditonal_path_fns:
             modality: Modality = name_to_modality(modality_name)
+            conditional_path_name, conditional_path_fn = conditonal_path_fns[modality_name]
 
-        # interpolate ligand positions (ligand, continuous)
-        if 'ligand_structure' in task_class.modgroups_present:
-            g.nodes['lig'].data['x_t'] = cond_paths.sample_continuous_interpolant(
-                x_0=g.nodes['lig'].data['x_0'], 
-                x_1=g.nodes['lig'].data['x_1_true'], 
-                alpha_t=alpha_t['ligand_structure_x'][node_batch_idxs['lig']], 
-                beta_t=beta_t['ligand_structure_x'][node_batch_idxs['lig']]
-            )
-    
-        # TODO: only supporting masked CTMC modeling
-        generating_lig_identity = 'ligand_identity' not in task_class.observed_at_t0 and 'ligand_identity' in task_class.observed_at_t1
-        if generating_lig_identity:
-            for mod in 'ace':
-                data_src = g.edges if mod == 'e' else g.nodes
-                batch_idxs = edge_batch_idxs['lig_to_lig'] if mod == 'e' else node_batch_idxs['lig']
-                data_src.data[f'{mod}_t'] = cond_paths.sample_masked_ctmc(
-                    x_1=data_src.data[f'{mod}_1_true'],
-                    p_mask=alpha_t[f'ligand_identity_{mod}'][batch_idxs],
-                    n_categories=self.n_categories_dict['lig'][mod],
-                    ue_mask=lig_ue_mask if mod == 'e' else None
-                )
-        elif 'ligand_identity' in task_class.modgroups_present:
-            # ligand identity is not being generated but it is in the system; so it is therefore conditiioning information
-            for mod in 'ace':
-                data_src = g.edges if mod == 'e' else g.nodes
-                data_src.data[f'{mod}_t'] = data_src.data[f'{mod}_1_true']
+            data_src = g.edges if modality.graph_entity == 'edge' else g.nodes
+            dk = modality.data_key
+            source = data_src[modality.entity_name].data[f'{dk}_0']
+            target = data_src[modality.entity_name].data[f'{dk}_1_true']
 
-        # TODO: for now, assuming pharmacophores are entirely generated or held fixed
-        pharmacophore_present = 'pharmacophore' in task_class.modgroups_present
-        generating_pharmacophore = 'pharmacophore' not in task_class.observed_at_t0 and 'pharmacophore' in task_class.observed_at_t1
-        if generating_pharmacophore:
-            for mod in 'xv':
-                # sample paths for continuous pharmacophore modalities
-                g.nodes['pharm'].data[f'{mod}_t'] = cond_paths.sample_continuous_interpolant(
-                    x_0=g.nodes['pharm'].data[f'{mod}_0'],
-                    x_1=g.nodes['pharm'].data[f'{mod}_1_true'],
-                    alpha_t=alpha_t[f'pharmacophore_{mod}'][node_batch_idxs['pharm']],
-                    beta_t=beta_t[f'pharmacophore_{mod}'][node_batch_idxs['pharm']]
-                )
-            # sample masked CTMC for pharmacophore types
-            g.nodes['pharm'].data['a_t'] = cond_paths.sample_masked_ctmc(
-                x_1=g.nodes['pharm'].data['a_1_true'],
-                p_mask=alpha_t['pharmacophore_a'][node_batch_idxs['pharm']],
-                n_categories=self.n_categories_dict['pharm']['a']
-            )
-        elif pharmacophore_present:
-            # pharmacophores are present but not being generated; they are fixed conditioning information
-            for mod in 'xav':
-                g.nodes['pharm'].data[f'{mod}_t'] = g.nodes['pharm'].data[f'{mod}_1_true']
+            if modality.graph_entity == 'edge':
+                conditional_path_fn = partial(conditional_path_fn, ue_mask=lig_ue_mask)
 
-        if 'protein' in task_class.modgroups_present:
-            raise NotImplementedError("Protein structure is not yet supported in the generative process")
+            if conditional_path_name == 'ctmc_mask':
+                n_categories = self.n_categories_dict[modality_name]
+                conditional_path_fn = partial(conditional_path_fn, n_categories=n_categories)
+
+            # expand alpha_t and beta_t for the nodes/edges
+            if modality.graph_entity == 'node':
+                batch_idxs = node_batch_idxs[modality.entity_name]
+            else:
+                batch_idxs = edge_batch_idxs[modality.entity_name]
+            alpha_t_modality = alpha_t[modality_name][batch_idxs].unsqueeze(-1)
+            beta_t_modality = beta_t[modality_name][batch_idxs].unsqueeze(-1)
+
+            data_src[modality.entity_name].data[f'{dk}_t'] = \
+                conditional_path_fn(source, target, alpha_t_modality, beta_t_modality)
+            
+        # for all modalities held fixed, convert the true values to the current time
+        for modality_name in task_class.modalities_fixed:
+            modality: Modality = name_to_modality(modality_name)
+            data_src = g.edges if modality.is_edge else g.nodes
+            dk = modality.data_key
+            data_src.data[f'{dk}_t'] = data_src.data[f'{dk}_1_true']
+
+        return g

@@ -9,7 +9,7 @@ import omtra.tasks.cond_path_collections as cpc
 
 from omtra.tasks.register import register_task
 import omtra.tasks.modalities as modal
-from omtra.tasks.modalities import Modality
+from omtra.tasks.modalities import Modality, name_to_modality
    
 class Task:
 
@@ -24,7 +24,8 @@ class Task:
     @classproperty
     def modalities_generated(self) -> List[Modality]:
         modalities = []
-        for modality in modal.MODALITY_ORDER:
+        for modality_name in modal.MODALITY_ORDER:
+            modality = name_to_modality(modality_name)
             if modality.group in self.groups_generated:
                 modalities.append(modality)
         return modalities
@@ -119,16 +120,28 @@ class FlexibleDocking(Task):
         'type': 'target_dependent_gaussian',
     }
 
-@register_task("apo_conditioned_ligand_docking")
-class ApoConditionedLigandDocking(Task):
-    """Docking a ligand into the protein structure, assuming knowledge of the apo protein structure at t=0"""
+@register_task("expapo_conditioned_ligand_docking")
+class ExpApoConditionedLigandDocking(Task):
+    """Docking a ligand into the protein structure, protein structure is an experimentally determined apo structure at t=0."""
     groups_fixed = ['ligand_identity']
     groups_generated = ['ligand_structure', 'protein_structure']
 
     priors = deepcopy(pc.ligand_conformer)
-    priors['protein'] = {
-        'type': 'data_prior', # in this case the prior is an actual apo structure itself; a sample from a data distribution
+    priors['prot_atom'] = {
+        'type': 'apo_exp',
     }
+
+@register_task("predapo_conditioned_ligand_docking")
+class PredApoConditionedLigandDocking(Task):
+    """Docking a ligand into the protein structure, protein structure is a predicted apo structure at t=0."""
+    groups_fixed = ['ligand_identity']
+    groups_generated = ['ligand_structure', 'protein_structure']
+
+    priors = deepcopy(pc.ligand_conformer)
+    priors['prot_atom'] = {
+        'type': 'apo_pred',
+    }
+
 
 ##
 # Tasks with ligand+protein+pharmacophore
@@ -139,32 +152,12 @@ class ProteinLigandPharmacophoreDeNovo(Task):
     groups_generated = ['protein_structure', 'ligand_identity', 'ligand_structure', 'pharmacophore']
 
     priors = dict(**pc.denovo_ligand, **pc.denovo_pharmacophore)
-    priors['protein'] = {
+    priors['prot_atom'] = {
         'type': 'target_dependent_gaussian',
     }
 
-@register_task("apo_conditioned_denovo_ligand_pharmacophore")
-class ApoConditionedDeNovoLigandPharmacophore(Task):
-    groups_fixed = []
-    groups_generated = ['ligand_identity', 'ligand_structure', 'pharmacophore', 'protein_structure']
 
-    priors = dict(**pc.denovo_ligand, **pc.denovo_pharmacophore)
-    priors['protein'] = {
-        'type': 'data_prior', # in this case the prior is an actual apo structure itself; a sample from a data distribution
-    }
-
-# TODO: have a think about these guys
-# @register_task("unconditional_ligand_docking_pharmacophore")
-# class UnconditionalLigandDockingPharmacophore(Task):
-#     """Docking a ligand into the protein while generating a pharmacophore, assuming no knowledge of the protein structure at t=0"""
-#     groups_fixed = ['ligand_identity']
-#     groups_generated = ['ligand_structure', 'pharmacophore', 'protein_structure']
-
-# @register_task("apo_conditioned_ligand_docking_pharmacophore")
-# class ApoConditionedLigandDockingPharmacophore(Task):
-#     """Docking a ligand into the protein while generating a pharmacophore, assuming knowledge of the apo protein structure at t=0"""
-#     groups_fixed = ['ligand_identity']
-#     groups_generated = ['ligand_structure', 'pharmacophore', 'protein_structure']
+# TODO: there could be more protein+ligand+pharmacophore tasks but that is a future decision
 
 ## 
 # Tasks with protein+pharmacophore and no ligand
@@ -179,14 +172,15 @@ class ProteinPharmacophore(Task):
         'type': 'target_dependent_gaussian',
     }
 
-@register_task("apo_conditioned_protein_pharmacophore")
-class ApoConditionedProteinPharmacophore(Task):
+@register_task("expapo_conditioned_protein_pharmacophore")
+class ExpApoConditionedProteinPharmacophore(Task):
+    """Generate a pharmacophore from an experimentally determined apo protein structure at t=0"""
     groups_fixed = []
     groups_generated = ['protein_structure', 'pharmacophore']
 
     priors = deepcopy(pc.denovo_pharmacophore)
     priors['protein'] = {
-        'type': 'data_prior', # in this case the prior is an actual apo structure itself; a sample from a data distribution
+        'type': 'apo_exp',
     }
 
 

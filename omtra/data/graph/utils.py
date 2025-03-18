@@ -26,14 +26,16 @@ def get_edge_batch_idxs_etype(g: dgl.DGLHeteroGraph, etype: str):
     return edge_batch_idx
 
 def get_node_batch_idxs(g: dgl.DGLHeteroGraph):
-     node_batch_idxs = {}
-     for ntype in g.ntypes:
-            node_batch_idxs[ntype] = get_node_batch_idxs_ntype(g, ntype)
+    node_batch_idxs = {}
+    for ntype in g.ntypes:
+        node_batch_idxs[ntype] = get_node_batch_idxs_ntype(g, ntype)
+    return node_batch_idxs
 
 def get_edge_batch_idxs(g: dgl.DGLHeteroGraph):
     edge_batch_idxs = {}
     for etype in g.etypes:
         edge_batch_idxs[etype] = get_edge_batch_idxs_etype(g, etype)
+    return edge_batch_idxs
 
 def get_batch_idxs(g: dgl.DGLHeteroGraph) -> Tuple[dict, dict]:
     """Returns two tensors of integers indicating which molecule each node and edge belongs to."""
