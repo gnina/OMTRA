@@ -79,11 +79,26 @@ Modality.register(MODALITY_REGISTER,
 )
 
 Modality.register(MODALITY_REGISTER,
-    name='prot_atom',
+    name='prot_atom_x',
     group='protein_structure',
     graph_entity='node',
     entity_name='prot_atom',
     data_key='x'
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='prot_atom_element',
+    group='protein_identity',
+    graph_entity='node',
+    entity_name='prot_atom',
+    data_key='e'
+)
+Modality.register(MODALITY_REGISTER,
+    name='prot_atom_name',
+    group='protein_identity',
+    graph_entity='node',
+    entity_name='prot_atom',
+    data_key='a'
 )
 
 Modality.register(MODALITY_REGISTER,
@@ -92,6 +107,31 @@ Modality.register(MODALITY_REGISTER,
     graph_entity='node',
     entity_name='npnde',
     data_key='x'
+)
+
+# TODO: how do we model npndes in our graphs?
+Modality.register(MODALITY_REGISTER,
+    name='npnde_a',
+    group='protein_identity',
+    graph_entity='node',
+    entity_name='npnde',
+    data_key='a'
+)
+Modality.register(MODALITY_REGISTER,
+    name='npnde_c',
+    group='protein_identity',
+    graph_entity='node',
+    entity_name='npnde',
+    data_key='c'
+)
+
+# TODO: is it really necessary to model bond orders in npndes? maybe just sparse?
+Modality.register(MODALITY_REGISTER,
+    name='npnde_e',
+    group='protein_identity',
+    graph_entity='edge',
+    entity_name='npnde_to_npnde',
+    data_key='e'
 )
 
 MODALITY_ORDER = [modality.name for modality in MODALITY_REGISTER.values()]
