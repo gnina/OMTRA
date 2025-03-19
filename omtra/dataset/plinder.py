@@ -7,11 +7,10 @@ from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
     ph_idx_to_type,
-    aa_3to1,
     aa_substitutions,
-    aa_atom_index,
     residue_map,
     protein_element_map,
+    protein_atom_map,
 )
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders
@@ -54,6 +53,7 @@ class PlinderDataset(ZarrDataset):
             element: i for i, element in enumerate(protein_element_map)
         }
         self.encode_residue = {res: i for i, res in enumerate(residue_map)}
+        self.encode_atom = {atom: i for i, atom in enumerate(protein_atom_map)}
         self.n_categories_dict = {
             'lig_a': len(lig_atom_type_map),
             'lig_c': len(lig_c_idx_to_val),
@@ -363,14 +363,10 @@ class PlinderDataset(ZarrDataset):
         # TODO: encode atom_names
         encoded_atom_names = []
         for i, atom_name in enumerate(atom_names):
-            res_name = res_names[i]
-            res_code = aa_3to1.get(res_name) or aa_3to1.get(
-                aa_substitutions.get(res_name)
-            )
-            if not res_code:
-                encoded_atom_names.append(-1)
-                continue
-            atom_code = aa_atom_index.get(res_code).get(atom_name, -1)
+            if atom_name in self.encode_atom:
+                atom_code = self.encode_atom[atom_name]
+            else:
+                atom_code = self.encode_atom["UNK"]
             encoded_atom_names.append(atom_code)
         return np.array(encoded_atom_names)
 
@@ -378,7 +374,7 @@ class PlinderDataset(ZarrDataset):
         # TODO: encode elements
         encoded_elements = []
         for element in elements:
-            code = self.encode_element.get(element, -1)
+            code = self.encode_element[element]
             encoded_elements.append(code)
         return np.array(encoded_elements)
 
@@ -387,8 +383,8 @@ class PlinderDataset(ZarrDataset):
         encoded_residues = []
         for res in res_names:
             if res not in self.encode_residue:
-                sub = aa_substitutions.get(res)
-                code = self.encode_residue.get(sub, -1)
+                sub = aa_substitutions.get(res, "UNK")
+                code = self.encode_residue[sub]
             else:
                 code = self.encode_residue[res]
             encoded_residues.append(code)
