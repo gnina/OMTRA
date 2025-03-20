@@ -7,11 +7,204 @@ from typing import List, Tuple, Union, Dict
 from functools import partial
 import math
 
-from omtra.models.flowmol_gvp import GVP, GVPDropout, GVPLayerNorm, _norm_no_nan, _rbf
-from omtra.graph import to_canonical_etype
+from omtra.data.graph import to_canonical_etype
 
 
-class HeteroGVPConv(nn.module):
+# most taken from flowmol gvp (moreflowmol branch)
+# heteroconv adapted from GVPConv in flowmol gvp 
+
+# helper functions
+def exists(val):
+    return val is not None
+
+def _norm_no_nan(x, axis=-1, keepdims=False, eps=1e-8, sqrt=True):
+    '''
+    L2 norm of tensor clamped above a minimum value `eps`.
+    
+    :param sqrt: if `False`, returns the square of the L2 norm
+    '''
+    out = torch.clamp(torch.sum(torch.square(x), axis, keepdims), min=eps)
+    return torch.sqrt(out) if sqrt else out
+
+def _rbf(D, D_min=0., D_max=20., D_count=16):
+    '''
+    From https://github.com/jingraham/neurips19-graph-protein-design
+    
+    Returns an RBF embedding of `torch.Tensor` `D` along a new axis=-1.
+    That is, if `D` has shape [...dims], then the returned tensor will have
+    shape [...dims, D_count].
+    '''
+    device = D.device
+    D_mu = torch.linspace(D_min, D_max, D_count, device=device)
+    D_mu = D_mu.view([1, -1])
+    D_sigma = (D_max - D_min) / D_count
+    D_expand = torch.unsqueeze(D, -1)
+
+    RBF = torch.exp(-((D_expand - D_mu) / D_sigma) ** 2)
+    return RBF
+
+# the classes GVP, GVPDropout, and GVPLayerNorm are taken from lucidrains' geometric-vector-perceptron repository
+# https://github.com/lucidrains/geometric-vector-perceptron/tree/main
+# some adaptations have been made to these classes to make them more consistent with the original GVP paper/implementation
+# specifically, using _norm_no_nan instead of torch's built in norm function, and the weight intialiation scheme for Wh and Wu
+
+class GVP(nn.Module):
+    def __init__(
+        self,
+        dim_vectors_in,
+        dim_vectors_out,
+        dim_feats_in,
+        dim_feats_out,
+        n_cp_feats = 0, # number of cross-product features added to hidden vector features
+        hidden_vectors = None,
+        feats_activation = nn.SiLU(),
+        vectors_activation = nn.Sigmoid(),
+        vector_gating = True,
+        xavier_init = False
+    ):
+        super().__init__()
+        self.dim_vectors_in = dim_vectors_in
+        self.dim_feats_in = dim_feats_in
+        self.n_cp_feats = n_cp_feats
+
+        self.dim_vectors_out = dim_vectors_out
+        dim_h = max(dim_vectors_in, dim_vectors_out) if hidden_vectors is None else hidden_vectors
+
+        # create Wh matrix
+        wh_k = 1/math.sqrt(dim_vectors_in)
+        self.Wh = torch.zeros(dim_vectors_in, dim_h, dtype=torch.float32).uniform_(-wh_k, wh_k)
+        self.Wh = nn.Parameter(self.Wh)
+
+        # create Wcp matrix if we are using cross-product features
+        if n_cp_feats > 0:
+            wcp_k = 1/math.sqrt(dim_vectors_in)
+            self.Wcp = torch.zeros(dim_vectors_in, n_cp_feats*2, dtype=torch.float32).uniform_(-wcp_k, wcp_k)
+            self.Wcp = nn.Parameter(self.Wcp)
+
+        # create Wu matrix
+        if n_cp_feats > 0: # the number of vector features going into Wu is increased by n_cp_feats if we are using cross-product features
+            wu_in_dim = dim_h + n_cp_feats
+        else:
+            wu_in_dim = dim_h
+        wu_k = 1/math.sqrt(wu_in_dim)
+        self.Wu = torch.zeros(wu_in_dim, dim_vectors_out, dtype=torch.float32).uniform_(-wu_k, wu_k)
+        self.Wu = nn.Parameter(self.Wu)
+
+        self.vectors_activation = vectors_activation
+
+        self.to_feats_out = nn.Sequential(
+            nn.Linear(dim_h + n_cp_feats + dim_feats_in, dim_feats_out),
+            feats_activation
+        )
+
+        # branching logic to use old GVP, or GVP with vector gating
+        if vector_gating:
+            self.scalar_to_vector_gates = nn.Linear(dim_feats_out, dim_vectors_out)
+            if xavier_init:
+                nn.init.xavier_uniform_(self.scalar_to_vector_gates.weight, gain=1)
+                nn.init.constant_(self.scalar_to_vector_gates.bias, 0)
+        else:
+            self.scalar_to_vector_gates = None
+
+        # self.scalar_to_vector_gates = nn.Linear(dim_feats_out, dim_vectors_out) if vector_gating else None
+
+    def forward(self, data):
+        feats, vectors = data
+        b, n, _, v, c  = *feats.shape, *vectors.shape
+
+        # feats has shape (batch_size, n_feats)
+        # vectors has shape (batch_size, n_vectors, 3)
+
+        assert c == 3 and v == self.dim_vectors_in, 'vectors have wrong dimensions'
+        assert n == self.dim_feats_in, 'scalar features have wrong dimensions'
+
+        Vh = einsum('b v c, v h -> b h c', vectors, self.Wh) # has shape (batch_size, dim_h, 3)
+        
+        # if we are including cross-product features, compute them here
+        if self.n_cp_feats > 0:
+            # convert dim_vectors_in vectors to n_cp_feats*2 vectors
+            Vcp = einsum('b v c, v p -> b p c', vectors, self.Wcp) # has shape (batch_size, n_cp_feats*2, 3)
+            # split the n_cp_feats*2 vectors into two sets of n_cp_feats vectors
+            cp_src, cp_dst = torch.split(Vcp, self.n_cp_feats, dim=1) # each has shape (batch_size, n_cp_feats, 3)
+            # take the cross product of the two sets of vectors
+            cp = torch.linalg.cross(cp_src, cp_dst, dim=-1) # has shape (batch_size, n_cp_feats, 3)
+
+            # add the cross product features to the hidden vector features
+            Vh = torch.cat((Vh, cp), dim=1) # has shape (batch_size, dim_h + n_cp_feats, 3)
+
+        Vu = einsum('b h c, h u -> b u c', Vh, self.Wu) # has shape (batch_size, dim_vectors_out, 3)
+
+        sh = _norm_no_nan(Vh)
+
+        s = torch.cat((feats, sh), dim = 1)
+
+        feats_out = self.to_feats_out(s)
+
+        if exists(self.scalar_to_vector_gates):
+            gating = self.scalar_to_vector_gates(feats_out)
+            gating = gating.unsqueeze(dim = -1)
+        else:
+            gating = _norm_no_nan(Vu)
+
+        vectors_out = self.vectors_activation(gating) * Vu
+
+        # if torch.isnan(feats_out).any() or torch.isnan(vectors_out).any():
+        #     raise ValueError("NaNs in GVP forward pass")
+
+        return (feats_out, vectors_out)
+    
+class _VDropout(nn.Module):
+    '''
+    Vector channel dropout where the elements of each
+    vector channel are dropped together.
+    '''
+    def __init__(self, drop_rate):
+        super(_VDropout, self).__init__()
+        self.drop_rate = drop_rate
+        self.dummy_param = nn.Parameter(torch.empty(0))
+
+    def forward(self, x):
+        '''
+        :param x: `torch.Tensor` corresponding to vector channels
+        '''
+        device = self.dummy_param.device
+        if not self.training:
+            return x
+        mask = torch.bernoulli(
+            (1 - self.drop_rate) * torch.ones(x.shape[:-1], device=device)
+        ).unsqueeze(-1)
+        x = mask * x / (1 - self.drop_rate)
+        return x
+    
+class GVPDropout(nn.Module):
+    """ Separate dropout for scalars and vectors. """
+    def __init__(self, rate):
+        super().__init__()
+        self.vector_dropout = _VDropout(rate)
+        self.feat_dropout = nn.Dropout(rate)
+
+    def forward(self, feats, vectors):
+        return self.feat_dropout(feats), self.vector_dropout(vectors)
+
+
+class GVPLayerNorm(nn.Module):
+    """ Normal layer norm for scalars, nontrainable norm for vectors. """
+    def __init__(self, feats_h_size, eps = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.feat_norm = nn.LayerNorm(feats_h_size)
+
+    def forward(self, data):
+        feats, vectors = data
+
+        normed_feats = self.feat_norm(feats)
+
+        vn = _norm_no_nan(vectors, axis=-1, keepdims=True, sqrt=False)
+        vn = torch.sqrt(torch.mean(vn, dim=-2, keepdim=True) + self.eps ) + self.eps
+        normed_vectors = vectors / vn
+        return normed_feats, normed_vectors
+
+class HeteroGVPConv(nn.Module):
     def __init__(
         self,
         node_types: List[str],
