@@ -30,6 +30,7 @@ from omtra.data.plinder import (
 from typing import List, Dict, Tuple, Any, Optional
 import pandas as pd
 import numpy as np
+import functools
 
 
 class PlinderDataset(ZarrDataset):
@@ -38,8 +39,8 @@ class PlinderDataset(ZarrDataset):
         split: str,
         processed_data_dir: str,
         graphs_per_chunk: int = 1,
-        graph_config: DictConfig = None,
-        prior_config: DictConfig = None,
+        graph_config: Optional[DictConfig] = None,
+        prior_config: Optional[DictConfig] = None,
         include_pharmacophore: bool = False,
     ):
         super().__init__(split, processed_data_dir)
@@ -94,7 +95,7 @@ class PlinderDataset(ZarrDataset):
             is_covalent = False
             if npnde_info["linkages"]:
                 is_covalent = True
-
+            
             npndes[key] = LigandData(
                 sdf=npnde_info["lig_sdf"],
                 ccd=npnde_info["ccd"],
@@ -109,12 +110,12 @@ class PlinderDataset(ZarrDataset):
                     "npnde/bond_types", int(bond_start), int(bond_end)
                 )
                 if bond_start is not None and bond_end is not None
-                else None,
+                else np.zeros((0,), dtype=np.int32),
                 bond_indices=self.slice_array(
                     "npnde/bond_indices", int(bond_start), int(bond_end)
                 )
                 if bond_start is not None and bond_end is not None
-                else None,
+                else np.zeros((0, 2), dtype=np.int32),
             )
         return npndes
 
@@ -351,7 +352,12 @@ class PlinderDataset(ZarrDataset):
             ligand_id=system_info["ligand_id"],
             receptor=receptor,
             ligand=ligand,
-            pharmacophore=pharmacophore if self.include_pharmacophore else None,
+            pharmacophore=pharmacophore if self.include_pharmacophore else PharmacophoreData(
+                coords=np.zeros((0, 3), dtype=np.float32),
+                types=np.zeros((0,), dtype=np.int32),
+                vectors=np.zeros((0, 3), dtype=np.float32),
+                interactions=np.zeros((0,), dtype=bool),
+            ),
             pocket=pocket,
             npndes=npndes,
             link_type=link_type,
@@ -394,7 +400,7 @@ class PlinderDataset(ZarrDataset):
         self,
         link: StructureData,
         modality_name: str,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         if modality_name == 'prot_atom_x':
             x_0 = torch.from_numpy(link.coords).float()
         elif modality_name == 'prot_res':
@@ -496,7 +502,7 @@ class PlinderDataset(ZarrDataset):
         self,
         ligand: LigandData,
         ligand_id: str,
-        receptor: StructureData = None,
+        receptor: Optional[StructureData] = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -658,7 +664,7 @@ class PlinderDataset(ZarrDataset):
     def convert_npndes(
         self,
         npndes: Dict[str, LigandData],
-        receptor: StructureData = None,
+        receptor: Optional[StructureData] = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -897,7 +903,7 @@ class PlinderDataset(ZarrDataset):
         edge_data.update(lig_edge_data)
 
         npnde_node_data, npnde_edge_idxs, npnde_edge_data = self.convert_npndes(
-            system.npndes
+            system.npndes if system.npndes is not None else {}
         )
         node_data.update(npnde_node_data)
         edge_idxs.update(npnde_edge_idxs)
@@ -937,7 +943,10 @@ class PlinderDataset(ZarrDataset):
             g_data_loc = g.nodes if modality.graph_entity == 'node' else g.edges
             
             if 'apo' in prior_name:
-                target_data = self.get_link_coords(system.link, modality_name)
+                if system.link is not None:
+                    target_data = self.get_link_coords(system.link, modality_name)
+                else:
+                    raise ValueError("system.link is None, cannot retrieve link coordinates.")
             else:
                 print(modality.entity_name)
                 target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
@@ -989,7 +998,7 @@ class PlinderDataset(ZarrDataset):
         # indexes into the system_lookup array, not a node/edge data array
 
         node_types = ["lig", "prot_atom", "prot_res", "npnde"]
-        if "pharmacophore" in task.modalities_present:
+        if "pharmacophore" in task.groups_present:
             node_types.append("pharm")
 
         node_counts = []

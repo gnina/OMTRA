@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 from typing import Any, Dict, List, Optional, Tuple
 
+import biotite
 import biotite.structure as struc
 import biotite.structure.io.pdb as pdb
 import numpy as np
@@ -53,7 +54,7 @@ class SystemProcessor:
     def __init__(
         self,
         system_id: str,
-        link_type: str = None,
+        link_type: Optional[str] = None,
         ligand_atom_map: List[str] = lig_atom_type_map,
         npnde_atom_map: List[str] = npnde_atom_type_map,
         pocket_cutoff: float = 8.0,

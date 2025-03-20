@@ -29,7 +29,7 @@ class MolXACE:
 class MoleculeTensorizer():
     """Class for converting RDKit molecules to tensors for use in graph neural networks."""
 
-    def __init__(self, atom_map: str, n_cpus=1):
+    def __init__(self, atom_map: List[str], n_cpus=1):
         self.n_cpus = n_cpus
         self.atom_map = atom_map
         self.atom_map_dict = {atom: i for i, atom in enumerate(atom_map)}

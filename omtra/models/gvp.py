@@ -3,7 +3,7 @@ from torch import nn, einsum
 import dgl
 import dgl.function as fn
 from dgl.nn.functional import edge_softmax
-from typing import List, Tuple, Union, Dict
+from typing import List, Tuple, Union, Dict, Optional
 from functools import partial
 import math
 
@@ -217,15 +217,15 @@ class HeteroGVPConv(nn.Module):
         n_message_gvps: int = 1,
         n_update_gvps: int = 1,
         attention: bool = False,
-        s_message_dim: int = None,
-        v_message_dim: int = None,
+        s_message_dim: int = 128,
+        v_message_dim: int = 16,
         n_heads: int = 1,
         n_expansion_gvps: int = 1,
         use_dst_feats: bool = False,
         dst_feat_msg_reduction_factor: float = 4.0,
         rbf_dmax: float = 20,
         rbf_dim: int = 16,
-        edge_feat_size: Dict[str, int] = None,
+        edge_feat_size: Optional[Dict[str, int]] = None,
         message_norm: Union[float, str] = 10,
         dropout: float = 0.0,
     ):
@@ -327,6 +327,7 @@ class HeteroGVPConv(nn.Module):
             extra_scalar_feats = 0
 
         if use_dst_feats:
+            self.dst_feat_msg_projection = nn.ModuleDict()
             if dst_feat_msg_reduction_factor != 1:
                 s_dst_feats_for_messages = int(
                     self.s_message_dim / dst_feat_msg_reduction_factor
@@ -334,7 +335,6 @@ class HeteroGVPConv(nn.Module):
                 v_dst_feats_for_messages = int(
                     self.v_message_dim / dst_feat_msg_reduction_factor
                 )
-                self.dst_feat_msg_projection = nn.ModuleDict()
                 for ntype in self.node_types:
                     self.dst_feat_msg_projection[ntype] = GVP(
                         dim_vectors_in=self.v_message_dim,
@@ -348,7 +348,7 @@ class HeteroGVPConv(nn.Module):
             else:
                 s_dst_feats_for_messages = self.s_message_dim
                 v_dst_feats_for_messages = self.v_message_dim
-                self.dst_feat_msg_projection = nn.Identity()
+                self.dst_feat_msg_projection[ntype] = nn.Identity()
         else:
             s_dst_feats_for_messages = 0
             v_dst_feats_for_messages = 0
@@ -492,10 +492,10 @@ class HeteroGVPConv(nn.Module):
         scalar_feats: Dict[str, torch.Tensor],
         coord_feats: Dict[str, torch.Tensor],
         vec_feats: Dict[str, torch.Tensor],
-        edge_feats: Dict[str, torch.Tensor] = None,
-        x_diff: Dict[str, torch.Tensor] = None,
-        d: torch.Tensor = None,
-        passing_edges: List[str] = None,
+        edge_feats: Optional[Dict[str, torch.Tensor]] = None,
+        x_diff: Optional[Dict[str, torch.Tensor]] = None,
+        d: Optional[Dict[str, torch.Tensor]] = None,
+        passing_edges: Optional[List[str]] = None,
     ):
         # vec_feat has shape (n_nodes, n_vectors, 3)
 
@@ -519,7 +519,7 @@ class HeteroGVPConv(nn.Module):
             for etype in self.edge_types:
                 if x_diff is not None and d is not None:
                     g.edges[etype].data["x_diff"] = x_diff[etype]
-                    g.edges[etype]["d"] = d[etype]
+                    g.edges[etype].data["d"] = d[etype]
                 if "x_diff" not in g.edges[etype].data:
                     # get vectors between node positions
                     g.apply_edges(fn.u_sub_v("x", "x", "x_diff"), etype=etype)
@@ -566,8 +566,8 @@ class HeteroGVPConv(nn.Module):
                     )
                     att_logits = self.att_weight_projection[etype](att_logits)
 
-                    etype_graph = g.edge_type_subgraph([etype])
-                    att_weights = edge_softmax(et_graph, att_logits)
+                    etype_graph = dgl.edge_type_subgraph(g, [etype])
+                    att_weights = edge_softmax(etype_graph, att_logits)
 
                     att_weights = edge_softmax(g, att_logits)
                     s_att_weights = att_weights[:, : self.n_heads]
@@ -595,9 +595,8 @@ class HeteroGVPConv(nn.Module):
                     self.agg_func("m", "vec_msg"),
                 )
 
-            # aggregate messages from every edge
-            g.multi_update_all(scalar_agg_fns)
-            g.multi_update_all(vector_agg_fns)
+            g.multi_update_all(scalar_agg_fns, cross_reducer=self.agg_func)
+            g.multi_update_all(vector_agg_fns, cross_reducer=self.agg_func)
 
             # get aggregated scalar and vector messages
             if isinstance(self.message_norm, str):
