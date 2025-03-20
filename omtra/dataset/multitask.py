@@ -70,6 +70,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                         graph_config=self.graph_config,
                         prior_config=self.prior_config,
                         **single_dataset_config)
+                self.datasets[dataset_name] = plinder_dataset_objects
             else:
                 self.datasets[dataset_name] = dataset_class(
                     split=self.split, 
