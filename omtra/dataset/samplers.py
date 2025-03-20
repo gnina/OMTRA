@@ -84,40 +84,34 @@ class MultiTaskSampler(Sampler):
             task_idxs = tuple(task_idxs.tolist())
             # tasks = [self.tasks[self.task_names[task_idx]] for task_idx in task_idxs]
 
-            chunk_tracker_args = [self.datasets[dataset_name], self.edges_per_batch, self.frac_start, self.frac_end]
+            chunk_tracker_args = [self.edges_per_batch, self.frac_start, self.frac_end]
 
             if dataset_name == 'pharmit':
                 # create a single chunk tracker for all tasks
                 chunk_tracker_idx = len(self.chunk_trackers)
-                self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(*chunk_tracker_args)
+                self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(
+                    self.datasets[dataset_name],
+                    *chunk_tracker_args)
                 for task_idx in task_idxs:
                     self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
 
             elif dataset_name == 'plinder':
-                raise NotImplementedError('logic here needs to modified; there are now separate datasets for plinder with/without apo structures')
-                # divide tasks into those that use the apo state and those that don't
-                # and create separate chunk trackers for each
-                tasks = [self.tasks[self.task_space[task_idx]] for task_idx in task_idxs]
-                tasks_not_using_apo = [task_idx for task_idx, task in zip(task_idxs, tasks) if not task.uses_apo]
-                tasks_using_apo = [task_idx for task_idx, task in zip(task_idxs, tasks) if task.uses_apo]
 
-                # tasks not using apo structures need a separate chunk tracker from those that do
-                if len(tasks_not_using_apo) != 0:
+                for plinder_link_version, plidner_dataset_object in self.datasets[dataset_name].items():
                     chunk_tracker_idx = len(self.chunk_trackers)
-                    self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(*chunk_tracker_args)
-                    for task_idx in tasks_not_using_apo:
-                        self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
-                if len(tasks_using_apo) != 0:
-                    chunk_tracker_idx = len(self.chunk_trackers)
-                    # note a very important feature here! ChunkTracker recieves an extra argument here!
-                    # this enables the chunk tracker to fetch the right subset of chunks from the dataset
                     self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(
-                        *chunk_tracker_args,
-                        apo_systems=True,
+                        plidner_dataset_object,
+                        *chunk_tracker_args
                     )
-                    for task_idx in tasks_using_apo:
-                        self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
+                    # get the tasks that use this plinder link version
+                    task_idxs = []
+                    for task_idx, task_name in enumerate(self.task_space):
+                        task_class = task_name_to_class(task_name)
+                        if task_class.plinder_link_version == plinder_link_version:
+                            task_idxs.append(task_idx)
 
+                    for task_idx in task_idxs:
+                        self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
             else:
                 raise NotImplementedError(f"Dataset {dataset_name} not supported")
 

@@ -37,6 +37,20 @@ class Task:
             if modality.group in self.groups_fixed:
                 modalities.append(modality)
         return modalities
+    
+    @classproperty
+    def plinder_link_version(self) -> str:
+        prot_atom_prior = self.priors.get('prot_atom', None)
+        if prot_atom_prior is None:
+            return None
+        
+        if prot_atom_prior == 'apo_exp':
+            return 'exp'
+        elif prot_atom_prior == 'apo_pred':
+            return 'pred'
+        else:
+            return 'no_links'
+
 
 ##
 # tasks with ligand only

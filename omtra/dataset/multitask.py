@@ -38,17 +38,44 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         self.task_space = td_coupling.task_space
         self.dataset_space = td_coupling.dataset_space
 
+        # loop over tasks that use plinder, infer from the task, which version of plinder is needed
+        plinder_link_versions = set()
+        try:
+            plinder_coupling_idx = self.dataset_space.index('plinder')
+        except ValueError:
+            plinder_coupling_idx = None
+        if plinder_coupling_idx is not None:
+            # get tasks that use plinder
+            p_task_plinder = td_coupling.p_dataset_task[:, :, plinder_coupling_idx]
+            p_task_plinder = p_task_plinder.sum(dim=0) # tensor of shape (len(task_space))
+            tasks_using_plinder = torch.where(p_task_plinder > 0)[0].tolist()
+            for task_idx in tasks_using_plinder:
+                task_name = self.task_space[task_idx]
+                task_class = task_name_to_class(task_name)
+                plinder_link_versions.add(task_class.plinder_link_version)
+
+
         # initialize dataset classes
         self.datasets = {}
         dataset_classes = [dataset_name_to_class[dataset_name] for dataset_name in self.dataset_space]
         for dataset_name, dataset_class in zip(self.dataset_space, dataset_classes):
             single_dataset_config = deepcopy(self.single_dataset_configs[dataset_name])
 
-            self.datasets[dataset_name] = dataset_class(
-                split=self.split, 
-                graph_config=self.graph_config,
-                prior_config=self.prior_config,
-                **single_dataset_config)
+            if dataset_name == 'plinder':
+                plinder_dataset_objects = {}
+                for plinder_link_name in plinder_link_versions:
+                    plinder_dataset_objects[plinder_link_name] = dataset_class(
+                        link_version=plinder_link_name,
+                        split=self.split, 
+                        graph_config=self.graph_config,
+                        prior_config=self.prior_config,
+                        **single_dataset_config)
+            else:
+                self.datasets[dataset_name] = dataset_class(
+                    split=self.split, 
+                    graph_config=self.graph_config,
+                    prior_config=self.prior_config,
+                    **single_dataset_config)
 
 
     def __len__(self):
@@ -59,7 +86,14 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         task_name = self.task_space[task_idx]
 
         task = self.task_space[task_idx]
-        g: dgl.DGLHeteroGraph = self.datasets[self.dataset_space[dataset_idx]][(task_name, local_idx)]
+
+        dataset_obj = self.datasets[self.dataset_space[dataset_idx]]
+        if task.plinder_link_version is not None:
+            # get the plinder link version that this task uses
+            plinder_link_version = task.plinder_link_version
+            dataset_obj = dataset_obj[plinder_link_version]
+            
+        g: dgl.DGLHeteroGraph = dataset_obj[(task_name, local_idx)]
 
         # TODO: task specific transforms
         # TODO: do individual datasets need access to the task name? figure out once implementing __getitem__ for individual datasets
