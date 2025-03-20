@@ -97,10 +97,10 @@ class MultiTaskSampler(Sampler):
 
             elif dataset_name == 'plinder':
 
-                for plinder_link_version, plidner_dataset_object in self.datasets[dataset_name].items():
+                for plinder_link_version, plinder_dataset_object in self.datasets[dataset_name].items():
                     chunk_tracker_idx = len(self.chunk_trackers)
                     self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(
-                        plidner_dataset_object,
+                        plinder_dataset_object,
                         *chunk_tracker_args
                     )
                     # get the tasks that use this plinder link version
