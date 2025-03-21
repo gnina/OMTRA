@@ -105,6 +105,7 @@ class ProteinLigandDeNovo(Task):
     priors['npnde_x'] = {
         'type': 'fixed'
     }
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
     
 
 
@@ -120,6 +121,7 @@ class ExpApoDeNovoLigand(Task):
     priors['npnde_x'] = {
         'type': 'fixed'
     }
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
 
 @register_task("pred_apo_conditioned_denovo_ligand")
 class PredApoDeNovoLigand(ExpApoDeNovoLigand):
@@ -130,6 +132,7 @@ class PredApoDeNovoLigand(ExpApoDeNovoLigand):
     priors['npnde_x'] = {
         'type': 'fixed'
     }
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
 
 @register_task("flexible_docking")
 class FlexibleDocking(Task):
@@ -144,6 +147,7 @@ class FlexibleDocking(Task):
     priors['npnde_x'] = {
         'type': 'fixed'
     }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
 
 @register_task("expapo_conditioned_ligand_docking")
 class ExpApoConditionedLigandDocking(Task):
@@ -158,6 +162,7 @@ class ExpApoConditionedLigandDocking(Task):
     priors['npnde_x'] = { 
         'type': 'fixed'
     }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
 
 @register_task("predapo_conditioned_ligand_docking")
 class PredApoConditionedLigandDocking(Task):
@@ -172,6 +177,7 @@ class PredApoConditionedLigandDocking(Task):
     priors['npnde_x'] = {
         'type': 'fixed'
     }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
 
 
 ##

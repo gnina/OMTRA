@@ -24,6 +24,6 @@ denovo_pharmacophore = {
 }
 
 protein = {
-    'prot_atom': dict(type='continuous_interpolant'),
+    'prot_atom_x': dict(type='continuous_interpolant'),
     'npnde_x': dict(type='continuous_interpolant')
 }
