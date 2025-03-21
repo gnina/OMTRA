@@ -86,7 +86,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         task_idx, dataset_idx, local_idx = index
         task_name = self.task_space[task_idx]
 
-        task = self.task_space[task_idx]
+        task = task_name_to_class(task_name)
 
         dataset_obj = self.datasets[self.dataset_space[dataset_idx]]
         if task.plinder_link_version is not None:

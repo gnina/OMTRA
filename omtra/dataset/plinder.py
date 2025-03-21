@@ -36,6 +36,7 @@ import functools
 class PlinderDataset(ZarrDataset):
     def __init__(
         self,
+        link_version: str,
         split: str,
         processed_data_dir: str,
         graphs_per_chunk: int = 1,
