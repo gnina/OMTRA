@@ -40,13 +40,12 @@ class Task:
     
     @classproperty
     def plinder_link_version(self) -> str:
-        prot_atom_prior = self.priors.get('prot_atom', None)
+        prot_atom_prior = self.priors.get('prot_atom_x', None)
         if prot_atom_prior is None:
             return None
-        
-        if prot_atom_prior == 'apo_exp':
+        if prot_atom_prior['type'] == 'apo_exp':
             return 'exp'
-        elif prot_atom_prior == 'apo_pred':
+        elif prot_atom_prior['type'] == 'apo_pred':
             return 'pred'
         else:
             return 'no_links'
@@ -100,8 +99,11 @@ class ProteinLigandDeNovo(Task):
     groups_generated = ['protein_structure', 'ligand_identity', 'ligand_structure']
 
     priors = deepcopy(pc.denovo_ligand)
-    priors['prot_atom'] = {
+    priors['prot_atom_x'] = {
         'type': 'target_dependent_gaussian',
+    }
+    priors['npnde_x'] = {
+        'type': 'fixed'
     }
     
 
@@ -112,15 +114,21 @@ class ExpApoDeNovoLigand(Task):
     groups_generated = ['ligand_identity', 'ligand_structure', 'protein_structure']
 
     priors = deepcopy(pc.denovo_ligand)
-    priors['prot_atom'] = {
+    priors['prot_atom_x'] = {
         'type': 'apo_exp', # in this case the prior is an actual apo structure itself; a sample from a data distribution
+    }
+    priors['npnde_x'] = {
+        'type': 'fixed'
     }
 
 @register_task("pred_apo_conditioned_denovo_ligand")
 class PredApoDeNovoLigand(ExpApoDeNovoLigand):
     priors = deepcopy(pc.denovo_ligand)
-    priors['prot_atom'] = {
+    priors['prot_atom_x'] = {
         'type': 'apo_pred'
+    }
+    priors['npnde_x'] = {
+        'type': 'fixed'
     }
 
 @register_task("flexible_docking")
@@ -130,8 +138,11 @@ class FlexibleDocking(Task):
     groups_generated = ['ligand_structure', 'protein_structure']
 
     priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom'] = {
+    priors['prot_atom_x'] = {
         'type': 'target_dependent_gaussian',
+    }
+    priors['npnde_x'] = {
+        'type': 'fixed'
     }
 
 @register_task("expapo_conditioned_ligand_docking")
@@ -155,8 +166,11 @@ class PredApoConditionedLigandDocking(Task):
     groups_generated = ['ligand_structure', 'protein_structure']
 
     priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom'] = {
+    priors['prot_atom_x'] = {
         'type': 'apo_pred',
+    }
+    priors['npnde_x'] = {
+        'type': 'fixed'
     }
 
 
@@ -169,7 +183,7 @@ class ProteinLigandPharmacophoreDeNovo(Task):
     groups_generated = ['protein_structure', 'ligand_identity', 'ligand_structure', 'pharmacophore']
 
     priors = dict(**pc.denovo_ligand, **pc.denovo_pharmacophore)
-    priors['prot_atom'] = {
+    priors['prot_atom_x'] = {
         'type': 'target_dependent_gaussian',
     }
 
@@ -185,7 +199,7 @@ class ProteinPharmacophore(Task):
     groups_generated = ['protein_structure', 'pharmacophore']
 
     priors = deepcopy(pc.denovo_pharmacophore)
-    priors['prot_atom'] = {
+    priors['prot_atom_x'] = {
         'type': 'target_dependent_gaussian',
     }
 
@@ -196,7 +210,7 @@ class ExpApoConditionedProteinPharmacophore(Task):
     groups_generated = ['protein_structure', 'pharmacophore']
 
     priors = deepcopy(pc.denovo_pharmacophore)
-    priors['protein'] = {
+    priors['prot_atom_x'] = {
         'type': 'apo_exp',
     }
 

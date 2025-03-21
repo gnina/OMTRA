@@ -158,7 +158,6 @@ class PlinderDataset(ZarrDataset):
                 int(system_info["link_bb_end"]),
             )
         
-
         backbone = BackboneData(
             coords=self.slice_array(
                 "receptor/backbone_coords", backbone_start, backbone_end
@@ -171,24 +170,18 @@ class PlinderDataset(ZarrDataset):
             ),
             chain_ids=self.slice_array(
                 "receptor/backbone_chain_ids", backbone_start, backbone_end
-            ).astype(str),
+            ),
         )
 
         receptor = StructureData(
             coords=self.slice_array("receptor/coords", rec_start, rec_end),
             atom_names=self.slice_array(
                 "receptor/atom_names", rec_start, rec_end
-            ).astype(str),
-            elements=self.slice_array("receptor/elements", rec_start, rec_end).astype(
-                str
             ),
+            elements=self.slice_array("receptor/elements", rec_start, rec_end),
             res_ids=self.slice_array("receptor/res_ids", rec_start, rec_end),
-            res_names=self.slice_array("receptor/res_names", rec_start, rec_end).astype(
-                str
-            ),
-            chain_ids=self.slice_array("receptor/chain_ids", rec_start, rec_end).astype(
-                str
-            ),
+            res_names=self.slice_array("receptor/res_names", rec_start, rec_end),
+            chain_ids=self.slice_array("receptor/chain_ids", rec_start, rec_end),
             backbone_mask=self.slice_array(
                 "receptor/backbone_mask", rec_start, rec_end
             ),
@@ -245,27 +238,27 @@ class PlinderDataset(ZarrDataset):
             ),
             res_names=self.slice_array(
                 "pocket/backbone_res_names", pocket_bb_start, pocket_bb_end
-            ).astype(str),
+            ),
             chain_ids=self.slice_array(
                 "pocket/backbone_chain_ids", pocket_bb_start, pocket_bb_end
-            ).astype(str),
+            ),
         )
 
         pocket = StructureData(
             coords=self.slice_array("pocket/coords", pocket_start, pocket_end),
             atom_names=self.slice_array(
                 "pocket/atom_names", pocket_start, pocket_end
-            ).astype(str),
+            ),
             elements=self.slice_array(
                 "pocket/elements", pocket_start, pocket_end
-            ).astype(str),
+            ),
             res_ids=self.slice_array("pocket/res_ids", pocket_start, pocket_end),
             res_names=self.slice_array(
                 "pocket/res_names", pocket_start, pocket_end
-            ).astype(str),
+            ),
             chain_ids=self.slice_array(
                 "pocket/chain_ids", pocket_start, pocket_end
-            ).astype(str),
+            ),
             backbone_mask=self.slice_array(
                 "pocket/backbone_mask", pocket_start, pocket_end
             ),
@@ -288,26 +281,24 @@ class PlinderDataset(ZarrDataset):
                 ),
                 res_names=self.slice_array(
                     "apo/backbone_res_names", link_bb_start, link_bb_end
-                ).astype(str),
+                ),
                 chain_ids=self.slice_array(
                     "apo/backbone_chain_ids", link_bb_start, link_bb_end
-                ).astype(str),
+                ),
             )
             apo = StructureData(
                 coords=self.slice_array("apo/coords", link_start, link_end),
                 atom_names=self.slice_array(
                     "apo/atom_names", link_start, link_end
-                ).astype(str),
-                elements=self.slice_array("apo/elements", link_start, link_end).astype(
-                    str
                 ),
+                elements=self.slice_array("apo/elements", link_start, link_end),
                 res_ids=self.slice_array("apo/res_ids", link_start, link_end),
                 res_names=self.slice_array(
                     "apo/res_names", link_start, link_end
-                ).astype(str),
+                ),
                 chain_ids=self.slice_array(
                     "apo/chain_ids", link_start, link_end
-                ).astype(str),
+                ),
                 cif=system_info["link_cif"],
                 backbone_mask=self.slice_array(
                     "apo/backbone_mask", link_start, link_end
@@ -324,26 +315,24 @@ class PlinderDataset(ZarrDataset):
                 ),
                 res_names=self.slice_array(
                     "pred/backbone_res_names", link_bb_start, link_bb_end
-                ).astype(str),
+                ),
                 chain_ids=self.slice_array(
                     "pred/backbone_chain_ids", link_bb_start, link_bb_end
-                ).astype(str),
+                ),
             )
             pred = StructureData(
                 coords=self.slice_array("pred/coords", link_start, link_end),
                 atom_names=self.slice_array(
                     "pred/atom_names", link_start, link_end
-                ).astype(str),
-                elements=self.slice_array("pred/elements", link_start, link_end).astype(
-                    str
                 ),
+                elements=self.slice_array("pred/elements", link_start, link_end),
                 res_ids=self.slice_array("pred/res_ids", link_start, link_end),
                 res_names=self.slice_array(
                     "pred/res_names", link_start, link_end
-                ).astype(str),
+                ),
                 chain_ids=self.slice_array(
                     "pred/chain_ids", link_start, link_end
-                ).astype(str),
+                ),
                 cif=system_info["link_cif"],
                 backbone_mask=self.slice_array(
                     "pred/backbone_mask", link_start, link_end
@@ -952,7 +941,6 @@ class PlinderDataset(ZarrDataset):
                 else:
                     raise ValueError("system.link is None, cannot retrieve link coordinates.")
             else:
-                print(modality.entity_name)
                 target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
 
             # if the prior is masked, we need to pass the number of categories for this modality to the prior function
