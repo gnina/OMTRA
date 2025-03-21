@@ -1095,24 +1095,4 @@ class PlinderDataset(ZarrDataset):
             
 
         return n_edges_total
-
-    def get_num_edges1(self, task: Task, start_idx: int, end_idx: int):
-        edge_count = 0
-        if "pharmacophore" in task.groups_present:
-            for i in range(start_idx, end_idx):
-                pharm_row = self.system_lookup.iloc[i]
-                pharm_count = pharm_row["pharm_end"] - pharm_row["pharm_start"]
-                edge_count += pharm_count * pharm_count
-        for i in range(start_idx, end_idx):
-            row = self.system_lookup.iloc[i]
-            lig_count = row["lig_atom_end"] - row["lig_atom_start"]
-            edge_count += lig_count * lig_count
-            
-            if row["npnde_idxs"]:
-                for npnde_idx in row["npnde_idxs"]:
-                    npnde_row = self.npnde_lookup.iloc[npnde_idx]
-                    npnde_count = npnde_row["bond_end"] - npnde_row["bond_start"]
-                    edge_count += npnde_count
-                    
-        return edge_count
         
