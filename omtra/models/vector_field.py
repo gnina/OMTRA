@@ -413,66 +413,129 @@ class EndpointVectorField(nn.Module):
 
             return dst_dict
 
-        def denoise_graph(
-            self,
-            g: dgl.DGLGraph,
-            node_scalar_features: Dict[str, torch.Tensor],
-            node_vec_features: Dict[str, torch.Tensor],
-            node_positions: Dict[str, torch.Tensor],
-            edge_features: Dict[str, torch.Tensor],
-            node_batch_idx: Dict[str, torch.Tensor],
-            upper_edge_mask: torch.Tensor,
-            apply_softmax: bool = False,
-            remove_com: bool = False,
-        ):
-            
-            x_diff, d = self.precompute_distances(g)
-            for recycle_idx in range(self.n_recycles):
-                for conv_idx, conv in enumerate(self.conv_layers):
-
-                    # perform a single convolution which updates node scalar and vector features (but not positions)
-                    node_scalar_features, node_vec_features = conv(g, 
-                            scalar_feats=node_scalar_features, 
-                            coord_feats=node_positions,
-                            vec_feats=node_vec_features,
-                            edge_feats=edge_features,
-                            x_diff=x_diff,
-                            d=d
-                    )
-            # TODO: adapt rest of  flowmol denoise_graph for hetero version
-            raise NotImplementedError("denoise_graph not implemented yet")
-
-        def precompute_distances(self, g: dgl.DGLGraph, node_positions=None):
-            # TODO: adapt flowmol precompute_distances for hetero version
-            """Precompute the pairwise distances between all nodes in the graph."""
-            x_diff = {}
-            d = {}
-            with g.local_scope():
-                for ntype in self.node_types:
-                    if node_positions is None:
-                        g.nodes[ntype].data['x_d'] = g.nodes[ntype].data['x_t']
+    def denoise_graph(
+        self,
+        g: dgl.DGLGraph,
+        node_scalar_features: Dict[str, torch.Tensor],
+        node_vec_features: Dict[str, torch.Tensor],
+        node_positions: Dict[str, torch.Tensor],
+        edge_features: Dict[str, torch.Tensor],
+        node_batch_idx: Dict[str, torch.Tensor],
+        upper_edge_mask: torch.Tensor,
+        apply_softmax: bool = False,
+        remove_com: bool = False,
+    ):
+        x_diff, d = self.precompute_distances(g)
+        for recycle_idx in range(self.n_recycles):
+            for conv_idx, conv in enumerate(self.conv_layers):
+                # perform a single convolution which updates node scalar and vector features (but not positions)
+                node_scalar_features, node_vec_features = conv(
+                    g,
+                    scalar_feats=node_scalar_features,
+                    coord_feats=node_positions,
+                    vec_feats=node_vec_features,
+                    edge_feats=edge_features,
+                    x_diff=x_diff,
+                    d=d,
+                )
+                # every convs_per_update convolutions, update the node positions and edge features
+                if conv_idx != 0 and (conv_idx + 1) % self.convs_per_update == 0:
+                    if self.separate_mol_updaters:
+                        updater_idx = conv_idx // self.convs_per_update
                     else:
-                        g.nodes[ntype].data['x_d'] = node_positions[ntype]
-                        
-                for etype in self.edge_types:
-                    g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
-                    dij = _norm_no_nan(g.edges[etype].data['x_diff'], keepdims=True) + 1e-8
-                    x_diff[etype] = g.edges[etype].data['x_diff'] / dij
-                    d[etype] = _rbf(dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim)
-        
-            return x_diff, d
+                        updater_idx = 0
 
-        def integrate(self, g: dgl.DGLGraph):
-            # TODO: adapt flowmol integrate for hetero version
-            pass
+                    for ntype in self.node_types:
+                        node_positions[ntype] = self.node_position_updaters[ntype][
+                            updater_idx
+                        ](
+                            node_scalar_features[ntype],
+                            node_positions[ntype],
+                            node_vec_features[ntype],
+                        )
 
-        def step(self, g: dgl.DGLGraph):
-            # TODO: adapt flowmol step for hetero version
-            pass
+                    x_diff, d = self.precompute_distances(g, node_positions)
 
-        def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime):
-            vf = alpha_t_prime / (1 - alpha_t) * (x_1 - x_t)
-            return vf
+                    for etype in self.edge_types:
+                        # NOTE: maybe add check if edge feat size > 0
+                        edge_features[etype] = self.edge_updaters[etype][updater_idx](
+                            g, node_scalar_features, edge_features, d=d, etype=etype
+                        )
+
+        # TODO: adapt rest of  flowmol denoise_graph for hetero version
+
+        # predict final charges and atom type logits
+        node_scalar_features = self.node_output_head(node_scalar_features)
+        atom_type_logits = node_scalar_features[:, : self.n_atom_types]
+        if not self.exclude_charges:
+            atom_charge_logits = node_scalar_features[:, self.n_atom_types :]
+
+        # predict the final edge logits
+        ue_feats = edge_features[upper_edge_mask]
+        le_feats = edge_features[~upper_edge_mask]
+        edge_logits = self.to_edge_logits(ue_feats + le_feats)
+
+        # project node positions back into zero-COM subspace
+        if remove_com:
+            g.ndata["x_1_pred"] = node_positions
+            g.ndata["x_1_pred"] = (
+                g.ndata["x_1_pred"]
+                - dgl.readout_nodes(g, feat="x_1_pred", op="mean")[node_batch_idx]
+            )
+            node_positions = g.ndata["x_1_pred"]
+
+        # build a dictionary of predicted features
+        dst_dict = {"x": node_positions, "a": atom_type_logits, "e": edge_logits}
+        if not self.exclude_charges:
+            dst_dict["c"] = atom_charge_logits
+
+        # apply softmax to categorical features, if requested
+        # at training time, we don't want to apply softmax because we use cross-entropy loss which includes softmax
+        # at inference time, we want to apply softmax to get a vector which lies on the simplex
+        if apply_softmax:
+            for feat in dst_dict.keys():
+                if feat in ["a", "c", "e"]:  # if this is a categorical feature
+                    dst_dict[feat] = torch.softmax(
+                        dst_dict[feat], dim=-1
+                    )  # apply softmax to this feature
+
+        return dst_dict
+
+        raise NotImplementedError("denoise_graph not implemented yet")
+
+    def precompute_distances(self, g: dgl.DGLGraph, node_positions=None):
+        # TODO: adapt flowmol precompute_distances for hetero version
+        """Precompute the pairwise distances between all nodes in the graph."""
+        x_diff = {}
+        d = {}
+        with g.local_scope():
+            for ntype in self.node_types:
+                if node_positions is None:
+                    g.nodes[ntype].data["x_d"] = g.nodes[ntype].data["x_t"]
+                else:
+                    g.nodes[ntype].data["x_d"] = node_positions[ntype]
+
+            for etype in self.edge_types:
+                g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
+                dij = _norm_no_nan(g.edges[etype].data["x_diff"], keepdims=True) + 1e-8
+                x_diff[etype] = g.edges[etype].data["x_diff"] / dij
+                d[etype] = _rbf(
+                    dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim
+                )
+
+        return x_diff, d
+
+    def integrate(self, g: dgl.DGLGraph):
+        # TODO: adapt flowmol integrate for hetero version
+        pass
+
+    def step(self, g: dgl.DGLGraph):
+        # TODO: adapt flowmol step for hetero version
+        pass
+
+    def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime):
+        vf = alpha_t_prime / (1 - alpha_t) * (x_1 - x_t)
+        return vf
 
 
 class NodePositionUpdate(nn.Module):
@@ -548,11 +611,11 @@ class EdgeUpdate(nn.Module):
         mlp_inputs = [
             node_scalars[src_ntype][src_idxs],
             node_scalars[dst_ntype][dst_idxs],
-            edge_feats,
+            edge_feats[etype],
         ]
 
         if self.update_edge_w_distance and d is not None:
-            mlp_inputs.append(d)
+            mlp_inputs.append(d[etype])
 
         edge_feats = self.edge_norms[etype](
             edge_feats + self.edge_update_fns[etype](torch.cat(mlp_inputs, dim=-1))
