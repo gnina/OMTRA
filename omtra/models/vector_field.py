@@ -719,9 +719,91 @@ class EndpointVectorField(nn.Module):
 
         return g
 
-    def step(self, g: dgl.DGLGraph):
-        # TODO: adapt flowmol step for hetero version
-        pass
+    def step(
+        self,
+        g: dgl.DGLGraph,
+        s_i: torch.Tensor,
+        t_i: torch.Tensor,
+        alpha_t_i: Dict[str, torch.Tensor],
+        alpha_s_i: Dict[str, torch.Tensor],
+        alpha_t_prime_i: Dict[str, torch.Tensor],
+        node_batch_idx: Dict[str, torch.Tensor],
+        upper_edge_mask: Dict[str, torch.Tensor],
+        prev_dst_dict: Dict,
+        inv_temp_func=None,
+        **kwargs,
+    ):
+        if inv_temp_func is None:
+            inv_temp_func = self.continuous_inv_temp_func
+
+        # predict the destination of the trajectory given the current timepoint
+        dst_dict = self(
+            g,
+            t=torch.full((g.batch_size,), t_i, device=g.device),
+            node_batch_idx=node_batch_idx,
+            upper_edge_mask=upper_edge_mask,
+            apply_softmax=True,
+            remove_com=True,
+            prev_dst_dict=prev_dst_dict,
+        )
+
+        # compute x_s for each feature and set x_t = x_s
+        for ntype in self.node_types:
+            for feat in canonical_node_features[ntype]:
+                x_t = g.nodes[ntype].data[f"{feat}_t"]
+                x_1 = dst_dict["nodes"][ntype][feat]
+
+                # evaluate the vector field at the current timepoint
+                vf = self.vector_field(
+                    x_t,
+                    x_1,
+                    alpha_t_i[f"{ntype}_{feat}"],
+                    alpha_t_prime_i[f"{ntype}_{feat}"],
+                )
+
+                # apply temperature scaling
+                vf = vf * inv_temp_func(t_i)
+
+                # apply euler integration step
+                x_s = x_t + vf * (s_i - t_i)
+
+                # record predicted endoint, for visualization purposes
+                g.nodes[ntype].data[f"{feat}_1_pred"] = x_1.detach().clone()
+
+                # record updated feature in the graph
+                g.nodes[ntype].data[f"{feat}_t"] = x_s
+
+        for etype in self.edge_types:
+            x_t = g.edges[etype].data["e_t"]
+            x_t = x_t[upper_edge_mask[etype]]
+
+            x_1 = dst_dict["edges"][etype]
+
+            vf = self.vector_field(x_t, x_1, alpha_t_i[etype], alpha_t_prime_i[etype])
+            # apply temperature scaling
+            vf = vf * inv_temp_func(t_i)
+
+            # apply euler integration step
+            x_s = x_t + vf * (s_i - t_i)
+
+            # set the edge features so that corresponding upper and lower triangle edges have the same value
+            e_s = torch.zeros_like(g.edges[etype].data["e_0"])
+            e_s[upper_edge_mask[etype]] = x_s
+            e_s[~upper_edge_mask[etype]] = x_s
+            x_s = e_s
+
+            e_1 = torch.zeros_like(g.edges[etype].data["e_0"])
+            e_1[upper_edge_mask[etype]] = dst_dict["edges"][etype]
+            e_1[~upper_edge_mask[etype]] = dst_dict["edges"][etype]
+            x_1 = e_1
+
+            # record predicted endoint, for visualization purposes
+            g.edges[etype].data[f"e_1_pred"] = x_1.detach().clone()
+
+            # record updated feature in the graph
+            g.edges[etype].data[f"e_t"] = x_s
+
+        return g, dst_dict
 
     def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime):
         vf = alpha_t_prime / (1 - alpha_t) * (x_1 - x_t)
