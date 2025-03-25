@@ -167,8 +167,8 @@ class OMTRA(pl.LightningModule):
         # for all modalities held fixed, convert the true values to the current time
         for modality_name in task_class.modalities_fixed:
             modality: Modality = name_to_modality(modality_name)
-            data_src = g.edges if modality.is_edge else g.nodes
+            data_src = g.edges if modality.graph_entity == "edge" else g.nodes
             dk = modality.data_key
-            data_src.data[f'{dk}_t'] = data_src.data[f'{dk}_1_true']
+            data_src[modality.entity_name].data[f'{dk}_t'] =  data_src[modality.entity_name].data[f'{dk}_1_true']
 
         return g
