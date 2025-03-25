@@ -7,6 +7,7 @@ from typing import Union, Callable, Dict, Optional
 import scipy
 from typing import List
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
+from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.tasks.tasks import Task
 from omtra.tasks.modalities import Modality, name_to_modality, MODALITY_ORDER
 from omtra.utils.embedding import get_time_embedding
@@ -25,10 +26,6 @@ from omtra.constants import (
 class EndpointVectorField(nn.Module):
     def __init__(
         self,
-        node_types: List[str],
-        edge_types: List[str],
-        n_atom_types: int,
-        canonical_feat_order: list,
         interpolant_scheduler: InterpolantScheduler,
         n_charges: int = 6,
         n_bond_types: int = 4,
@@ -67,8 +64,6 @@ class EndpointVectorField(nn.Module):
         # however, this is the fastest way to get CTMCVectorField working right now, so we will be anti-pattern for the sake of time
     ):
         super().__init__()
-        self.node_types = node_types
-        self.edge_types = edge_types
         self.token_dim = token_dim
         self.n_lig_atom_types = len(lig_atom_type_map)
         self.n_npnde_atom_types = len(npnde_atom_type_map)
@@ -88,7 +83,6 @@ class EndpointVectorField(nn.Module):
         self.n_recycles = n_recycles
         self.separate_mol_updaters: bool = separate_mol_updaters
         self.interpolant_scheduler = interpolant_scheduler
-        self.canonical_feat_order = canonical_feat_order
         self.time_embedding_dim = time_embedding_dim
         self.self_conditioning = self_conditioning
         self.has_mask = has_mask
@@ -308,51 +302,61 @@ class EndpointVectorField(nn.Module):
             node_vec_features = {}
             edge_features = {}
 
-            for ntype in self.node_types:
-                node_positions[ntype] = g.nodes[ntype].data["x_t"]
-                num_nodes = g.num_nodes(ntype)
-                node_vec_features[ntype] = torch.zeros(
-                    (num_nodes, self.n_vec_channels, 3), device=device
-                )
-                scalar_feats = []
-                for feat in canonical_node_features[ntype]:
-                    if feat == "x":
-                        continue
-                    if (
-                        f"{ntype}_{feat}" in self.token_embeddings
-                        and self.token_embeddings.get(f"{ntype}_{feat}") is not None
-                    ):
-                        scalar_feats.append(
-                            self.token_embeddings[f"{ntype}_{feat}"](
+            modalities_present = (
+                task_class.modalities_fixed + task_class.modalities_generated
+            )
+            for modality in modalities_present:
+                if modality.graph_entity == "node":
+                    ntype = modality.entity_name
+                    if modality.data_key == "x":
+                        node_positions[ntype] = g.nodes[ntype].data[
+                            f"{modality.data_key}_t"
+                        ]
+                        num_nodes = g.num_nodes(ntype)
+                        node_vec_features[ntype] = torch.zeros(
+                            (num_nodes, self.n_vec_channels, 3), device=device
+                        )
+                    else:
+                        if ntype not in node_scalar_features:
+                            node_scalar_features[ntype] = []
+                        node_scalar_features[ntype].append(
+                            self.token_embeddings[modality.name](
                                 g.nodes[ntype]
-                                .data[f"{feat}_t"]
+                                .data[f"{modality.data_key}_t"]
                                 .argmax(
                                     dim=-1
                                 )  # NOTE: this assumes that the input is one-hot encoded
                             )
                         )
-                if self.time_embedding_dim == 1:
-                    scalar_feats.append(t[node_batch_idx[ntype]].unsqueeze(-1))
                 else:
-                    t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
-                    t_emb = t_emb[node_batch_idx[ntype]]
-                    scalar_feats.append(t_emb)
-
-                scalar_feat = torch.cat(scalar_feats, dim=-1)
-                node_scalar_features[ntype] = self.scalar_embedding[ntype](scalar_feat)
-
-            for etype in self.edge_types:
-                if self.edge_feat_sizes[etype] > 0:
-                    if etype in self.token_embeddings:
-                        edge_feats = self.token_embeddings[etype](
+                    etype = modality.entity_name
+                    if self.edge_feat_sizes[etype] > 0:
+                        edge_feats = self.token_embeddings[modality.entity_name](
                             g.edges[etype]
-                            .data["e_t"]
+                            .data[f"{modality.data_key}_t"]
                             .argmax(
                                 dim=-1
                             )  # NOTE: this assumes that the input is one-hot encoded
                         )
                         edge_feats = self.edge_embedding[etype](edge_feats)
                         edge_features[etype] = edge_feats
+
+            for ntype in node_scalar_features.keys():
+                if self.time_embedding_dim == 1:
+                    node_scalar_features[ntype].append(
+                        t[node_batch_idx[ntype]].unsqueeze(-1)
+                    )
+                else:
+                    t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
+                    t_emb = t_emb[node_batch_idx[ntype]]
+                    node_scalar_features[ntype].append(t_emb)
+
+                node_scalar_features[ntype] = torch.cat(
+                    node_scalar_features[ntype], dim=-1
+                )
+                node_scalar_features[ntype] = self.scalar_embedding[ntype](
+                    node_scalar_features[ntype]
+                )
 
             if self.self_conditioning and prev_dst_dict is None:
                 train_self_condition = self.training and (torch.rand(1) > 0.5).item()

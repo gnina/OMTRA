@@ -519,7 +519,7 @@ class HeteroGVPConv(nn.Module):
                 self.message_expansion[ntype] = nn.Sequential(*projection_gvps)
         else:
             for ntype in self.node_types:
-                self.mesage_expansion[ntype] = nn.Identity()
+                self.message_expansion[ntype] = nn.Identity()
 
     def forward(
         self,

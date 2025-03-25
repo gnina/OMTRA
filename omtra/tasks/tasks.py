@@ -33,7 +33,8 @@ class Task:
     @classproperty
     def modalities_fixed(self) -> List[Modality]:
         modalities = []
-        for modality in modal.MODALITY_ORDER:
+        for modality_name in modal.MODALITY_ORDER:
+            modality = name_to_modality(modality_name)
             if modality.group in self.groups_fixed:
                 modalities.append(modality)
         return modalities

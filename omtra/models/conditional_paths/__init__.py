@@ -11,7 +11,7 @@ import importlib
 package_dir = os.path.dirname(__file__)
 
 # Iterate through modules in the package.
-for (_, module_name, _) in pkgutil.iter_modules([package_dir]):
+for _, module_name, _ in pkgutil.iter_modules([package_dir]):
     # Optionally, skip certain modules (like 'registry' or '__init__').
     if module_name in {"path_register", "__init__"}:
         continue
