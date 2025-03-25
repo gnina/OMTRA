@@ -100,6 +100,13 @@ Modality.register(MODALITY_REGISTER,
     entity_name='prot_atom',
     data_key='a'
 )
+Modality.register(MODALITY_REGISTER,
+    name='prot_atom_e',
+    group='protein_identity',
+    graph_entity='edge',
+    entity_name='prot_atom_to_prot_atom',
+    data_key='e'
+)
 
 Modality.register(MODALITY_REGISTER,
     name='npnde_x',

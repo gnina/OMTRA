@@ -1,6 +1,5 @@
 import dgl
 import torch
-import torch.nn.functional as F
 from omegaconf import DictConfig
 
 from omtra.dataset.zarr_dataset import ZarrDataset
@@ -446,8 +445,8 @@ class PlinderDataset(ZarrDataset):
 
         node_data["prot_atom"] = {
             "x_1_true": prot_coords,
-            "a_1_true": F.one_hot(prot_atom_names, num_classes=len(protein_atom_map)),
-            "e_1_true": F.one_hot(prot_elements, num_classes=len(protein_element_map)),
+            "a_1_true": prot_atom_names,
+            "e_1_true": prot_elements,
             "res_id": prot_res_ids,
             "res_names": prot_res_names,
             "chain_id": prot_chain_ids,
@@ -478,7 +477,7 @@ class PlinderDataset(ZarrDataset):
         node_data["prot_res"] = {
             "x_1_true": backbone_coords,
             "res_id": backbone_res_ids,
-            "a_1_true": F.one_hot(backbone_res_names, num_classes=len(residue_map)),
+            "a_1_true": backbone_res_names,
             "chain_id": backbone_chain_ids,
             "pocket_mask": backbone_pocket_mask,
         }
@@ -531,14 +530,14 @@ class PlinderDataset(ZarrDataset):
         node_data = {
             "lig": {
                 "x_1_true": lig_x,
-                "a_1_true": F.one_hot(lig_a, num_classes=len(lig_atom_type_map)),
-                "c_1_true": F.one_hot(lig_c, num_classes=7),
+                "a_1_true": lig_a,
+                "c_1_true": lig_c,
             }
         }
 
         edge_data = {
             "lig_to_lig": {
-                "e_1_true": F.one_hot(lig_e, num_classes=4),
+                "e_1_true": lig_e,
             }
         }
 
@@ -614,9 +613,9 @@ class PlinderDataset(ZarrDataset):
                 edge_idxs["prot_atom_to_lig"] = prot_atom_to_lig_tensor
                 # TODO: covalent edge feature
                 edge_data["prot_atom_to_lig"] = {
-                    "e_1_true": F.one_hot(torch.ones(
+                    "e_1_true": torch.ones(
                         (prot_atom_to_lig_tensor.shape[1], 1), dtype=torch.long
-                    ), num_classes=2)
+                    )
                 }
 
             if prot_res_to_lig_idxs:
@@ -626,9 +625,9 @@ class PlinderDataset(ZarrDataset):
                 edge_idxs["prot_res_to_lig"] = prot_res_to_lig_tensor
                 # TODO: covalent edge feature
                 edge_data["prot_res_to_lig"] = {
-                    "e_1_true": F.one_hot(torch.ones(
+                    "e_1_true": torch.ones(
                         (prot_res_to_lig_tensor.shape[1], 1), dtype=torch.long
-                    ), num_classes=2)
+                    )
                 }
 
         return node_data, edge_idxs, edge_data
@@ -661,7 +660,7 @@ class PlinderDataset(ZarrDataset):
             prot_to_lig_tensor = torch.tensor(prot_to_lig_edges, dtype=torch.long).t()
             edge_idxs["prot_atom_to_lig"] = prot_to_lig_tensor
             edge_data["prot_atom_to_lig"] = {
-                "e_1_true": F.one_hot(torch.zeros((prot_to_lig_tensor.shape[1], 1), dtype=torch.long), num_classes=2)
+                "e_1_true": torch.zeros((prot_to_lig_tensor.shape[1], 1), dtype=torch.long)
             }
         
         return node_data, edge_idxs, edge_data
@@ -815,17 +814,17 @@ class PlinderDataset(ZarrDataset):
             )
             npnde_c = self.encode_charges(npnde_c)
 
-            node_data["npnde"] = {"x_1_true": npnde_x, "a_1_true": F.one_hot(npnde_a, num_classes=len(npnde_atom_type_map)), "c_1_true": F.one_hot(npnde_c, num_classes=6)}
+            node_data["npnde"] = {"x_1_true": npnde_x, "a_1_true": npnde_a, "c_1_true": npnde_c}
 
-            edge_data["npnde_to_npnde"] = {"e_1_true": F.one_hot(npnde_e, num_classes=4)}
+            edge_data["npnde_to_npnde"] = {"e_1_true": npnde_e}
 
             edge_idxs["npnde_to_npnde"] = npnde_edge_idxs
         else:
             combined_atom_charges = self.encode_charges(combined_atom_charges)
             node_data["npnde"] = {
                 "x_1_true": combined_coords,
-                "a_1_true": F.one_hot(combined_atom_types, num_classes=len(npnde_atom_type_map)),
-                "c_1_true": F.one_hot(combined_atom_charges, num_classes=6),
+                "a_1_true": combined_atom_types,
+                "c_1_true": combined_atom_charges,
             }
 
         if all_prot_atom_to_npnde_idxs:
@@ -835,9 +834,9 @@ class PlinderDataset(ZarrDataset):
             edge_idxs["prot_atom_to_npnde"] = prot_atom_to_npnde_tensor
             # TODO: covalent edge feature
             edge_data["prot_atom_to_npnde"] = {
-                "e_1_true": F.one_hot(torch.ones(
+                "e_1_true": torch.ones(
                     (prot_atom_to_npnde_tensor.shape[1], 1), dtype=torch.long
-                ), num_classes=2)
+                )
             }
 
         if all_prot_res_to_npnde_idxs:
@@ -847,9 +846,9 @@ class PlinderDataset(ZarrDataset):
             edge_idxs["prot_res_to_npnde"] = prot_res_to_npnde_tensor
             # TODO: covalent edge feature
             edge_data["prot_res_to_npnde"] = {
-                "e_1_true": F.one_hot(torch.ones(
+                "e_1_true": torch.ones(
                     (prot_res_to_npnde_tensor.shape[1], 1), dtype=torch.long
-                ), num_classes=2)
+                )
             }
 
         return node_data, edge_idxs, edge_data
@@ -870,7 +869,7 @@ class PlinderDataset(ZarrDataset):
         vectors = torch.from_numpy(pharmacophore.vectors).float()
         interactions = torch.from_numpy(pharmacophore.interactions).bool()
 
-        node_data["pharm"] = {"x_1_true": coords, "a_1_true": F.one_hot(types, num_classes=len(ph_idx_to_type)), "v_1_true": vectors, "i_1_true": interactions}
+        node_data["pharm"] = {"x_1_true": coords, "a_1_true": types, "v_1_true": vectors, "i_1_true": interactions}
 
         # assert self.graph_config.edges["pharm_to_pharm"]["type"] == "complete", (
         #     "the following code assumes complete pharm-pharm graph"

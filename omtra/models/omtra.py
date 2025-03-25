@@ -80,7 +80,6 @@ class OMTRA(pl.LightningModule):
             "pharm_a": len(ph_idx_to_type),
         }
         self.time_scaled_loss = False
-        self.target_blur = 0.0
         self.interpolant_scheduler = InterpolantScheduler(schedule_type="linear")
         self.vector_field = EndpointVectorField(
             interpolant_scheduler=self.interpolant_scheduler
@@ -155,19 +154,12 @@ class OMTRA(pl.LightningModule):
             if modality.graph_entity == "edge":
                 target = target[upper_edge_mask[modality.entity_name]]
             if dk in ["a", "c", "e"]:
-                if self.target_blur == 0.0:
-                    target = target.argmax(dim=-1)
-                else:
-                    target = target + torch.randn_like(target) * self.target_blur
-                    target = fn.softmax(target, dim=-1)
                 if modality.graph_entity == "edge":
-                    xt_idxs = (
-                        data_src[modality.entity_name]
-                        .data[f"{dk}_t"][upper_edge_mask[modality.entity_name]]
-                        .argmax(-1)
-                    )
+                    xt_idxs = data_src[modality.entity_name].data[f"{dk}_t"][
+                        upper_edge_mask[modality.entity_name]
+                    ]
                 else:
-                    xt_idxs = data_src[modality.entity_name].data[f"{dk}_t"].argmax(-1)
+                    xt_idxs = data_src[modality.entity_name].data[f"{dk}_t"]
                 target[
                     xt_idxs != self.n_cat_dict[modality.name]
                 ] = -100  # set the target to ignore_index when the feature is already unmasked in xt

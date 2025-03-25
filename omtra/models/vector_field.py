@@ -115,6 +115,7 @@ class EndpointVectorField(nn.Module):
             "prot_atom_element": self.n_protein_element_types,
             "prot_atom_r": self.n_protein_residue_types,
             "prot_res_r": self.n_protein_residue_types,
+            "prot_atom_to_prot_atom": 0,
             "prot_atom_to_lig": self.n_cross_edge_types,
             "prot_atom_to_npnde": self.n_cross_edge_types,
             "prot_res_to_lig": self.n_cross_edge_types,
@@ -130,13 +131,17 @@ class EndpointVectorField(nn.Module):
             modality = name_to_modality(modality_name)
             if modality.data_key == "x" or modality.data_key == "v":
                 continue
-            self.token_embeddings[modality_name] = nn.Embedding(
-                self.n_cat_feats[modality_name], token_dim
-            )
             if modality.graph_entity == "edge":
                 self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
                 self.edge_types.add(modality.entity_name)
+                if self.n_cat_feats[modality.entity_name] > 0:
+                    self.token_embeddings[modality.entity_name] = nn.Embedding(
+                        self.n_cat_feats[modality.entity_name], token_dim
+                    )
             else:
+                self.token_embeddings[modality_name] = nn.Embedding(
+                    self.n_cat_feats[modality_name], token_dim
+                )
                 self.node_types.add(modality.entity_name)
                 self.ntype_cat_feats[modality.entity_name] += 1
 
@@ -306,8 +311,8 @@ class EndpointVectorField(nn.Module):
                 task_class.modalities_fixed + task_class.modalities_generated
             )
             for modality in modalities_present:
-                if modality.graph_entity == "node":
-                    ntype = modality.entity_name
+                ntype = modality.entity_name
+                if modality.graph_entity == "node" and g.num_nodes(ntype) > 0:
                     if modality.data_key == "x":
                         node_positions[ntype] = g.nodes[ntype].data[
                             f"{modality.data_key}_t"
@@ -321,22 +326,14 @@ class EndpointVectorField(nn.Module):
                             node_scalar_features[ntype] = []
                         node_scalar_features[ntype].append(
                             self.token_embeddings[modality.name](
-                                g.nodes[ntype]
-                                .data[f"{modality.data_key}_t"]
-                                .argmax(
-                                    dim=-1
-                                )  # NOTE: this assumes that the input is one-hot encoded
+                                g.nodes[ntype].data[f"{modality.data_key}_t"]
                             )
                         )
                 else:
                     etype = modality.entity_name
-                    if self.edge_feat_sizes[etype] > 0:
+                    if self.edge_feat_sizes[etype] > 0 and g.num_edges(etype) > 0:
                         edge_feats = self.token_embeddings[modality.entity_name](
-                            g.edges[etype]
-                            .data[f"{modality.data_key}_t"]
-                            .argmax(
-                                dim=-1
-                            )  # NOTE: this assumes that the input is one-hot encoded
+                            g.edges[etype].data[f"{modality.data_key}_t"]
                         )
                         edge_feats = self.edge_embedding[etype](edge_feats)
                         edge_features[etype] = edge_feats
@@ -559,12 +556,16 @@ class EndpointVectorField(nn.Module):
         d = {}
         with g.local_scope():
             for ntype in self.node_types:
+                if g.num_nodes(ntype) == 0:
+                    continue
                 if node_positions is None:
                     g.nodes[ntype].data["x_d"] = g.nodes[ntype].data["x_t"]
                 else:
                     g.nodes[ntype].data["x_d"] = node_positions[ntype]
 
             for etype in self.edge_types:
+                if g.num_edges(etype) == 0:
+                    continue
                 g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
                 dij = _norm_no_nan(g.edges[etype].data["x_diff"], keepdims=True) + 1e-8
                 x_diff[etype] = g.edges[etype].data["x_diff"] / dij

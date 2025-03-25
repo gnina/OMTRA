@@ -281,6 +281,7 @@ class HeteroGVPConv(nn.Module):
         self.rbf_dim = rbf_dim
         self.dropout_rate = dropout
         self.message_norm = message_norm
+        self.attention = attention
 
         if not self.edge_feat_size:
             self.edge_feat_size = {etype: 0 for etype in self.edge_types}
@@ -536,6 +537,8 @@ class HeteroGVPConv(nn.Module):
 
         with g.local_scope():
             for ntype in self.node_types:
+                if g.num_nodes(ntype) == 0:
+                    continue
                 # TODO: make sure node attributes are safe across tasks/ntypes e.g. pharm nodes have a 'v', 'x' vs 'x_0' vs 'x_1_true'
                 g.nodes[ntype].data["s"] = scalar_feats[ntype]
                 g.nodes[ntype].data["x"] = coord_feats[ntype]
@@ -543,6 +546,8 @@ class HeteroGVPConv(nn.Module):
 
             # edge feature
             for etype in self.edge_types:
+                if g.num_edges(etype) == 0:
+                    continue
                 if self.edge_feat_size[etype] > 0:
                     assert edge_feats.get(etype) is not None, (
                         "Edge features must be provided."
@@ -552,6 +557,8 @@ class HeteroGVPConv(nn.Module):
             # normalize x_diff and compute rbf embedding of edge distance
             # dij = torch.norm(g.edges[self.edge_type].data['x_diff'], dim=-1, keepdim=True)
             for etype in self.edge_types:
+                if g.num_edges(etype) == 0:
+                    continue
                 if x_diff is not None and d is not None:
                     g.edges[etype].data["x_diff"] = x_diff[etype]
                     g.edges[etype].data["d"] = d[etype]
@@ -569,6 +576,8 @@ class HeteroGVPConv(nn.Module):
 
             # apply node compression
             for ntype in self.node_types:
+                if g.num_nodes(ntype) == 0:
+                    continue
                 g.nodes[ntype].data["s"], g.nodes[ntype].data["v"] = (
                     self.node_compression[ntype](
                         (g.nodes[ntype].data["s"], g.nodes[ntype].data["v"])
@@ -589,12 +598,16 @@ class HeteroGVPConv(nn.Module):
                 passing_edges = self.edge_types
 
             for etype in passing_edges:
-                etype_message = partial(self.message, etype)
+                if g.num_edges(etype) == 0:
+                    continue
+                etype_message = partial(self.message, etype=etype)
                 g.apply_edges(etype_message, etype=etype)
 
             # if self.attenion, multiple messages by attention weights
             if self.attention:
                 for etype in self.edge_types:
+                    if g.num_edges(etype) == 0:
+                        continue
                     scalar_msg, att_logits = (
                         g.edges[etype].data["scalar_msg"][:, : self.s_message_dim],
                         g.edges[etype].data["scalar_msg"][:, self.s_message_dim :],
@@ -604,7 +617,7 @@ class HeteroGVPConv(nn.Module):
                     etype_graph = dgl.edge_type_subgraph(g, [etype])
                     att_weights = edge_softmax(etype_graph, att_logits)
 
-                    att_weights = edge_softmax(g, att_logits)
+                    # att_weights = edge_softmax(g, att_logits)
                     s_att_weights = att_weights[:, : self.n_heads]
                     v_att_weights = att_weights[:, self.n_heads :]
                     s_att_weights = s_att_weights.repeat_interleave(
@@ -621,6 +634,20 @@ class HeteroGVPConv(nn.Module):
             scalar_agg_fns = {}
             vector_agg_fns = {}
             for etype in passing_edges:
+                if g.num_edges(etype) == 0:
+                    continue
+
+                g.update_all(
+                    fn.copy_e("scalar_msg", "m"),
+                    self.agg_func("m", "scalar_msg"),
+                    etype=etype,
+                )
+                g.update_all(
+                    fn.copy_e("vec_msg", "m"),
+                    self.agg_func("m", "vec_msg"),
+                    etype=etype,
+                )
+                """
                 scalar_agg_fns[etype] = (
                     fn.copy_e("scalar_msg", "m"),
                     self.agg_func("m", "scalar_msg"),
@@ -628,10 +655,10 @@ class HeteroGVPConv(nn.Module):
                 vector_agg_fns[etype] = (
                     fn.copy_e("vec_msg", "m"),
                     self.agg_func("m", "vec_msg"),
-                )
+                )"""
 
-            g.multi_update_all(scalar_agg_fns, cross_reducer=self.agg_func)
-            g.multi_update_all(vector_agg_fns, cross_reducer=self.agg_func)
+            # g.multi_update_all(scalar_agg_fns, cross_reducer=self.agg_func)
+            # g.multi_update_all(vector_agg_fns, cross_reducer=self.agg_func)
 
             # get aggregated scalar and vector messages
             if isinstance(self.message_norm, str):
@@ -642,6 +669,8 @@ class HeteroGVPConv(nn.Module):
             updated_scalar_feats = {}
             updated_vec_feats = {}
             for ntype in self.node_types:
+                if g.num_nodes(ntype) == 0:
+                    continue
                 scalar_msg = g.nodes[ntype].data["scalar_msg"] / z
                 vec_msg = g.nodes[ntype].data["vec_msg"] / z
 
