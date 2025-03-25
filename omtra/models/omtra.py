@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as fn
 import pytorch_lightning as pl
 import dgl
 from typing import Dict, List, Callable, Tuple
@@ -15,6 +16,7 @@ from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
 from omtra.constants import lig_atom_type_map, ph_idx_to_type
 from omtra.models.conditional_paths.path_factory import get_conditional_path_fns
+from omtra.models.vector_field import EndpointVectorField
 from omegaconf import DictConfig
 
 class OMTRA(pl.LightningModule):
@@ -65,6 +67,8 @@ class OMTRA(pl.LightningModule):
             'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
             'pharm_a': len(ph_idx_to_type),
         }
+        
+        self.vector_field = EndpointVectorField() # TODO: initialize this properly
 
     def training_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
@@ -112,11 +116,59 @@ class OMTRA(pl.LightningModule):
         # maybe not necessary right now, perhaps after we add edges appropriately
         node_batch_idxs, edge_batch_idxs = get_batch_idxs(g)
         lig_ue_mask = get_upper_edge_mask(g, 'lig_to_lig')
+        upper_edge_mask = {}
+        upper_edge_mask["lig_to_lig"] = lig_ue_mask
 
         # sample conditional path
         task_class: Task = task_name_to_class(task_name) 
         g = self.sample_conditional_path(g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask)
 
+        # forward pass for the vector field
+        vf_output = self.vector_field.forward(g, task_class, t, node_batch_idx=node_batch_idxs, upper_edge_mask=upper_edge_mask)
+        
+        targets = {}
+        for modality in task_class.modalities_generated:
+            data_src = g.edges if modality.graph_entity == 'edge' else g.nodes
+            dk = modality.data_key
+            target = data_src[modality.entity_name].data[f'{dk}_1_true']
+            if modality.graph_entity == 'edge':
+                target = target[upper_edge_mask[modality.entity_name]]
+            if dk in ['a', 'c', 'e']:
+                if self.target_blur == 0.0:
+                    target = target.argmax(dim=-1)
+                else:
+                    target = target + torch.randn_like(target)*self.target_blur
+                    target = fn.softmax(target, dim=-1)
+                if modality.graph_entity == 'edge':
+                    xt_idxs = data_src[modality.entity_name].data[f'{dk}_t'][upper_edge_mask[modality.entity_name]].argmax(-1)
+                else:
+                    xt_idxs = data_src[modality.entity_name].data[f'{dk}_t'].argmax(-1)
+                target[ xt_idxs != self.n_cat_dict[modality.name] ] = -100 # set the target to ignore_index when the feature is already unmasked in xt
+            targets[modality.name] = target
+            
+        if self.time_scaled_loss:
+            time_weights = {}
+            for modality in task_class.modalities_generated:
+                time_weights[modality.name] = torch.ones_like(t)
+                time_weights[modality.name] = time_weights[modality.name] / time_weights[modality.name].sum() # TODO: actually implement this
+        
+        losses = {}
+        for modality in task_class.modalities_generated:
+            if self.time_scaled_loss:
+                weight = time_weights[modality.name]
+                if modality.graph_entity == 'edge':
+                    weight = weight[edge_batch_idxs[modality.entity_name]][upper_edge_mask[modality.entity_name]]
+                else:
+                    weight = weight[node_batch_idxs[modality.entity_name]]
+                weight = weight.unsqueeze(-1)
+            else:
+                weight = 1.0
+            target = targets[modality.name]
+            losses[modality.name] = self.loss_fn_dict[modality.name](vf_output[modality.name], target)*weight
+            if self.time_scaled_loss:
+                losses[modality.name] = losses[modality.name].mean()
+        return losses
+        
 
     def configure_optimizers(self):
         # implement optimizer
