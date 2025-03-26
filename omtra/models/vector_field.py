@@ -486,6 +486,7 @@ class EndpointVectorField(nn.Module):
 
         # build a dictionary of predicted features
         dst_dict = {}
+        # modalities_present = task_class.modalities_fixed + task_class.modalities_generated
         for modality in task_class.modalities_generated:
             if modality.graph_entity == "node":
                 ntype = modality.entity_name

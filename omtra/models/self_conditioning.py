@@ -2,24 +2,19 @@ import torch
 import torch.nn as nn
 import dgl
 import dgl.function as fn
+from collections import defaultdict
+from typing import Dict
 
 from omtra.models.gvp import _norm_no_nan, _rbf
+from omtra.tasks.modalities import MODALITY_ORDER, name_to_modality
 from omtra.utils.embedding import rbf_twoscale
 from omtra.utils.graph import canonical_node_features
 
 # TODO: adapt for heterographs
 
-
 class SelfConditioningResidualLayer(nn.Module):
     def __init__(
         self,
-        node_types,
-        edge_types,
-        n_cat_feats,
-        n_atom_types,
-        n_charges,
-        n_bond_types,
-        n_pharm_types,
         node_embedding_dim,
         edge_embedding_dim,
         rbf_dim,
@@ -29,57 +24,67 @@ class SelfConditioningResidualLayer(nn.Module):
 
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
-        self.node_types = node_types
-        self.edge_types = edge_types
+        self.node_types = set()
+        self.edge_types = set()
 
         self.node_residual_mlps = nn.ModuleDict()
-
+        
+        extra_dims = defaultdict(int)
+        for modality_name in MODALITY_ORDER:
+            modality = name_to_modality(modality_name)
+            if modality.graph_entity == "node":
+                ntype = modality.entity_name
+                self.node_types.add(ntype)
+                if modality.n_categories is not None:
+                    extra_dims[ntype] += modality.n_categories
+            else: # edge
+                etype = modality.entity_name
+                self.edge_types.add(etype)
+                if modality.n_categories is not None:
+                    extra_dims[etype] += modality.n_categories
+        
         for ntype in self.node_types:
-            extra_dims = rbf_dim
-            if ntype == "lig":
-                extra_dims += n_atom_types + n_charges
-            elif ntype == "pharm":
-                extra_dims += n_pharm_types
             self.node_residual_mlps[ntype] = nn.Sequential(
-                nn.Linear(node_embedding_dim + extra_dims, node_embedding_dim),
+                nn.Linear(node_embedding_dim + extra_dims[ntype] + rbf_dim, node_embedding_dim),
                 nn.SiLU(),
                 nn.Linear(node_embedding_dim, node_embedding_dim),
                 nn.SiLU(),
             )
-
-        self.egde_residual_mlps = nn.ModuleDict()
         for etype in self.edge_types:
-            extra_dims = rbf_dim
-            if etype in n_cat_feats:
-                extra_dims += n_cat_feats[etype]
+            if etype not in extra_dims:
+                continue
             self.edge_residual_mlps[etype] = nn.Sequential(
-                nn.Linear(edge_embedding_dim + extra_dims, edge_embedding_dim),
+                nn.Linear(edge_embedding_dim + extra_dims[etype] + rbf_dim, edge_embedding_dim),
                 nn.SiLU(),
                 nn.Linear(edge_embedding_dim, edge_embedding_dim),
                 nn.SiLU(),
             )
 
+
     def forward(
         self,
-        g: torch.Tensor,
-        s_t: torch.Tensor,
-        x_t: torch.Tensor,
-        v_t: torch.Tensor,
-        e_t: torch.Tensor,
-        dst_dict: torch.Tensor,
-        node_batch_idx: torch.Tensor,
-        upper_edge_mask: torch.Tensor,
+        g: dgl.DGLGraph,
+        s_t: Dict[str, torch.Tensor],
+        x_t: Dict[str, torch.Tensor],
+        v_t: Dict[str, torch.Tensor],
+        e_t: Dict[str, torch.Tensor],
+        dst_dict: Dict[str, torch.Tensor],
+        node_batch_idx: Dict[str, torch.Tensor],
+        upper_edge_mask: Dict[str, torch.Tensor],
     ):
         # get distances between each node in current timestep and the same node at t=1
-        d_node = _norm_no_nan(x_t - dst_dict["x"])  # has shape n_nodes x 1 (hopefully)
-        d_node = _rbf(d_node, D_max=self.rbf_dmax, D_count=self.rbf_dim)
-
-        node_residual_inputs = [
-            s_t,
-            dst_dict["a"],
-            dst_dict["c"],
-            d_node,
-        ]
+        
+        d_node = {}
+        for ntype in self.node_types:
+            d_node[ntype] = _norm_no_nan(x_t[ntype] - dst_dict[f"{ntype}_x"]) # TODO: fix this to handle when positions are in dst_dict (i.e. when keeping certain nodes fixed)
+            d_node[ntype] = _rbf(d_node[ntype], D_max=self.rbf_dmax, D_count=self.rbf_dim)
+            
+            node_residual_inputs = [ # TODO: figure out how to use task_class/modalities for this
+                s_t[ntype],
+                dst_dict["a"],
+                dst_dict["c"],
+                d_node,
+            ]
         node_residual = self.node_residual_mlp(torch.cat(node_residual_inputs, dim=-1))
 
         # get the edge length of every edge in g at time t and also the edge length at t=1
