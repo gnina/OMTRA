@@ -37,6 +37,11 @@ class Modality:
         # TODO: whats going on with n_categories == 0? why we doing that?
         return self.n_categories is not None and self.n_categories > 0
     
+    @property
+    def is_node(self) -> bool:
+        """Checks if the modality is defined on nodes."""
+        return self.graph_entity == 'node'
+    
 
 MODALITY_REGISTER: Dict[str, Modality] = {}
 

@@ -75,6 +75,7 @@ class EndpointVectorField(nn.Module):
     ):
         super().__init__()
         self.token_dim = token_dim
+        self.task_embedding_dim = token_dim
         self.n_hidden_scalars = n_hidden_scalars
         self.n_hidden_edge_feats = n_hidden_edge_feats
         self.n_vec_channels = n_vec_channels
@@ -148,13 +149,16 @@ class EndpointVectorField(nn.Module):
             self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
             self.edge_types.add(modality.entity_name)
 
+        # create a task embedding
+        self.task_embedding = nn.Embedding(len(td_coupling.task_space), self.task_embedding_dim)
+
         # for each node type, create a function for initial node embeddings
         self.scalar_embedding = nn.ModuleDict()
         for ntype in self.node_types:
             n_cat_feats = self.ntype_cat_feats[ntype] # number of categorical features for this node type
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
-                    n_cat_feats * token_dim + self.time_embedding_dim,
+                    n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim, 
                     n_hidden_scalars,
                 ),
                 nn.SiLU(),
@@ -171,6 +175,10 @@ class EndpointVectorField(nn.Module):
                     nn.LayerNorm(n_hidden_edge_feats),
                 )
 
+        # TODO: node_types and edge_types used to be like, all the possible node and edge types on which we defined modalities
+        # now they are just node types and edge types that are being supported by this model??? i think?? somehow
+        # we get a HeteroGVPConv that has self.edge_types = 'lig_to_lig` even though we are doing lig+pharm related tasks (should be lig-pharm edges)
+        # but i guess those don't get added because we don't actually maintain features on lig-pharm edges?
         self.conv_layers = []
         for conv_idx in range(convs_per_update * n_molecule_updates):
             self.conv_layers.append(
@@ -243,21 +251,24 @@ class EndpointVectorField(nn.Module):
                     )
                 )
 
+        # need node output heads for node categorical features and node vector features.
+        # node positions will be covered by the node update module.
+        # TODO: node position updates interleaved with convs doesn't work well when some nodes are fixed and others are not
+        # we could only support node position updates via a node_output_head...TBD
         self.node_output_heads = nn.ModuleDict()
-        # need node output heads for node categorical features and node vector features
+        # loop over modalities on nodes that are being generated
         for modality in modalities_generated_cls:
             is_node = modality.graph_entity == "node"
-            is_categorical = modality.n_categories and modality.n_categories > 0
-            is_position = modality.data_key == "x"
-            node_categorical = is_node and is_categorical
-            non_position_continuous = is_node and not is_categorical and not is_position
-            if node_categorical:
+            if not is_node:
+                continue
+            # if categorical, the output head is just a MLP on node scalar features
+            if modality.is_categorical:
                 self.node_output_heads[modality.name] = nn.Sequential(
                     nn.Linear(n_hidden_scalars, n_hidden_scalars),
                     nn.SiLU(),
                     nn.Linear(n_hidden_scalars, modality.n_categories),
                 )
-            elif non_position_continuous:
+            elif modality.data_key == "v": # if a node vector feature
                 # TODO: hard-coded assumption that this situation only applies to pharm 
                 # vector features, need to make this more general
                 # also need to avoid hard-coding number of vec features out
@@ -268,6 +279,10 @@ class EndpointVectorField(nn.Module):
                     dim_feats_out=4,
                     dim_vectors_out=4,
                 )
+            elif modality.data_key == "x": # if a node position, we don't need to do anything to it
+                continue
+            else:
+                raise ValueError('unaccounted for node feature type being generated')
 
         self.edge_output_heads = nn.ModuleDict()
         # need output head for edge types that we will predict bond order on
@@ -325,40 +340,68 @@ class EndpointVectorField(nn.Module):
             node_vec_features = {}
             edge_features = {}
 
-            modalities_present = (
-                task_class.modalities_fixed + task_class.modalities_generated
-            )
-            for modality in modalities_present:
-                ntype = modality.entity_name
-                if modality.graph_entity == "node":
-                    if g.num_nodes(ntype) == 0:
-                        continue
-                    if modality.data_key == "x":
-                        node_positions[ntype] = g.nodes[ntype].data[
-                            f"{modality.data_key}_t"
-                        ]
-                        num_nodes = g.num_nodes(ntype)
-                        node_vec_features[ntype] = torch.zeros(
-                            (num_nodes, self.n_vec_channels, 3), device=device
-                        )
-                    else:
-                        if ntype not in node_scalar_features:
-                            node_scalar_features[ntype] = []
-                        node_scalar_features[ntype].append(
-                            self.token_embeddings[modality.name](
-                                g.nodes[ntype].data[f"{modality.data_key}_t"]
-                            )
-                        )
-                else:  # edge
-                    etype = modality.entity_name
-                    if self.edge_feat_sizes[etype] > 0 and g.num_edges(etype) > 0:
-                        edge_feats = self.token_embeddings[modality.name](
-                            g.edges[etype].data[f"{modality.data_key}_t"]
-                        )
-                        edge_feats = self.edge_embedding[etype](edge_feats)
-                        edge_features[etype] = edge_feats
 
+            # compose the graph from modalities into the language of the GNN
+            # that is node positions, node scalar features, node vector features, and edge features
+            # our implicit assumption 
+            node_modalities = [m for m in task_class.modalities_present if m.is_node]
+            edge_modalities = [m for m in task_class.modalities_present if not m.is_node]
+
+            # loop over modalities defined on nodes
+            for modality in node_modalities:
+                ntype = modality.entity_name
+                if g.num_nodes(ntype) == 0:
+                    continue
+                if modality.data_key == "x": # set node positions
+                    node_positions[ntype] = g.nodes[ntype].data[
+                        f"{modality.data_key}_t"
+                    ]
+                if modality.data_key == 'v': # set user-provided vector features as initial vector features
+                    vec_features = g.nodes[ntype].data[f"{modality.data_key}_t"] # has shape (n_nodes, n_vecs_per_node, 3)
+                    n, v_in, _ = vec_features.shape
+                    assert self.n_vec_channels >= v_in
+                    # concatenate zeros to the end of the vector features until there are self.n_vec_channels channels
+                    vec_padding = torch.zeros(n, self.n_vec_channels - v_in, 3, device=device, dtype=vec_features.dtype)
+                    vec_features = torch.cat([vec_features, vec_padding], dim=1)
+                    node_vec_features[ntype] = vec_features
+                elif modality.is_categorical: # node categorical features
+                    if ntype not in node_scalar_features:
+                        node_scalar_features[ntype] = []
+                    node_scalar_features[ntype].append(
+                        self.token_embeddings[modality.name](
+                            g.nodes[ntype].data[f"{modality.data_key}_t"]
+                        )
+                    )
+
+            # loop back over node types, and anything without vector features should be given a zero vector
             for ntype in node_scalar_features.keys():
+                if ntype in node_vec_features:
+                    continue
+                num_nodes = g.num_nodes(ntype)
+                node_vec_features[ntype] = torch.zeros(
+                    (num_nodes, self.n_vec_channels, 3), device=device
+                ).float()
+
+
+            # now lets collect edge features
+            for modality in edge_modalities:
+                etype = modality.entity_name
+                if self.edge_feat_sizes[etype] > 0 and g.num_edges(etype) > 0:
+                    edge_feats = self.token_embeddings[modality.name](
+                        g.edges[etype].data[f"{modality.data_key}_t"]
+                    )
+                    edge_feats = self.edge_embedding[etype](edge_feats)
+                    edge_features[etype] = edge_feats
+
+            # get task embedding
+            task_idx = self.td_coupling.task_space.index(task_class.name) # integer of the task index
+            task_idx = torch.full((g.batch_size,), task_idx, device=device)  # tensor of shape (batch_size) containing the task index
+            task_embedding_batch = self.task_embedding(task_idx) # tensor of shape (batch_size, token_dim)
+
+            # add time and task embedding to node scalar features
+            for ntype in node_scalar_features.keys():
+
+                # add time embedding to node scalar features
                 if self.time_embedding_dim == 1:
                     node_scalar_features[ntype].append(
                         t[node_batch_idx[ntype]].unsqueeze(-1)
@@ -368,6 +411,11 @@ class EndpointVectorField(nn.Module):
                     t_emb = t_emb[node_batch_idx[ntype]]
                     node_scalar_features[ntype].append(t_emb)
 
+                node_scalar_features[ntype].append(
+                    task_embedding_batch[node_batch_idx[ntype]]
+                ) # expand task embedding for each node in the batch
+
+                # concatenate all initial node scalar features and pass through the embedding layer
                 node_scalar_features[ntype] = torch.cat(
                     node_scalar_features[ntype], dim=-1
                 )
