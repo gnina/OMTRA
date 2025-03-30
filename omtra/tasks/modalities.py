@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Dict, Optional
+from omtra.utils.misc import classproperty
 from omtra.constants import (
     lig_atom_type_map,
     charge_map,
@@ -11,7 +12,7 @@ from omtra.constants import (
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class Modality:
     name: str
     group: str
@@ -29,6 +30,13 @@ class Modality:
             raise ValueError(f"Modality with name {key} already exists in register.")
 
         register[key] = cls(**kwargs)
+    
+    @property
+    def is_categorical(self) -> bool:
+        """Checks if the modality is categorical."""
+        # TODO: whats going on with n_categories == 0? why we doing that?
+        return self.n_categories is not None and self.n_categories > 0
+    
 
 MODALITY_REGISTER: Dict[str, Modality] = {}
 
