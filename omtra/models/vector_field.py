@@ -8,6 +8,7 @@ import scipy
 from typing import List
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
+from omtra.models.self_conditioning import SelfConditioningResidualLayer
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.load.conf import TaskDatasetCoupling
@@ -298,7 +299,7 @@ class EndpointVectorField(nn.Module):
             )
 
         if self.self_conditioning:
-            raise NotImplementedError("Self conditioning not implemented yet")
+            # raise NotImplementedError("Self conditioning not implemented yet")
             self.self_conditioning_residual_layer = SelfConditioningResidualLayer(
                 n_atom_types=n_atom_types,
                 n_charges=n_charges,
@@ -308,17 +309,6 @@ class EndpointVectorField(nn.Module):
                 rbf_dim=rbf_dim,
                 rbf_dmax=rbf_dmax,
             )
-
-    def build_continuous_inv_temp_func(self, schedule, max_inv_temp=None):
-        if schedule is None:
-            inv_temp_func = lambda t: 1.0
-        elif schedule == "linear":
-            inv_temp_func = lambda t: max_inv_temp * (1 - t)
-        elif callable(schedule):
-            inv_temp_func = schedule
-        else:
-            raise ValueError(f"Invalid continuous_inv_temp_schedule: {schedule}")
-        return inv_temp_func
 
     def forward(
         self,
@@ -427,6 +417,7 @@ class EndpointVectorField(nn.Module):
                 train_self_condition = self.training and (torch.rand(1) > 0.5).item()
                 inference_first_step = not self.training and (t == 0).all().item()
 
+                # TODO: actually at the first inference step we can just not apply self conditioning, need to test performance effect
                 if train_self_condition or inference_first_step:
                     with torch.no_grad():
                         node_scalar_features_clone = {
@@ -459,7 +450,6 @@ class EndpointVectorField(nn.Module):
                         )
 
             if self.self_conditioning and prev_dst_dict is not None:
-                # TODO: Adapt self-conditioning residual layer for Hetero graph
                 (
                     node_scalar_features,
                     node_positions,
@@ -467,6 +457,7 @@ class EndpointVectorField(nn.Module):
                     edge_features,
                 ) = self.self_conditioning_residual_layer(
                     g,
+                    task_class,
                     node_scalar_features,
                     node_positions,
                     node_vec_features,

@@ -15,13 +15,8 @@ chmod +x build_env.sh
 ```
 
 # TODO:
-- [ ] how to model npnde? need to maintain edge features? writing npndes back out requires we have edges? but we don't really need to model npnde edges?
-- [ ] have we handled pharm vec features appropriately in VF class?
-- [ ] do we initialize pharm vec features?
+- [ ] npnde edges? don't want fully connected self-edges, only bonds may be insufficient
 - [ ] we don't create node output heads for pharm vec features
-- [ ] task embedding
-- [ ] prot element + name embedding?
-- [ ] are atom name embeddings set correctly? what about residue typing?
-- [ ] need to embed protein types?
-- [ ] how does heterogvpconv create messaging and update functions?
-- [ ] why do we have modalities with n_categories=0?
+- [ ] residue type as node feature?
+- [ ] add covalent edge types to omtra/data/graph/__init__.py
+- [ ] remove edges with n_categories=0 from moadlities
