@@ -622,7 +622,7 @@ class PlinderDataset(ZarrDataset):
     ]:
         node_data, edge_data, edge_idxs = {}, {}, {}
         node_data["npnde"] = {"x_1_true": torch.empty(0), "a_1_true": torch.empty(0), "c_1_true": torch.empty(0)}
-
+        edge_data["npnde_to_npnde"] = {"e_1_true": torch.empty(0)}
         edge_idxs["npnde_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
         edge_idxs["prot_atom_covalent_npnde"] = torch.empty((2, 0), dtype=torch.long)
         edge_idxs["npnde_covalent_prot_atom"] = torch.empty((2, 0), dtype=torch.long)
@@ -755,7 +755,7 @@ class PlinderDataset(ZarrDataset):
             combined_bond_types = torch.cat(all_bond_types, dim=0)
             combined_bond_indices = torch.cat(all_bond_indices, dim=1)
 
-            npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = sparse_to_dense(
+            npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = sparse_to_dense( # NOTE: this full connects npndes, consider k-hop 
                 combined_coords,
                 combined_atom_types,
                 combined_atom_charges,

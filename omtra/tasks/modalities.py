@@ -129,23 +129,6 @@ Modality.register(MODALITY_REGISTER,
     data_key='a',
     n_categories=len(protein_atom_map),
 )
-Modality.register(MODALITY_REGISTER,
-    name='prot_atom_e',
-    group='protein_identity',
-    graph_entity='edge',
-    entity_name='prot_atom_to_prot_atom',
-    data_key='e',
-    n_categories=0, 
-)
-
-Modality.register(MODALITY_REGISTER,
-    name='prot_atom_lig_e',
-    group='protein_identity', #TODO: this was ligand_identity, but that doesn't work for unconditional generation
-    graph_entity='edge',
-    entity_name='prot_atom_to_lig',
-    data_key='e',
-    n_categories=2,  # covalent/proximity
-)
 
 Modality.register(MODALITY_REGISTER,
     name='npnde_x',
@@ -181,15 +164,6 @@ Modality.register(MODALITY_REGISTER,
     entity_name='npnde_to_npnde',
     data_key='e',
     n_categories=4, # TODO: either use edge types from constants or dont use edge types at all for npndes
-)
-
-Modality.register(MODALITY_REGISTER,
-    name='prot_atom_npnde_e',
-    group='protein_identity',
-    graph_entity='edge',
-    entity_name='prot_atom_to_npnde',
-    data_key='e',
-    n_categories=2, # covalent/proximity
 )
 
 MODALITY_ORDER = [modality.name for modality in MODALITY_REGISTER.values()]

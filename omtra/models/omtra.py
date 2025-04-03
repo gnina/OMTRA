@@ -83,6 +83,7 @@ class OMTRA(pl.LightningModule):
         self.vector_field =  VectorField(
             td_coupling=self.td_coupling,
             interpolant_scheduler=self.interpolant_scheduler,
+            graph_config=self.graph_config,
             **vector_field,
         )
 
@@ -136,7 +137,9 @@ class OMTRA(pl.LightningModule):
         losses = self(g, task_name)
 
         train_log_dict = {}
-        for key in losses:
+        for key, val in losses.items():
+            if torch.isnan(val) or torch.isinf(val):
+                print(f"Warning: {key} contains NaN or Inf values") # TODO: just for debugging, remove later
             train_log_dict[f"{key}_train_loss"] = losses[key]
 
         total_loss = torch.zeros(1, device=g.device, requires_grad=True)
@@ -183,6 +186,10 @@ class OMTRA(pl.LightningModule):
             if modality.graph_entity == "edge":
                 target = target[upper_edge_mask[modality.entity_name]]
             if is_categorical:
+                invalid_targets = (target < 0) | (target >= modality.n_categories)
+                if invalid_targets.any(): # TODO: remove all of this debugging stuff
+                    print(f"Warning: Found {invalid_targets.sum().item()} invalid target indices for {modality.name}")
+                    print(f"Target min: {target.min()}, max: {target.max()}, n_categories: {modality.n_categories}")
                 xt_idxs = data_src[modality.entity_name].data[f"{dk}_t"]
                 if modality.graph_entity == "edge":
                     xt_idxs = xt_idxs[upper_edge_mask[modality.entity_name]]
@@ -212,6 +219,8 @@ class OMTRA(pl.LightningModule):
             else:
                 weight = 1.0
             target = targets[modality.name]
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                continue
             losses[modality.name] = (
                 self.loss_fn_dict[modality.name](vf_output[modality.name], target)
                 * weight

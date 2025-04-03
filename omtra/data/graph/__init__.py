@@ -5,19 +5,29 @@ import itertools
 from omegaconf import DictConfig
 
 node_types = ['lig', 'prot_atom', 'prot_res', 'pharm', 'npnde']
-
+covalent_etypes = ["prot_atom_covalent_lig", "prot_atom_covalent_npnde", "prot_res_covalent_lig", "prot_res_covalent_npnde"]
 # construct the full list of possible edge types
 edge_types = [f"{ntype}_to_{ntype}" for ntype in node_types]
 edge_types += [f'{src_ntype}_to_{dst_ntype}' for src_ntype, dst_ntype in itertools.permutations(node_types, 2)]
+edge_types += covalent_etypes
 
 def to_canonical_etype(etype: str):
-    src_ntype, dst_ntype = etype.split('_to_')
-    return (src_ntype, etype, dst_ntype)
+    if 'covalent' in etype:
+        src_ntype, dst_ntype = etype.split('_covalent_')
+        return (src_ntype, etype, dst_ntype)
+    else:
+        src_ntype, dst_ntype = etype.split('_to_')
+        return (src_ntype, etype, dst_ntype)
 
 def get_inv_edge_type(etype: str):
-    src_ntype, dst_ntype = etype.split('_to_')
-    return f"{dst_ntype}_to_{src_ntype}"
+    if 'covalent' in etype:
+        src_ntype, dst_ntype = etype.split('_covalent_')
+        return f"{dst_ntype}_covalent_{src_ntype}"
+    else:
+        src_ntype, dst_ntype = etype.split('_to_')
+        return f"{dst_ntype}_to_{src_ntype}"
 
+edge_types += [get_inv_edge_type(etype) for etype in covalent_etypes]
 
 # TODO: if protein structure changes during generation, then we would need to do knn-random graph computation on the fly, which we don't know how to do yet
 # TODO: in general, protein structure edges need to be computed on the fly

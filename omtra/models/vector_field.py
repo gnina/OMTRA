@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import Union, Callable, Dict, Optional
 import scipy
 from typing import List
+from omegaconf import DictConfig
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.models.self_conditioning import SelfConditioningResidualLayer
@@ -21,6 +22,7 @@ from omtra.tasks.modalities import (
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype
+from omtra.data.graph.edge_factory import get_edge_builders
 from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
@@ -38,6 +40,7 @@ class VectorField(nn.Module):
         self,
         interpolant_scheduler: InterpolantScheduler,
         td_coupling: TaskDatasetCoupling,
+        graph_config: DictConfig, 
         n_pharmvec_channels: int = 4,
         n_vec_channels: int = 16,
         n_cp_feats: int = 0,
@@ -72,6 +75,7 @@ class VectorField(nn.Module):
         # however, this is the fastest way to get CTMCVectorField working right now, so we will be anti-pattern for the sake of time
     ):
         super().__init__()
+        self.graph_config = graph_config
         self.token_dim = token_dim
         self.task_embedding_dim = token_dim
         self.n_hidden_scalars = n_hidden_scalars
@@ -141,7 +145,8 @@ class VectorField(nn.Module):
                 raise ValueError("did not expect continuous edge features")
             self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
             self.edge_types.add(modality.entity_name)
-
+            
+        self.edge_types.update(graph_config.get("edges").keys())
         # create a task embedding
         self.task_embedding = nn.Embedding(len(td_coupling.task_space), self.task_embedding_dim)
 
@@ -321,6 +326,9 @@ class VectorField(nn.Module):
             node_vec_features = {}
             edge_features = {}
 
+            # the only edges that should be in g at this point are covalent, lig_to_lig, npnde_to_npnde, maybe pharm_to_pharm
+            # need to add edges into protein structure, and between differing ntypes (except covalent)
+            g = self.build_edges(g, node_batch_idx, self.graph_config)
 
             # compose the graph from modalities into the language of the GNN
             # that is node positions, node scalar features, node vector features, and edge features
@@ -407,7 +415,7 @@ class VectorField(nn.Module):
             if self.self_conditioning and prev_dst_dict is None:
                 train_self_condition = self.training and (torch.rand(1) > 0.5).item()
 
-                train_self_condition = True
+                train_self_condition = False
                 print('WARNING: self-conditioning always enabled for debugging, delete this line!!')
 
 
@@ -477,6 +485,29 @@ class VectorField(nn.Module):
             )
 
             return dst_dict
+        
+    def build_edges(self, g: dgl.DGLGraph, node_batch_idx: Dict[str, torch.Tensor], graph_config):
+        edge_builders = get_edge_builders(graph_config)
+        prebuilt_edges = ["lig_to_lig", "pharm_to_pharm", "npnde_to_npnde"]
+        
+        for etype in g.etypes:
+            if etype in prebuilt_edges or "covalent" in etype:
+                continue
+            src_ntype, _, dst_ntype = to_canonical_etype(etype)
+            
+            if src_ntype not in self.node_types or dst_ntype not in self.node_types:
+                continue
+            
+            src_pos, dst_pos = g.nodes[src_ntype].data["x_t"], g.nodes[dst_ntype].data["x_t"]
+            builder_fn = edge_builders.get(etype)
+            if builder_fn is None:
+                raise NotImplementedError(f"Error getting edge builder for {etype}")
+            
+            edge_idxs = builder_fn(src_pos, dst_pos, node_batch_idx[src_ntype], node_batch_idx[dst_ntype])
+            g.add_edges(edge_idxs[0], edge_idxs[1], etype=etype)
+        return g
+            
+        
 
     def denoise_graph(
         self,
@@ -515,6 +546,8 @@ class VectorField(nn.Module):
                     for modality in modalities_generated:
                         if modality.graph_entity == "node" and modality.data_key == "x":
                             ntype = modality.entity_name
+                            if g.num_nodes(ntype) == 0:
+                                continue
                             node_positions[ntype] = self.node_position_updaters[ntype][
                                 updater_idx
                             ](
@@ -576,12 +609,14 @@ class VectorField(nn.Module):
         dst_dict = {}
         # modalities_present = task_class.modalities_fixed + task_class.modalities_generated
         for modality in task_class.modalities_generated:
-
+            
             is_node = modality.graph_entity == "node"
             is_position = modality.data_key == "x"
             is_categorical = modality.n_categories and modality.n_categories > 0
 
             if is_position:
+                if g.num_nodes(modality.entity_name) == 0:
+                    continue
                 dst_dict[modality.name] = node_positions[modality.entity_name]
             elif is_categorical:
                 dst_dict[modality.name] = logits[modality.name]
