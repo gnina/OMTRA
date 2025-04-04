@@ -44,9 +44,9 @@ def parse_args():
     parser.add_argument("--output", type=str, required=True, help="Path to zarr store")
     parser.add_argument(
         "--pocket_cutoff",
-        type=int,
+        type=float,
         required=False,
-        default=8,
+        default=8.0,
         help="Angstrom cutoff for pocket extraction",
     )
     parser.add_argument(
