@@ -446,7 +446,6 @@ class HeteroGVPConv(nn.Module):
                         vector_gating=True,
                     )
                 )
-            # NOTE: do we want separate message functions per ntype agnostic edge type (interaction/covalent) or consider ntype?
             self.edge_message_fns[etype] = nn.Sequential(*message_gvps)
 
         self.node_update_fns = nn.ModuleDict()
