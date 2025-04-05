@@ -13,10 +13,7 @@ def gaussian(x1: torch.Tensor, std: float = 1.0, ot=False):
     """
     Generate a prior feature by sampling from a Gaussian distribution.
     """
-
-    n, d = x1.shape
-
-    x0 = torch.randn(n, d) * std
+    x0 = torch.randn_like(x1) * std
     
     if ot:
         # move x0 to the same COM as x1

@@ -225,6 +225,8 @@ class ProteinLigandPharmacophoreDeNovo(Task):
         'params': {'ot': True}
     }
 
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.denovo_pharmacophore, **cpc.protein)
+
 
 # TODO: there could be more protein+ligand+pharmacophore tasks but that is a future decision
 

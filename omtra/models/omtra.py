@@ -256,6 +256,13 @@ class OMTRA(pl.LightningModule):
         )
         for modality_name in conditonal_path_fns:
             modality: Modality = name_to_modality(modality_name)
+            
+            # skip modalities that are not present in the graph (for example a system with no npndes)
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                continue
+            elif not modality.is_node and g.num_edges(modality.entity_name) == 0:
+                continue
+            
             conditional_path_name, conditional_path_fn = conditonal_path_fns[
                 modality_name
             ]

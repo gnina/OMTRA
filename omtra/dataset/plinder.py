@@ -52,7 +52,6 @@ class PlinderDataset(ZarrDataset):
         processed_data_dir: str,
         graph_config: Optional[DictConfig] = None,
         prior_config: Optional[DictConfig] = None,
-        include_pharmacophore: bool = False,
     ):
         super().__init__(
             split,
@@ -64,7 +63,6 @@ class PlinderDataset(ZarrDataset):
         self.graph_config = graph_config
         self.prior_config = prior_config
 
-        self.include_pharmacophore = include_pharmacophore
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
 
@@ -140,7 +138,7 @@ class PlinderDataset(ZarrDataset):
             )
         return npndes
 
-    def get_system(self, index: int) -> SystemData:
+    def get_system(self, index: int, include_pharmacophore: bool) -> SystemData:
         system_info = self.system_lookup[
             self.system_lookup["system_idx"] == index
         ].iloc[0]
@@ -233,7 +231,7 @@ class PlinderDataset(ZarrDataset):
             ),  # edge index
         )
 
-        if self.include_pharmacophore:
+        if include_pharmacophore:
             pharm_start, pharm_end = (
                 system_info["pharm_start"],
                 system_info["pharm_end"],
@@ -346,7 +344,7 @@ class PlinderDataset(ZarrDataset):
             receptor=receptor,
             ligand=ligand,
             pharmacophore=pharmacophore
-            if self.include_pharmacophore
+            if include_pharmacophore
             else PharmacophoreData(
                 coords=np.zeros((0, 3), dtype=np.float32),
                 types=np.zeros((0,), dtype=np.int32),
@@ -855,6 +853,7 @@ class PlinderDataset(ZarrDataset):
     def convert_system(
         self,
         system: SystemData,
+        include_pharmacophore: bool,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -866,6 +865,7 @@ class PlinderDataset(ZarrDataset):
         edge_idxs = {}
         edge_data = {}
 
+        # read protein data
         prot_node_data, prot_edge_idxs, prot_edge_data, pocket_mask, bb_pocket_mask = (
             self.convert_protein(system.receptor, system.pocket)
         )
@@ -873,6 +873,7 @@ class PlinderDataset(ZarrDataset):
         edge_idxs.update(prot_edge_idxs)
         edge_data.update(prot_edge_data)
 
+        # read ligand data
         lig_node_data, lig_edge_idxs, lig_edge_data = self.convert_ligand(
             system.ligand, system.ligand_id, system.pocket
         )
@@ -880,6 +881,7 @@ class PlinderDataset(ZarrDataset):
         edge_idxs.update(lig_edge_idxs)
         edge_data.update(lig_edge_data)
 
+        # read npnde data
         npnde_node_data, npnde_edge_idxs, npnde_edge_data = self.convert_npndes(
             system.npndes if system.npndes is not None else {}, system.pocket
         )
@@ -887,7 +889,7 @@ class PlinderDataset(ZarrDataset):
         edge_idxs.update(npnde_edge_idxs)
         edge_data.update(npnde_edge_data)
 
-        if self.include_pharmacophore:
+        if include_pharmacophore:
             pharm_node_data, pharm_edge_idxs, pharm_edge_data = (
                 self.convert_pharmacophore(system.pharmacophore)
             )
@@ -901,10 +903,12 @@ class PlinderDataset(ZarrDataset):
         task_name, idx = index
         task_class: Task = task_name_to_class(task_name)
 
-        system = self.get_system(idx)
+        include_pharmacophore = 'pharmacophore' in task_class.groups_present
+
+        system = self.get_system(idx, include_pharmacophore=include_pharmacophore)
 
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
-            self.convert_system(system)
+            self.convert_system(system, include_pharmacophore=include_pharmacophore)
         )
 
         # TODO: things!
@@ -918,6 +922,12 @@ class PlinderDataset(ZarrDataset):
                 modality_name
             ]  # get prior name and function
             modality = name_to_modality(modality_name)  # get the modality object
+
+            # skip modalities that are not present in the graph (for example a system with no npndes)
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                continue
+            elif not modality.is_node and g.num_edges(modality.entity_name) == 0:
+                continue
 
             # fetch the target data from the graph object
             g_data_loc = g.nodes if modality.graph_entity == "node" else g.edges

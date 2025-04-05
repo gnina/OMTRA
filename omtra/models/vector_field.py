@@ -587,14 +587,12 @@ class VectorField(nn.Module):
 
         logits = {}
         for modality in task_class.modalities_generated:
-            is_node = modality.graph_entity == "node"
-            is_categorical = modality.n_categories and modality.n_categories > 0
-            if is_node and is_categorical:
+            if modality.is_node and modality.is_categorical:
                 ntype = modality.entity_name
                 logits[modality.name] = self.node_output_heads[modality.name](
                     node_scalar_features[ntype]
                 )
-            elif not is_node and is_categorical:
+            elif not modality.is_node and modality.is_categorical:
                 etype = modality.entity_name
                 ue_feats = edge_features[etype][upper_edge_mask[etype]]
                 le_feats = edge_features[etype][~upper_edge_mask[etype]]

@@ -94,20 +94,11 @@ class ChunkFetcher:
         self.cache_size = cache_size
         self.cache = OrderedDict()  # Ordered dictionary to maintain LRU order
 
-        self.chunks_touched = []
-
     def __call__(self, chunk_id):
         if chunk_id in self.cache:
-
-            if self.array_name == 'pocket/coords':
-                print(f'CHUNK READ {chunk_id} from array {self.array_name}. Num chunks touched: {len(self.chunks_touched)}')
-
             # Move the accessed chunk to the end to mark it as recently used
             self.cache.move_to_end(chunk_id)
         else:
-            self.chunks_touched.append(chunk_id)
-            if self.array_name == 'pocket/coords':
-                print(f'NEW CHUNK READ {chunk_id} from array {self.array_name}. Num chunks touched: {len(self.chunks_touched)}')
             if len(self.cache) >= self.cache_size:
                 # Remove the least recently used chunk
                 self.cache.popitem(last=False)
