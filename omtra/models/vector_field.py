@@ -622,28 +622,24 @@ class VectorField(nn.Module):
         dst_dict = {}
         # modalities_present = task_class.modalities_fixed + task_class.modalities_generated
         for modality in task_class.modalities_generated:
-            
-            is_node = modality.graph_entity == "node"
-            is_position = modality.data_key == "x"
-            is_categorical = modality.n_categories and modality.n_categories > 0
-
-            if is_position:
-                if g.num_nodes(modality.entity_name) == 0:
-                    continue
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                continue
+            if modality.data_key == "x":
                 dst_dict[modality.name] = node_positions[modality.entity_name]
-            elif is_categorical:
+            elif modality.is_categorical:
                 dst_dict[modality.name] = logits[modality.name]
                 if apply_softmax:
                     dst_dict[modality.name] = torch.softmax(
                         dst_dict[modality.name], dim=-1
                     )
+            elif modality.data_key == 'v':
+                ntype = modality.entity_name
+                s_in = node_scalar_features[ntype]
+                v_in = node_vec_features[ntype]
+                _, v_out = self.node_output_heads[modality.name]((s_in, v_in))
+                dst_dict[modality.name] = v_out
             else:
-                raise NotImplementedError('i think this only applies to pharm vec features, need to figure this case out')
-        # TODO: consider this when doing loss fns (not doing one-hot encoding anymore)
-        # NOTE: moved softmax into above loop
-        # apply softmax to categorical features, if requested
-        # at training time, we don't want to apply softmax because we use cross-entropy loss which includes softmax
-        # at inference time, we want to apply softmax to get a vector which lies on the simplex
+                raise NotImplementedError(f'unaccounted for modality: {modality.name}')
 
         return dst_dict
 

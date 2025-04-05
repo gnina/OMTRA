@@ -79,14 +79,6 @@ class ZarrDataset(OMTRADataset):
             data = data.squeeze()
         return data
     
-    @abstractmethod
-    def get_num_nodes(self, task: Task, start_idx: int, end_idx: int):
-        pass
-
-    @abstractmethod
-    def get_num_edges(self, task: Task, start_idx: int, end_idx: int):
-        pass
-    
 class ChunkFetcher:
     def __init__(self, root, array_name, cache_size):
         self.root = root

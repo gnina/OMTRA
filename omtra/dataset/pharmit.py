@@ -45,9 +45,7 @@ class PharmitDataset(ZarrDataset):
     
     @property
     def n_zarr_chunks(self):
-        raise NotImplementedError("this line relies on the hard-coded assumption that graph lookup table is 1 chunk - don't think this is true anymore")
-        graph_lookup = self.root['lig/node/graph_lookup']
-        return graph_lookup.chunks[0]
+        return self.root['lig/node/x'].shape[0] // self.root['lig/node/x'].chunks[0]
     
     @property
     def graphs_per_chunk(self):
@@ -217,31 +215,3 @@ class PharmitDataset(ZarrDataset):
         node_counts = np.stack(node_counts, axis=0).sum(axis=0)
         node_counts = torch.from_numpy(node_counts)
         return node_counts
-    
-    @functools.lru_cache(1024*1024)
-    def get_num_edges(self, task: Task, start_idx, end_idx):
-        # here, unlike in other places, start_idx and end_idx are 
-        # indexes into the graph_lookup array, not a node/edge data array
-
-        # get number of nodes in each graph, per node type
-        n_nodes_dict = self.get_num_nodes(task, start_idx, end_idx, per_ntype=True)
-        node_types, n_nodes_per_type = zip(*n_nodes_dict.items())
-
-        # evaluate same-ntype edges
-        n_edges_total = torch.zeros(end_idx - start_idx, dtype=torch.int64)
-        for ntype, n_nodes in zip(node_types, n_nodes_per_type):
-            etype = f'{ntype}_to_{ntype}'
-            n_edges = approx_n_edges(etype, self.graph_config, n_nodes_dict)
-            n_edges_total += n_edges
-
-        # cover cross-ntype edges
-        # there are many problems in how we do this; the user needs to specify configs
-        # exactly right or we could end up miscounting edges here, so...tbd
-        # TODO: lig_to_pharm symmetry may be less desireable than pharm_to_lig symmetry
-        if len(node_types) == 2:
-            assert 'lig_to_pharm' in self.graph_config.symmetric_etypes
-            n_edges = approx_n_edges('lig_to_pharm', self.graph_config, n_nodes_dict)
-            n_edges_total += n_edges*2
-            
-
-        return n_edges_total

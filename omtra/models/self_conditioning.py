@@ -119,7 +119,7 @@ class SelfConditioningResidualLayer(nn.Module):
                 # to update node scalar features
                 # has shape (n_nodes, n_pharmvec_channels, n_pharmvec_channels, 3)
                 if m_generated:
-                    dij = dst_dict[m.name].unsqueeze(1) - v_t[ntype].unsqueeze(2)
+                    dij = dst_dict[m.name].unsqueeze(1) - v_t[ntype][:, :self.n_pharmvec_channels].unsqueeze(2)
                     dij = _norm_no_nan(dij) # has shape (n_nodes, n_pharmvec_channels, n_pharmvec_channels)
                     # flatten to shape (n_nodes, n_pharmvec_channels+n_pharmvec_channels)
                     dij = rearrange(dij, 'n c1 c2 -> n (c1 c2)')

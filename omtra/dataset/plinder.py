@@ -18,7 +18,6 @@ from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
-from omtra.tasks.utils import get_edges_for_task
 from omtra.utils.misc import classproperty
 from omtra.priors.prior_factory import get_prior
 from omtra.tasks.modalities import name_to_modality
@@ -1066,28 +1065,4 @@ class PlinderDataset(ZarrDataset):
         node_counts = torch.from_numpy(node_counts)
         return node_counts
 
-    @functools.lru_cache(1024 * 1024)
-    def get_num_edges(self, task: Task, start_idx, end_idx):
-        # here, unlike in other places, start_idx and end_idx are
-        # indexes into the graph_lookup array, not a node/edge data array
 
-        # get number of nodes in each graph, per node type
-        n_nodes_dict = self.get_num_nodes(task, start_idx, end_idx, per_ntype=True)
-        node_types, n_nodes_per_type = zip(*n_nodes_dict.items())
-
-        # get edge types modeled under this task
-        edge_types = get_edges_for_task(task, self.graph_config)
-        
-        # evaluate same-ntype edges
-        n_edges_total = torch.zeros(end_idx - start_idx, dtype=torch.int64)
-        for etype in edge_types:
-
-            # no need to count covalent edges, they're rare and few
-            if 'covalent' in etype:
-                continue
-            n_edges = approx_n_edges(etype, self.graph_config, n_nodes_dict)
-            if etype in self.graph_config.symmetric_etypes:
-                n_edges *= 2
-            n_edges_total += n_edges
-
-        return n_edges_total
