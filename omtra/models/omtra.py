@@ -30,6 +30,7 @@ class OMTRA(pl.LightningModule):
         dists_file: str,
         graph_config: DictConfig,
         conditional_paths: DictConfig,
+        optimizer: Callable,
         total_loss_weights: Dict[str, float] = {},
         vector_field: DictConfig = None,
     ):
@@ -90,6 +91,8 @@ class OMTRA(pl.LightningModule):
 
         self.configure_loss_fns()
 
+        self.save_hyperparameters()
+
     def configure_loss_fns(self):
 
         if self.time_scaled_loss:
@@ -114,7 +117,6 @@ class OMTRA(pl.LightningModule):
 
 
     def training_step(self, batch_data, batch_idx):
-        # print('forward pass!')
         g, task_name, dataset_name = batch_data
 
         # get the total batch size across all devices
@@ -155,7 +157,6 @@ class OMTRA(pl.LightningModule):
             sync_dist=True,
             on_step=True,
         )
-        print(f'forward pass complete! batch_size={batch_data[0].batch_size}', flush=True)
         return total_loss
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
@@ -233,8 +234,8 @@ class OMTRA(pl.LightningModule):
         return losses
 
     def configure_optimizers(self):
-        # implement optimizer
-        pass
+        optimizer = self.hparams.optimizer(self.parameters())
+        return optimizer
 
     def sample_conditional_path(
         self,

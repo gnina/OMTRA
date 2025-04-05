@@ -4,3 +4,4 @@ defaults:
   - _self_
   - conditional_paths: default
   - vector_field: default
+  - optimizer: default

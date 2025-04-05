@@ -13,7 +13,7 @@ seed: 42
 name: i_forgot_to_name_my_run
 
 # global overrides
-edges_per_batch: 25000 # approx 640 edges/gb ram
+edges_per_batch: 50000 # TODO: need to determine optimal number
 num_workers: 2
 max_steps: 10000 # number of steps to train for
 
