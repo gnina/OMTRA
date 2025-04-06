@@ -308,3 +308,58 @@ class OMTRA(pl.LightningModule):
             ].data[f"{dk}_1_true"]
 
         return g
+
+
+    @torch.no_grad()
+    def sample(self, task_name: str, g: dgl.DGLHeteroGraph = None):
+
+        task: Task = task_name_to_class(task_name)
+        groups_generated = task.groups_generated
+        groups_present = task.groups_present
+
+        # unless this is a completely and totally unconditional task, the user
+        # has to provide the conditional information in the graph
+        if set(groups_generated) != set(groups_present) and g is None:
+            raise ValueError(
+                f"Task {task_name} requires a user-provided graph to sample from, but none was provided."
+            )
+        
+        # determine if we need to add nodes to the system
+        ntypes_to_add = []
+        if 'ligand_identity' in groups_generated:
+            ntypes_to_add.append('lig')
+        if 'pharmacophore' in groups_generated:
+            ntypes_to_add.append('pharm')
+
+        protein_present = 'protein_structure' in groups_present
+            
+        # TODO: sample number of ligand atoms
+        if protein_present and 'lig' in ntypes_to_add:
+            n_lig_atoms = torch.tensor([10], device=g.device)
+            # if protein is present, sample ligand atoms from p(n_ligand_atoms|n_protein_atoms,n_pharm_atoms)
+            # if pharm atoms not present, we marginalize over n_pharm_atoms - this distribution from plinder dataset
+        elif not protein_present and 'lig' in ntypes_to_add:
+            n_lig_atoms = torch.tensor([10], device=g.device)
+        else:
+            n_lig_atoms = None
+            # TODO: if no protein is present, sample p(n_ligand_atoms|n_pharm_atoms), marginalizing if n_pharm_atoms is not present
+            # in this case, the distrbution could come from pharmit or plinder dataset..user-chosen option?
+
+        # add lig atoms to graph
+        if n_lig_atoms is not None:
+            # add ligand nodes to the graph
+            g.add_nodes(n_lig_atoms, ntype='lig')
+            # TODO: add lig-lig edges
+
+
+
+        if protein_present and 'pharm' in ntypes_to_add:
+            # TODO sample pharm atoms given n_protein_atoms, n_ligand_atoms
+            pass
+        elif not protein_present and 'pharm' in ntypes_to_add:
+            # TODO sample pharm atoms given n_ligand_atoms, can use plinder or pharmit dataset distributions
+            pass
+
+
+        
+        
