@@ -11,13 +11,8 @@ def radius_graph(node_positions, radius, max_num_neighbors=1000):
     return edge_idxs
 
 @register_edge_builder("complete")
-def complete_graph(node_positions):
-    n_nodes = node_positions.shape[0]
-    edge_idxs = tc.radius_graph(node_positions, 
-                             float('inf'), 
-                             batch=None, 
-                             loop=False, 
-                             max_num_neighbors=n_nodes+2)
+def complete_graph(src_pos, dst_pos, src_batch_idx, dst_batch_idx):
+    edge_idxs = hetero_radius(src_pos, dst_pos, src_batch_idx, dst_batch_idx, r=float("Inf"))
     return edge_idxs
 
 @register_edge_builder("radius")

@@ -128,21 +128,11 @@ class PharmitDataset(ZarrDataset):
                 'v_1_true': pharm_v
             }
 
-            assert self.graph_config.edges['pharm_to_pharm']['type'] == 'complete', 'the following code assumes complete pharm-pharm graph'
-            g_edge_idxs['pharm_to_pharm'] = edge_builders.complete_graph(pharm_x)
-
-        # for now, we assume lig-pharm edges are built on the fly
         g = build_complex_graph(node_data=g_node_data, edge_idxs=g_edge_idxs, edge_data=g_edge_data)
 
-
-        # get the prior functions for this task
-        # TODO: with our new modality system, its entirely possible that this code could be put into 
-        # its own function and reused for other datasets
-        # if the prior function is like apo_exp or apo_pred then we have to add some extra logic
-        # because we would need to fetch the actual apo structure, so centralized prior sampling logic
-        # will look a little different when we support systems with proteins
+        # sample priors
         priors_fns = get_prior(task_class, self.prior_config, training=True)
-        g = sample_priors(g, task_class, priors_fns)
+        g = sample_priors(g, task_class, priors_fns, training=True)
 
         return g
     

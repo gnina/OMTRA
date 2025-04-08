@@ -319,6 +319,7 @@ class OMTRA(pl.LightningModule):
                task_name: str, 
                g_list: List[dgl.DGLHeteroGraph] = None, # list of graphs containing conditional information (receptor structure, pharmacphore, ligand identity, etc)
                n_replicates: int = 1, # number of replicates samples to draw per conditioning input in g_list, or just number of samples if a fully unconditional task
+               coms: torch.Tensor = None, # center of mass for adding ligands/pharms to systems
     ):
 
         task: Task = task_name_to_class(task_name)
@@ -345,11 +346,20 @@ class OMTRA(pl.LightningModule):
                     edge_idxs={},
                     edge_data={},
                 ))
+            coms_flat = [None] * len(g_flat)
         else:
             # otherwise, we need to copy the graphs out n_replicates times
             g_flat: List[dgl.DGLHeteroGraph] = []
-            for g_i in g_list:
+            coms_flat = []
+            for idx, g_i in enumerate(g_list):
                 g_flat.extend(copy_graph(g_i, n_replicates))
+
+                if coms is None:
+                    com_i = g_i.nodes['prot_atom'].data['x_1_true'].mean(dim=0)
+                else:
+                    com_i = coms[idx]
+
+                coms_flat.extend([com_i] * n_replicates)
 
         # TODO: sample number of ligand atoms
         protein_present = 'protein_structure' in groups_present
@@ -390,17 +400,14 @@ class OMTRA(pl.LightningModule):
 
         # TODO: batch the graphs
         g = dgl.batch(g_flat)
+        if coms_flat[0] is None:
+            com_batch = None
+        else:
+            com_batch = torch.stack(coms_flat, dim=0)
 
         # sample prior distributions for each modality
         prior_fns = get_prior(task, self.prior_config, training=False)
-        g = sample_priors(g, task, prior_fns, training=False)
-
-        # let the user set the COM of the system?
-        # if that supplied graph was None, create the graph?
-
-        # TODO: how to consider COMs for sampling ligand and pharmacophore initial positions?
-        # sample both lig and pharm positions with mean = user-supplied COM
-        # COM could default to protein COM or it can be like, the ground truth ligand COM
+        g = sample_priors(g, task, prior_fns, training=False, com=com_batch)
 
         # pass graph to vector field..
 

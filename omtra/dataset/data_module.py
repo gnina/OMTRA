@@ -78,7 +78,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
                                 worker_init_fn=worker_init_fn,
                                 persistent_workers=self.num_workers > 0,
                                 pin_memory=True,
-                                prefetch_factor=5,
+                                prefetch_factor=5 if self.num_workers > 0 else None,
                                 num_workers=self.num_workers)
 
         return dataloader
