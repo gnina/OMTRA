@@ -1,0 +1,9 @@
+
+# cant set target because we don't want recursive instantiation to kick off when creating Omtra model. 
+# this is a bummer because i would love to be able to change the vector field class at the config level.. :(
+# _target_: omtra.models.vector_field.VectorField
+
+self_conditioning: true
+convs_per_update: 4
+n_molecule_updates: 1
+n_hidden_scalars: 256

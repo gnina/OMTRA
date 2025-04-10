@@ -19,10 +19,12 @@ class MultiTaskSampler(Sampler):
                  distributed: bool = False,
                  rank: int = None,
                  num_replicas: int = None,
+                 max_steps: int = None,
         ):
         super().__init__()
         self.multi_dataset = multi_dataset
         self.edges_per_batch = edges_per_batch
+        self.max_steps = max_steps
         
         self.distributed = distributed
 
@@ -134,7 +136,8 @@ class MultiTaskSampler(Sampler):
     def __iter__(self):
 
         self.build_chunk_trackers()
-        while True:
+        step_idx = 0
+        while step_idx < len(self):
             if self.distributed:
                 task_idx, dataset_idx = self.get_td_pair_distributed()
             else:
@@ -152,6 +155,11 @@ class MultiTaskSampler(Sampler):
             
             yield global_idxs
 
+            step_idx += 1
+
+    def __len__(self):
+        return self.max_steps if self.max_steps is not None else float('inf')
+    
     def state_dict(self):
         return {
             'batch_idx': self.batch_idx,

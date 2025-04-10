@@ -6,17 +6,14 @@ import dgl
 
 from omtra.priors.register import register_train_prior, register_inference_prior
 from omtra.priors.align import align_prior
+from typing import Union, Tuple, List
 
-# @register_inference_prior("gaussian")
 @register_train_prior("gaussian")
-def gaussian(x1: torch.Tensor, std: float = 1.0, ot=False):
+def gaussian_train(x1: torch.Tensor, std: float = 1.0, ot=False):
     """
     Generate a prior feature by sampling from a Gaussian distribution.
     """
-
-    n, d = x1.shape
-
-    x0 = torch.randn(n, d) * std
+    x0 = torch.randn_like(x1) * std
     
     if ot:
         # move x0 to the same COM as x1
@@ -29,59 +26,42 @@ def gaussian(x1: torch.Tensor, std: float = 1.0, ot=False):
 
     return x0
 
-@register_train_prior("centered-normal")
-def centered_normal_prior(x1: torch.Tensor, std: float = 1.0):
+@register_inference_prior("gaussian")
+def gaussian_inference(n: int, d: Union[int, List[int]], std: float = 1.0, **kwargs):
     """
-    Generate a prior feature by sampling from a centered normal distribution.
+    Generate a prior feature by sampling from a Gaussian distribution.
     """
-    n, d = x1.shape
-    prior_feat = torch.randn(n, d) * std
-    prior_feat = prior_feat - prior_feat.mean(dim=0, keepdim=True)
-    return prior_feat
-
-
-@register_inference_prior("centered-normal")
-def centered_normal_prior_batched_graph(g: dgl.DGLGraph, node_batch_idx: torch.Tensor, std: float = 1.0):
-    raise NotImplementedError
-    # TODO: implement this for a heterogeneous graph
-    n = g.num_nodes()
-    prior_sample = torch.randn(n, 3, device=g.device)
-    with g.local_scope():
-        g.ndata['prior_sample'] = prior_sample
-        prior_sample = prior_sample - dgl.readout_nodes(g, feat='prior_sample', op='mean')[node_batch_idx]
-
-    return prior_sample
+    if isinstance(d, int):
+        x0 = torch.randn(n, d) * std
+    else:
+        x0 = torch.randn(n, *d) * std
+    return x0
+    
     
 @register_train_prior("masked")
-@register_inference_prior("masked")
-def ctmc_masked_prior(x1: torch.Tensor, n_categories: int):
+def ctmc_masked_train(x1: torch.Tensor, n_categories: int):
     """
     Sample from a CTMC masked prior. All samples are assigned the mask token at t=0.
     """
-    p = torch.ones_like(x1)*n_categories
+    n = x1.shape[0]
+    p = ctmc_masked_inference(n, n_categories)
+    p.to(x1.device)
     return p
 
-@register_train_prior("fixed")
-@register_inference_prior("fixed")
-def fixed_prior(x1: torch.Tensor):
+@register_inference_prior("masked")
+def ctmc_masked_inference(n: int, d: int):
     """
-    Generate a fixed prior feature.
+    Sample from a CTMC masked prior. All samples are assigned the mask token at t=0.
     """
-    return x1.clone()
+    p = torch.ones(n, dtype=torch.long) * d
+    return p
 
-
-@register_train_prior("apo_exp")
-def exp_prior(x0: torch.Tensor):
+@register_train_prior("target_dependent_gaussian")
+@register_inference_prior("target_dependent_gaussian")
+def target_dependent_gaussian_prior(x1: torch.Tensor, std: float = 1.0):
     """
-    Generate a prior from unbound experimental structure
+    Generate a target-dependent Gaussian prior feature.
     """
-    return x0.clone()
-
-@register_train_prior("apo_pred")
-def pred_prior(x0: torch.Tensor):
-    """
-    Generate a prior from AlphaFold predicted unbound structure
-    """
-    return x0.clone()
-
-
+    x_0 = x1.clone() + torch.randn_like(x1) * std
+    # TODO: adjust COM of x_0??
+    return x_0

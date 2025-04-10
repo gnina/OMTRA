@@ -76,10 +76,10 @@ def adaptive_batch_loader(nodes_per_graph: torch.Tensor, max_nodes: int) -> torc
     """
     num_graphs = nodes_per_graph.size(0)
     indices = torch.randperm(num_graphs)  # Randomly shuffle the indices
-    selected_indices = []
+    selected_indices = [0]
     total_nodes = 0
     
-    for idx in indices:
+    for idx in indices[1:]:
         graph_nodes = nodes_per_graph[idx].item()
         if total_nodes + graph_nodes > max_nodes:
             break

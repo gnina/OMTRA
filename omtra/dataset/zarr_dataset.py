@@ -79,14 +79,6 @@ class ZarrDataset(OMTRADataset):
             data = data.squeeze()
         return data
     
-    @abstractmethod
-    def get_num_nodes(self, task: Task, start_idx: int, end_idx: int):
-        pass
-
-    @abstractmethod
-    def get_num_edges(self, task: Task, start_idx: int, end_idx: int):
-        pass
-    
 class ChunkFetcher:
     def __init__(self, root, array_name, cache_size):
         self.root = root
@@ -94,11 +86,19 @@ class ChunkFetcher:
         self.cache_size = cache_size
         self.cache = OrderedDict()  # Ordered dictionary to maintain LRU order
 
+        # self.chunks_touched = 0
+
     def __call__(self, chunk_id):
         if chunk_id in self.cache:
             # Move the accessed chunk to the end to mark it as recently used
             self.cache.move_to_end(chunk_id)
+            # if self.array_name == 'lig/node/x':
+            #     print(f"READ from existing chunk: {chunk_id}, {self.chunks_touched} chunks touched")
+
         else:
+            # self.chunks_touched += 1
+            # if self.array_name == 'lig/node/x':
+            #     print(f"READ from disk: {chunk_id}, {self.chunks_touched} chunks touched")
             if len(self.cache) >= self.cache_size:
                 # Remove the least recently used chunk
                 self.cache.popitem(last=False)

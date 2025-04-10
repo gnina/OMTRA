@@ -11,6 +11,9 @@ def sample_continuous_interpolant(
     beta_t: torch.Tensor,  # for each node/edge
     ue_mask: torch.Tensor = None,
 ):
+    if x_0.ndim == 3: # for pharmacophore vectors
+        alpha_t = alpha_t.unsqueeze(-1)
+        beta_t = beta_t.unsqueeze(-1)
     x_t = alpha_t * x_0 + beta_t * x_1
 
     if ue_mask is not None:

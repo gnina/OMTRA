@@ -16,3 +16,4 @@ prior_config: ${prior}
 graph_config: ${graph}
 edges_per_batch: ${edges_per_batch}
 num_workers: ${num_workers}
+max_steps: ${max_steps}

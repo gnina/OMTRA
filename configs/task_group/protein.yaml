@@ -18,6 +18,8 @@ task_phases:
         probability: 0.25
       - name: pred_apo_conditioned_denovo_ligand
         probability: 0.25
+      - name: protein_ligand_pharmacophore_denovo
+        probability: 0.25
 
 # define p(dataset|task) coupling (assume static for simplicity)
 dataset_task_coupling:
@@ -28,4 +30,6 @@ dataset_task_coupling:
   exp_apo_conditioned_denovo_ligand:
     - [plinder, 1.0]
   pred_apo_conditioned_denovo_ligand:
+    - [plinder, 1.0]
+  protein_ligand_pharmacophore_denovo:
     - [plinder, 1.0]

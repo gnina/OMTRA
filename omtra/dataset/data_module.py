@@ -21,7 +21,8 @@ class MultiTaskDataModule(pl.LightningDataModule):
         prior_config: DictConfig, 
         edges_per_batch: int, 
         num_workers: int = 0, 
-        distributed: bool = False, 
+        distributed: bool = False,
+        max_steps: int = None, 
     ):
         super().__init__()
         self.dataset_config = dataset_config
@@ -30,6 +31,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.prior_config = prior_config
         self.graph_config = graph_config
+        self.max_steps = max_steps
 
 
         self.td_coupling: TaskDatasetCoupling = build_td_coupling(task_phases, dataset_task_coupling)
@@ -47,7 +49,8 @@ class MultiTaskDataModule(pl.LightningDataModule):
                 self.train_dataset, 
                 self.td_coupling,
                 self.edges_per_batch, 
-                distributed=self.distributed
+                distributed=self.distributed,
+                max_steps=self.max_steps,
             )
 
             # TODO: how exactly do we want to sample data for validation? we don't actually
@@ -56,7 +59,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
                 self.val_dataset, 
                 self.td_coupling,
                 self.edges_per_batch, 
-                distributed=self.distributed
+                distributed=self.distributed,
             )
 
     def load_dataset(self, split: str):
@@ -68,10 +71,14 @@ class MultiTaskDataModule(pl.LightningDataModule):
                              **self.dataset_config)
     
     def train_dataloader(self):
+        
         dataloader = DataLoader(self.train_dataset, 
                                 batch_sampler=self.train_sampler,
                                 collate_fn=omtra_collate_fn, 
                                 worker_init_fn=worker_init_fn,
+                                persistent_workers=self.num_workers > 0,
+                                pin_memory=True,
+                                prefetch_factor=5 if self.num_workers > 0 else None,
                                 num_workers=self.num_workers)
 
         return dataloader
@@ -82,14 +89,15 @@ class MultiTaskDataModule(pl.LightningDataModule):
                                 batch_sampler=self.val_sampler,
                                 collate_fn=omtra_collate_fn, 
                                 worker_init_fn=worker_init_fn,
+                                persistent_workers=self.num_workers > 0,
                                 num_workers=self.num_workers)
         return dataloader
     
     def state_dict(self):
         # Save the state of the samplers as part of the datamodule state.
         return {
-            'train_sampler_state': self.train_sampler.state_dict() if self.train_sampler else None,
-            'val_sampler_state': self.val_sampler.state_dict() if self.val_sampler else None
+            'train_sampler_state': self.train_sampler.state_dict() if self.train_sampler is not None else None,
+            'val_sampler_state': self.val_sampler.state_dict() if self.val_sampler is not None else None
         }
     
     def load_state_dict(self, state_dict):

@@ -4,18 +4,18 @@ import dgl
 import dgl.function as fn
 from collections import defaultdict
 from typing import Union, Callable, Dict, Optional
-import scipy
 from typing import List
+from omegaconf import DictConfig
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
+from omtra.models.self_conditioning import SelfConditioningResidualLayer
 from omtra.tasks.tasks import Task
+from omtra.tasks.utils import get_edges_for_task, build_edges
 from omtra.tasks.register import task_name_to_class
 from omtra.load.conf import TaskDatasetCoupling
 from omtra.tasks.modalities import (
     Modality,
     name_to_modality,
-    MODALITY_ORDER,
-    DESIGN_SPACE,
 )
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
@@ -32,30 +32,28 @@ from omtra.constants import (
 # TODO: have we handled pharm vec features appropriately?
 # TODO: do we initialize pharm vec features?
 # TODO: we don't create node output heads for pharm vec features
-class EndpointVectorField(nn.Module):
+class VectorField(nn.Module):
     def __init__(
         self,
         interpolant_scheduler: InterpolantScheduler,
         td_coupling: TaskDatasetCoupling,
-        n_charges: int = 6,
-        n_bond_types: int = 4,
+        graph_config: DictConfig, 
+        n_pharmvec_channels: int = 4,
         n_vec_channels: int = 16,
         n_cp_feats: int = 0,
         n_hidden_scalars: int = 64,
         n_hidden_edge_feats: int = 64,
         n_recycles: int = 1,
-        n_molecule_updates: int = 2,
+        n_molecule_updates: int = 1,
         convs_per_update: int = 2,
         n_message_gvps: int = 3,
         n_update_gvps: int = 3,
         n_expansion_gvps: int = 3,
-        separate_mol_updaters: bool = False,
+        separate_mol_updaters: bool = True,
         message_norm: Union[float, str] = 100,
-        update_edge_w_distance: bool = False,
-        rbf_dmax=20,
-        rbf_dim=16,
-        continuous_inv_temp_schedule=None,
-        continuous_inv_temp_max: float = 10.0,
+        update_edge_w_distance: bool = True,
+        rbf_dmax=18,
+        rbf_dim=32,
         time_embedding_dim: int = 64,
         token_dim: int = 64,
         attention: bool = False,
@@ -74,6 +72,7 @@ class EndpointVectorField(nn.Module):
         # however, this is the fastest way to get CTMCVectorField working right now, so we will be anti-pattern for the sake of time
     ):
         super().__init__()
+        self.graph_config = graph_config
         self.token_dim = token_dim
         self.task_embedding_dim = token_dim
         self.n_hidden_scalars = n_hidden_scalars
@@ -95,12 +94,7 @@ class EndpointVectorField(nn.Module):
         self.rbf_dim = rbf_dim
 
         assert n_vec_channels >= 3, "n_vec_channels must be >= 3"
-
-        self.continuous_inv_temp_schedule = continuous_inv_temp_schedule
-        self.continouts_inv_temp_max = continuous_inv_temp_max
-        self.continuous_inv_temp_func = self.build_continuous_inv_temp_func(
-            self.continuous_inv_temp_schedule, self.continouts_inv_temp_max
-        )
+        assert n_vec_channels >= 2*n_pharmvec_channels, "n_vec_channels must be >= 2*n_pharmvec_channels"
 
         self.node_types = set()
         self.edge_types = set()
@@ -144,11 +138,16 @@ class EndpointVectorField(nn.Module):
         for modality in modalities_present_cls:
             if modality.graph_entity != "edge":
                 continue
-            if modality.n_categories is None:
+            if not modality.is_categorical:
                 raise ValueError("did not expect continuous edge features")
             self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
             self.edge_types.add(modality.entity_name)
-
+        
+        # get all edge types that we need to support
+        self.edge_types = set()
+        for task in task_classes:
+            self.edge_types.update(get_edges_for_task(task, graph_config))
+            
         # create a task embedding
         self.task_embedding = nn.Embedding(len(td_coupling.task_space), self.task_embedding_dim)
 
@@ -168,12 +167,13 @@ class EndpointVectorField(nn.Module):
         # for each edge type that has edge features, create a function for initial edge embeddings
         self.edge_embedding = nn.ModuleDict()
         for etype in self.edge_types:
-            if self.edge_feat_sizes[etype] > 0:
-                self.edge_embedding[etype] = nn.Sequential(
-                    nn.Linear(token_dim, n_hidden_edge_feats),
-                    nn.SiLU(),
-                    nn.LayerNorm(n_hidden_edge_feats),
-                )
+            if self.edge_feat_sizes[etype] == 0:
+                continue
+            self.edge_embedding[etype] = nn.Sequential(
+                nn.Linear(token_dim, n_hidden_edge_feats),
+                nn.SiLU(),
+                nn.LayerNorm(n_hidden_edge_feats),
+            )
 
         # TODO: node_types and edge_types used to be like, all the possible node and edge types on which we defined modalities
         # now they are just node types and edge types that are being supported by this model??? i think?? somehow
@@ -298,27 +298,15 @@ class EndpointVectorField(nn.Module):
             )
 
         if self.self_conditioning:
-            raise NotImplementedError("Self conditioning not implemented yet")
+            # raise NotImplementedError("Self conditioning not implemented yet")
             self.self_conditioning_residual_layer = SelfConditioningResidualLayer(
-                n_atom_types=n_atom_types,
-                n_charges=n_charges,
-                n_bond_types=n_bond_types,
+                td_coupling=td_coupling,
+                n_pharmvec_channels=n_pharmvec_channels,
                 node_embedding_dim=n_hidden_scalars,
                 edge_embedding_dim=n_hidden_edge_feats,
                 rbf_dim=rbf_dim,
                 rbf_dmax=rbf_dmax,
             )
-
-    def build_continuous_inv_temp_func(self, schedule, max_inv_temp=None):
-        if schedule is None:
-            inv_temp_func = lambda t: 1.0
-        elif schedule == "linear":
-            inv_temp_func = lambda t: max_inv_temp * (1 - t)
-        elif callable(schedule):
-            inv_temp_func = schedule
-        else:
-            raise ValueError(f"Invalid continuous_inv_temp_schedule: {schedule}")
-        return inv_temp_func
 
     def forward(
         self,
@@ -340,6 +328,9 @@ class EndpointVectorField(nn.Module):
             node_vec_features = {}
             edge_features = {}
 
+            # the only edges that should be in g at this point are covalent, lig_to_lig, npnde_to_npnde, maybe pharm_to_pharm
+            # need to add edges into protein structure, and between differing ntypes (except covalent)
+            g = build_edges(g, task_class, node_batch_idx, self.graph_config)
 
             # compose the graph from modalities into the language of the GNN
             # that is node positions, node scalar features, node vector features, and edge features
@@ -427,6 +418,7 @@ class EndpointVectorField(nn.Module):
                 train_self_condition = self.training and (torch.rand(1) > 0.5).item()
                 inference_first_step = not self.training and (t == 0).all().item()
 
+                # TODO: actually at the first inference step we can just not apply self conditioning, need to test performance effect
                 if train_self_condition or inference_first_step:
                     with torch.no_grad():
                         node_scalar_features_clone = {
@@ -459,7 +451,6 @@ class EndpointVectorField(nn.Module):
                         )
 
             if self.self_conditioning and prev_dst_dict is not None:
-                # TODO: Adapt self-conditioning residual layer for Hetero graph
                 (
                     node_scalar_features,
                     node_positions,
@@ -467,6 +458,7 @@ class EndpointVectorField(nn.Module):
                     edge_features,
                 ) = self.self_conditioning_residual_layer(
                     g,
+                    task_class,
                     node_scalar_features,
                     node_positions,
                     node_vec_features,
@@ -490,6 +482,8 @@ class EndpointVectorField(nn.Module):
             )
 
             return dst_dict
+            
+        
 
     def denoise_graph(
         self,
@@ -528,6 +522,8 @@ class EndpointVectorField(nn.Module):
                     for modality in modalities_generated:
                         if modality.graph_entity == "node" and modality.data_key == "x":
                             ntype = modality.entity_name
+                            if g.num_nodes(ntype) == 0:
+                                continue
                             node_positions[ntype] = self.node_position_updaters[ntype][
                                 updater_idx
                             ](
@@ -552,14 +548,12 @@ class EndpointVectorField(nn.Module):
 
         logits = {}
         for modality in task_class.modalities_generated:
-            is_node = modality.graph_entity == "node"
-            is_categorical = modality.n_categories and modality.n_categories > 0
-            if is_node and is_categorical:
+            if modality.is_node and modality.is_categorical:
                 ntype = modality.entity_name
                 logits[modality.name] = self.node_output_heads[modality.name](
                     node_scalar_features[ntype]
                 )
-            elif not is_node and is_categorical:
+            elif not modality.is_node and modality.is_categorical:
                 etype = modality.entity_name
                 ue_feats = edge_features[etype][upper_edge_mask[etype]]
                 le_feats = edge_features[etype][~upper_edge_mask[etype]]
@@ -589,26 +583,24 @@ class EndpointVectorField(nn.Module):
         dst_dict = {}
         # modalities_present = task_class.modalities_fixed + task_class.modalities_generated
         for modality in task_class.modalities_generated:
-
-            is_node = modality.graph_entity == "node"
-            is_position = modality.data_key == "x"
-            is_categorical = modality.n_categories and modality.n_categories > 0
-
-            if is_position:
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                continue
+            if modality.data_key == "x":
                 dst_dict[modality.name] = node_positions[modality.entity_name]
-            elif is_categorical:
+            elif modality.is_categorical:
                 dst_dict[modality.name] = logits[modality.name]
                 if apply_softmax:
                     dst_dict[modality.name] = torch.softmax(
                         dst_dict[modality.name], dim=-1
                     )
+            elif modality.data_key == 'v':
+                ntype = modality.entity_name
+                s_in = node_scalar_features[ntype]
+                v_in = node_vec_features[ntype]
+                _, v_out = self.node_output_heads[modality.name]((s_in, v_in))
+                dst_dict[modality.name] = v_out
             else:
-                raise NotImplementedError('i think this only applies to pharm vec features, need to figure this case out')
-        # TODO: consider this when doing loss fns (not doing one-hot encoding anymore)
-        # NOTE: moved softmax into above loop
-        # apply softmax to categorical features, if requested
-        # at training time, we don't want to apply softmax because we use cross-entropy loss which includes softmax
-        # at inference time, we want to apply softmax to get a vector which lies on the simplex
+                raise NotImplementedError(f'unaccounted for modality: {modality.name}')
 
         return dst_dict
 

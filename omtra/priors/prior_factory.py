@@ -2,14 +2,14 @@
 from omtra.priors.register import train_prior_register, inference_prior_register
 from functools import partial
 
-def get_prior(task_cls, config_prior=None, train=False) -> dict:
+def get_prior(task_cls, config_prior=None, training=False) -> dict:
     """
     Get the prior distribution function for all modalitities for a given task class.
     :param task_cls: The task class (e.g., TaskA)
     :param config_prior: Optional config override dict.
     :return: A dictionary with keys for each modality and values that are the prior distribution functions.
     """
-    if train:
+    if training:
         register = train_prior_register
     else:
         register = inference_prior_register
