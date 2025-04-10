@@ -922,7 +922,10 @@ class PlinderDataset(ZarrDataset):
             )
             
         # sample priors
-        g = sample_priors(g, task_class, prior_fns, training=True)
+        g = sample_priors(g, 
+                          task_class=task_class,
+                          prior_fns=prior_fns, 
+                          training=True)
 
         return g
 
