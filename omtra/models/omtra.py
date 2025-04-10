@@ -21,6 +21,8 @@ from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
 from omtra.models.conditional_paths.path_factory import get_conditional_path_fns
 from omtra.models.vector_field import VectorField
 from omtra.models.interpolant_scheduler import InterpolantScheduler
+from omtra.data.distributions.plinder_dists import sample_n_lig_atoms_plinder, sample_n_pharms_plinder
+from omtra.data.distributions.pharmit_dists import sample_n_lig_atoms_pharmit, sample_n_pharms_pharmit
 from omegaconf import DictConfig
 
 from omtra.priors.prior_factory import get_prior
@@ -326,6 +328,7 @@ class OMTRA(pl.LightningModule):
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
         groups_present = task.groups_present
+        groups_fixed = task.groups_fixed
 
         # TODO: user-supplied n_atoms dict?
 
@@ -366,11 +369,29 @@ class OMTRA(pl.LightningModule):
         protein_present = 'protein_structure' in groups_present
         add_ligand = 'ligand_identity' in groups_generated
         if protein_present and add_ligand:
-            n_lig_atoms = torch.full((len(g_flat),), 10)
+
+            n_prot_atoms = torch.tensor([ g.num_nodes('prot_atom') for g in g_flat])
+            if 'pharmacophore' in groups_fixed:
+                n_pharms = torch.tensor([ g.num_nodes('pharm') for g in g_flat])
+            else:
+                n_pharms = None
+            n_lig_atoms = sample_n_lig_atoms_plinder(n_prot_atoms=n_prot_atoms, n_pharms=n_pharms)
             # if protein is present, sample ligand atoms from p(n_ligand_atoms|n_protein_atoms,n_pharm_atoms)
             # if pharm atoms not present, we marginalize over n_pharm_atoms - this distribution from plinder dataset
         elif not protein_present and add_ligand:
-            n_lig_atoms = torch.full((len(g_flat),), 10)
+            if 'pharmacophore' in groups_fixed:
+                n_pharms = torch.tensor([ g.num_nodes('pharm') for g in g_flat])
+                n_samples = None
+            else:
+                n_pharms = None
+                n_samples = len(g_flat)
+
+            if unconditional_n_atoms_dist == 'plinder':
+                n_lig_atoms = sample_n_lig_atoms_plinder(n_pharms=n_pharms, n_samples=n_samples)
+            elif unconditional_n_atoms_dist == 'pharmit':
+                n_lig_atoms = sample_n_lig_atoms_pharmit(n_pharms=n_pharms, n_samples=n_samples)
+            else:
+                raise ValueError(f"Unrecognized dist {unconditional_n_atoms_dist}")
             # TODO: if no protein is present, sample p(n_ligand_atoms|n_pharm_atoms), marginalizing if n_pharm_atoms is not present
             # in this case, the distrbution could come from pharmit or plinder dataset..user-chosen option?
 
@@ -388,11 +409,28 @@ class OMTRA(pl.LightningModule):
 
         add_pharm = 'pharmacophore' in groups_generated
         if protein_present and add_pharm:
-            # TODO sample pharm atoms given n_protein_atoms, n_ligand_atoms
-            n_pharm_nodes = torch.full((len(g_flat),), 10)
+
+            if 'ligand_identity' in groups_present:
+                n_lig_atoms = torch.tensor([ g.num_nodes('lig') for g in g_flat])
+            else:
+                n_lig_atoms = None
+
+            n_prot_atoms = torch.tensor([ g.num_nodes('prot_atom') for g in g_flat])
+
+            n_pharm_nodes = sample_n_lig_atoms_plinder(n_prot_atoms=n_prot_atoms, n_lig_atoms=n_lig_atoms)
         elif not protein_present and add_pharm:
             # TODO sample pharm atoms given n_ligand_atoms, can use plinder or pharmit dataset distributions
-            n_pharm_nodes = torch.full((len(g_flat),), 10)
+            if 'ligand_identity' in groups_present:
+                n_lig_atoms = torch.tensor([ g.num_nodes('lig') for g in g_flat])
+            else:
+                raise ValueError("did not anticipate sampling pharmacophores without ligand or protein present")
+            
+            if unconditional_n_atoms_dist == 'plinder':
+                n_pharm_nodes = sample_n_pharms_plinder(n_lig_atoms=n_lig_atoms)
+            elif unconditional_n_atoms_dist == 'pharmit':
+                n_pharm_nodes = sample_n_pharms_pharmit(n_lig_atoms=n_lig_atoms)
+            else:
+                raise ValueError(f"Unrecognized dist {unconditional_n_atoms_dist}")
     
         if add_pharm:
             for g_idx, g_i in enumerate(g_flat):

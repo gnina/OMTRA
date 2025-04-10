@@ -81,19 +81,21 @@ def plinder_n_nodes_dist_smoothed(sigma=(3.0, 3.0, 3.0), mode='constant'):
     
     # Save the smoothed density in the output dictionary
     raw_output['smoothed_density'] = smoothed_density
+
+    # Convert the raw density and supports to torch tensors
+    for k in raw_output['supports']:
+        raw_output['supports'][k] = torch.tensor(raw_output['supports'][k])
+    raw_output['smoothed_density'] = torch.tensor(smoothed_density)
+    raw_output['density'] = torch.tensor(raw_density)
     
     return raw_output
 
-def sample_n_lig_atoms(n_prot_atoms: torch.Tensor = None, n_pharms: torch.Tensor = None, n_samples: int = None) -> torch.Tensor:
+def sample_n_lig_atoms_plinder(n_prot_atoms: torch.Tensor = None, n_pharms: torch.Tensor = None, n_samples: int = None) -> torch.Tensor:
 
     joint_dist = plinder_n_nodes_dist_smoothed()
     var_order = joint_dist['var_order']
     supports = joint_dist['supports']
     p_joint = joint_dist['smoothed_density'] # has shape (n_ligand_atoms_support, n_pharms_support, n_protein_atoms_support)
-
-    p_joint = torch.tensor(p_joint)
-    for k in supports:
-        supports[k] = torch.tensor(supports[k])
 
     if n_prot_atoms is not None and n_pharms is not None and n_prot_atoms.shape != n_pharms.shape:
         raise ValueError("n_prot_atoms and n_pharms must have the same shape")
@@ -137,6 +139,43 @@ def sample_n_lig_atoms(n_prot_atoms: torch.Tensor = None, n_pharms: torch.Tensor
         p = p_joint.sum(dim=-1).sum(dim=-1) # has shape (n_ligand_atoms_support)
         p = p.unsqueeze(0).expand(n_samples, -1) # has shape (n_samples, n_ligand_atoms_support)
 
-    n_ligand_atoms_idxs = torch.multinomial(p, num_samples=1) # has shape (n_samples,)
+    n_ligand_atoms_idxs = torch.multinomial(p, num_samples=1).flatten() # has shape (n_samples,)
     n_ligand_atoms = supports['n_ligand_atoms'][n_ligand_atoms_idxs] # has shape (n_samples,)
     return n_ligand_atoms
+
+def sample_n_pharms_plinder(n_lig_atoms: torch.Tensor = None, n_prot_atoms: torch.Tensor = None):
+
+    arg_none = [n_lig_atoms is None, n_prot_atoms is None]
+    if all(arg_none):
+        raise ValueError("n_lig_atoms or n_prot_atoms must be provided")
+    if not any(arg_none):
+        assert n_lig_atoms.shape == n_prot_atoms.shape, "n_lig_atoms and n_prot_atoms must have the same shape"
+
+    n_samples = n_lig_atoms.shape[0] if n_lig_atoms is not None else n_prot_atoms.shape[0]
+
+    joint_dist = plinder_n_nodes_dist_smoothed()
+    var_order = joint_dist['var_order']
+    supports = joint_dist['supports']
+    p_joint = joint_dist['smoothed_density'] # has shape (n_ligand_atoms_support, n_pharms_support, n_protein_atoms_support)
+
+    if n_prot_atoms is not None:
+        n_prot_atom_idxs = torch.searchsorted(supports['n_protein_atoms'], n_prot_atoms)
+        if not torch.all(supports['n_protein_atoms'][n_prot_atom_idxs] == n_prot_atoms):
+            raise ValueError("n_prot_atoms must be in the support of the distribution")
+        p = p_joint[:, :, n_prot_atom_idxs] # has shape (n_ligand_atoms_support, n_pharms_support, n_samples)
+        p = p.permute(2, 0, 1) # has shape (n_samples, n_ligand_atoms_support, n_pharms_support)
+    else:
+        p = p_joint.sum(dim=-1).expand(n_samples, -1, -1) # has shape (n_samples, n_ligand_atoms_support, n_pharms_support)
+
+    if n_lig_atoms is not None:
+        n_lig_atoms_idxs = torch.searchsorted(supports['n_ligand_atoms'], n_lig_atoms)
+        if not torch.all(supports['n_ligand_atoms'][n_lig_atoms_idxs] == n_lig_atoms):
+            raise ValueError("n_lig_atoms must be in the support of the distribution")
+        sample_idxs = torch.arange(p.shape[0])
+        p = p[sample_idxs, n_lig_atoms_idxs, :] # has shape (n_samples, n_pharms_support)
+    else:
+        p = p.sum(axis=1) # has shape (n_samples, n_pharms_support)
+    
+    n_pharms_idxs = torch.multinomial(p, num_samples=1).flatten() # has shape (n_samples,)
+    n_pharms = supports['n_pharms'][n_pharms_idxs] # has shape (n_samples,)
+    return n_pharms
