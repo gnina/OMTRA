@@ -7,7 +7,7 @@ from typing import List, Tuple, Union, Dict, Optional, Set
 from functools import partial
 import math
 
-from omtra.data.graph import to_canonical_etype
+from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 
 
 # most taken from flowmol gvp (moreflowmol branch)
@@ -355,6 +355,11 @@ class HeteroGVPConv(nn.Module):
             for etype in (
                 self.edge_types
             ):  # TODO: confirm that attention should be unique to edge type
+                inv_etype = get_inv_edge_type(etype)
+                if inv_etype in self.att_weight_projection:
+                    self.att_weight_projection[etype] = self.att_weight_projection[inv_etype]
+                    continue
+                
                 self.att_weight_projection[etype] = nn.Sequential(
                     nn.Linear(extra_scalar_feats, extra_scalar_feats, bias=False),
                     nn.LayerNorm(extra_scalar_feats),
@@ -398,6 +403,10 @@ class HeteroGVPConv(nn.Module):
 
         for etype in edge_types:
             src_ntype, _, dst_ntype = to_canonical_etype(etype)
+            inv_etype = get_inv_edge_type(etype)
+            if inv_etype in self.edge_message_fns:
+                self.edge_message_fns[etype] = self.edge_message_fns[inv_etype]
+                continue
             message_gvps = []
 
             for i in range(n_message_gvps):
