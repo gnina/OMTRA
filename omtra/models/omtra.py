@@ -137,6 +137,8 @@ class OMTRA(pl.LightningModule):
 
 
     def training_step(self, batch_data, batch_idx):
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        print(f"[RANK {rank}] Inside training_step.")
         g, task_name, dataset_name = batch_data
 
         # get the total batch size across all devices
@@ -177,6 +179,7 @@ class OMTRA(pl.LightningModule):
             sync_dist=True,
             on_step=True,
         )
+        print(f"[RANK {rank}] training_step done. Loss = {loss.item()}")
         return total_loss
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):

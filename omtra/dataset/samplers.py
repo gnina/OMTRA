@@ -41,8 +41,6 @@ class MultiTaskSampler(Sampler):
         self.batch_idx = 0
 
         if self.distributed:
-            if torch.distributed.is_initialized():
-                self.cpu_group = torch.distributed.new_group(backend="gloo")
             self.num_replicas = num_replicas if num_replicas is not None else torch.distributed.get_world_size()
             self.rank = rank if rank is not None else torch.distributed.get_rank()
 
@@ -121,6 +119,11 @@ class MultiTaskSampler(Sampler):
                 raise NotImplementedError(f"Dataset {dataset_name} not supported")
 
     def get_td_pair_distributed(self):
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        print(f"[RANK {rank}] Inside get_td_pari_distributed etc.")
+        if not hasattr(self, "cpu_group"):
+            self.cpu_group = torch.distributed.new_group(backend="gloo")
+
         if self.rank == 0:
             task_idx, dataset_idx = self.sample_task_and_dataset()
             task_idx_tensor = torch.tensor(task_idx, dtype=torch.int64)

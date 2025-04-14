@@ -92,6 +92,8 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         return total_length
 
     def __getitem__(self, index):
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        print(f"[RANK {rank}] Inside dataloader / etc.")
         task_idx, dataset_idx, local_idx = index
         task_name = self.task_space[task_idx]
 
