@@ -35,10 +35,10 @@ class SelfConditioningResidualLayer(nn.Module):
         self.n_pharmvec_channels = n_pharmvec_channels
 
         modalities_present = [m 
-            for task_name in td_coupling.task_space
+            for task_name in sorted(td_coupling.task_space)
             for m in task_name_to_class(task_name).modalities_present]
         modalities_generated = [m
-            for task_name in td_coupling.task_space
+            for task_name in sorted(td_coupling.task_space)
             for m in task_name_to_class(task_name).modalities_generated]
         modalities_present = list(set(modalities_present))
         modalities_generated = list(set(modalities_generated))
@@ -59,7 +59,7 @@ class SelfConditioningResidualLayer(nn.Module):
                 raise ValueError(f"Unexpected modality: {modality.name}")
             
         self.residual_generating_fns = nn.ModuleDict()
-        for ntype in self.node_generated_dims:
+        for ntype in sorted(list(self.node_generated_dims.keys())):
             self.residual_generating_fns[ntype] = nn.Sequential(
                 nn.Linear(node_embedding_dim+self.node_generated_dims[ntype], node_embedding_dim),
                 nn.SiLU(),

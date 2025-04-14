@@ -95,11 +95,24 @@ class OMTRA(pl.LightningModule):
             **vector_field,
         )
 
-
         self.configure_loss_fns()
 
         self.save_hyperparameters()
-
+    
+    # some code for debugging parameter consistency issues across multiple GPUs
+    # def setup(self, stage=None):
+    #     if stage == "fit" and torch.distributed.is_initialized():
+    #         rank = torch.distributed.get_rank()
+    #         total_params = sum(p.numel() for p in self.parameters())
+    #         print(f"Rank {rank}, total parameters: {total_params}")
+            
+            # Examine parameters and their checksums
+    #         for name, param in self.named_parameters():
+                # Compute a checksum of parameter values
+                # This will detect if parameters have same shape but different values
+    #             checksum = torch.sum(param).item()
+    #             print(f"Rank {rank}, param {name}, shape {param.shape}, checksum {checksum:.4f}")  
+                           
     def configure_loss_fns(self):
 
         if self.time_scaled_loss:

@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - model: default
-  - trainer: default
+  - trainer: distributed
   - task_group: protein
   - graph: default
   - prior: default
@@ -17,7 +17,7 @@ edges_per_batch: 300000 # TODO: it might be the case the pharmit and plinder tas
 num_workers: 2
 max_steps: 100 # number of steps to train for
 
-pharmit_path: ${omtra_root:}/data/pharmit
+pharmit_path: ${omtra_root:}/data/pharmit_dev
 plinder_path: ${omtra_root:}/data/plinder
 
 
@@ -25,6 +25,13 @@ plinder_path: ${omtra_root:}/data/plinder
 # run names and run ids to the actual hydra output directory
 symlink_dir: ./wandb_symlinks
 
+trainer:
+  use_distributed_sampler: False
+  devices: 2
+
+task_group:
+  datamodule:
+    distributed: True
 
 hydra:
   run:
