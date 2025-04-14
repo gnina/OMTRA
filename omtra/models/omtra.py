@@ -141,14 +141,16 @@ class OMTRA(pl.LightningModule):
         print(f"[RANK {rank}] Inside training_step.")
         g, task_name, dataset_name = batch_data
 
+        print(f"[RANK {rank}] task_name: {task_name}, dataset_name: {dataset_name}")
         # get the total batch size across all devices
-        local_batch_size = torch.tensor([g.batch_size], device=g.device)
-        all_batch_counts = self.all_gather(local_batch_size)
-        total_batch_count = all_batch_counts.sum().item()
+        # local_batch_size = torch.tensor([g.batch_size], device=g.device)
+        # all_batch_counts = self.all_gather(local_batch_size)
+        # total_batch_count = all_batch_counts.sum().item()
 
         # log the total sample count
         if self.global_rank == 0:
-            self.sample_counts[(task_name, dataset_name)] += total_batch_count
+            # self.sample_counts[(task_name, dataset_name)] += total_batch_count
+            self.sample_counts[(task_name, dataset_name)] += 1
             metric_name = f"{task_name}_{dataset_name}_sample_count"
             self.log(
                 metric_name,
@@ -160,7 +162,8 @@ class OMTRA(pl.LightningModule):
 
         # forward pass
         losses = self(g, task_name)
-
+        print(f"[RANK {rank}] loss keys: {list(losses.keys())}")
+        
         train_log_dict = {}
         for key, loss in losses.items():
             train_log_dict[f"{key}_train_loss"] = loss
@@ -247,6 +250,7 @@ class OMTRA(pl.LightningModule):
                 weight = 1.0
             target = targets[modality.name]
             if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                losses[modality.name] = torch.tensor(0.0, device=g.device)
                 continue
             losses[modality.name] = (
                 self.loss_fn_dict[modality.name](vf_output[modality.name], target)
