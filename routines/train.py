@@ -77,7 +77,7 @@ def train(cfg: DictConfig):
         
 
     wandb_logger = WandbLogger(
-        name=cfg['name'],
+        # name=cfg['name'],
         config=OmegaConf.to_container(cfg, resolve=True),
         # save_dir=run_dir,  # ensures logs are stored with the Hydra output dir
         id=run_id,
