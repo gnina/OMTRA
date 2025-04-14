@@ -32,6 +32,8 @@ from omtra.data.plinder import (
 from typing import List, Dict, Tuple, Any, Optional
 import pandas as pd
 import numpy as np
+import biotite.structure as struc
+from omtra.constants import _DEFAULT_DISTANCE_RANGE
 import functools
 
 import warnings
@@ -286,27 +288,19 @@ class PlinderDataset(ZarrDataset):
                 coords=self.slice_array(
                     "apo/backbone_coords", link_bb_start, link_bb_end
                 ),
-                res_ids=self.slice_array(
-                    "apo/backbone_res_ids", link_bb_start, link_bb_end
-                ),
-                res_names=self.slice_array(
-                    "apo/backbone_res_names", link_bb_start, link_bb_end
-                ),
-                chain_ids=self.slice_array(
-                    "apo/backbone_chain_ids", link_bb_start, link_bb_end
-                ),
+                res_ids=None,
+                res_names=None,
+                chain_ids=None,
             )
             apo = StructureData(
                 coords=self.slice_array("apo/coords", link_start, link_end),
-                atom_names=self.slice_array("apo/atom_names", link_start, link_end),
-                elements=self.slice_array("apo/elements", link_start, link_end),
-                res_ids=self.slice_array("apo/res_ids", link_start, link_end),
-                res_names=self.slice_array("apo/res_names", link_start, link_end),
-                chain_ids=self.slice_array("apo/chain_ids", link_start, link_end),
+                atom_names=None,
+                elements=None,
+                res_ids=None,
+                res_names=None,
+                chain_ids=None,
                 cif=system_info["link_cif"],
-                backbone_mask=self.slice_array(
-                    "apo/backbone_mask", link_start, link_end
-                ),
+                backbone_mask=None,
                 backbone=apo_backbone,
             )
         elif link_type == "pred":
@@ -314,27 +308,19 @@ class PlinderDataset(ZarrDataset):
                 coords=self.slice_array(
                     "pred/backbone_coords", link_bb_start, link_bb_end
                 ),
-                res_ids=self.slice_array(
-                    "pred/backbone_res_ids", link_bb_start, link_bb_end
-                ),
-                res_names=self.slice_array(
-                    "pred/backbone_res_names", link_bb_start, link_bb_end
-                ),
-                chain_ids=self.slice_array(
-                    "pred/backbone_chain_ids", link_bb_start, link_bb_end
-                ),
+                res_ids=None,
+                res_names=None,
+                chain_ids=None,
             )
             pred = StructureData(
                 coords=self.slice_array("pred/coords", link_start, link_end),
-                atom_names=self.slice_array("pred/atom_names", link_start, link_end),
-                elements=self.slice_array("pred/elements", link_start, link_end),
-                res_ids=self.slice_array("pred/res_ids", link_start, link_end),
-                res_names=self.slice_array("pred/res_names", link_start, link_end),
-                chain_ids=self.slice_array("pred/chain_ids", link_start, link_end),
+                atom_names=None,
+                elements=None,
+                res_ids=None,
+                res_names=None,
+                chain_ids=None,
                 cif=system_info["link_cif"],
-                backbone_mask=self.slice_array(
-                    "pred/backbone_mask", link_start, link_end
-                ),
+                backbone_mask=None,
                 backbone=pred_backbone,
             )
 
@@ -431,10 +417,10 @@ class PlinderDataset(ZarrDataset):
         prot_backbone_mask = torch.from_numpy(holo.backbone_mask).bool()
 
         # TODO: figure out how to store chain ids
-        offset = ord("A")
-        prot_chain_ids = torch.tensor(
-            [ord(chain_id) - offset for chain_id in holo.chain_ids], dtype=torch.long
-        )
+        
+        unique_chains = sorted(set(holo.chain_ids))
+        chain_to_idx = {chain: idx for idx, chain in enumerate(unique_chains)}
+        prot_chain_ids = torch.tensor([chain_to_idx[chain_id] for chain_id in holo.chain_ids], dtype=torch.long)
 
         pocket_res_identifiers = set()
         for i in range(len(pocket.res_ids)):
@@ -466,9 +452,8 @@ class PlinderDataset(ZarrDataset):
         ).long()
 
         # TODO: figure out how to store chain ids
-        offset = ord("A")
         backbone_chain_ids = torch.tensor(
-            [ord(chain_id) - offset for chain_id in holo.backbone.chain_ids],
+            [chain_to_idx[chain_id] for chain_id in holo.backbone.chain_ids],
             dtype=torch.long,
         )
 
@@ -499,6 +484,60 @@ class PlinderDataset(ZarrDataset):
                 encoded_charges.append(charge_type_map[charge])
         return torch.Tensor(encoded_charges).long()
 
+    def infer_covalent_bonds(
+        self,
+        ligand: LigandData,
+        pocket: StructureData,
+        atom_type_map: List[str],
+        )   -> Tuple[torch.Tensor, torch.Tensor]:
+        ligand_arr = ligand.to_atom_array(atom_type_map)
+        pocket_arr = pocket.to_atom_array()
+        
+        prot_atom_covalent_lig = []
+        prot_res_covalent_lig = []
+        dists = struc.distance(
+            ligand_arr.coord[:, np.newaxis, :], pocket_arr.coord[np.newaxis, :, :]
+        )
+        for i, lig_atom in enumerate(ligand_arr):
+            for j, rec_atom in enumerate(pocket_arr):
+                dist_range = _DEFAULT_DISTANCE_RANGE.get(
+                    (lig_atom.element, rec_atom.element)
+                ) or _DEFAULT_DISTANCE_RANGE.get((rec_atom.element, lig_atom.element))
+                if dist_range is None:
+                    continue
+                else:
+                    min_dist, max_dist = dist_range
+                dist = dists[i, j]
+                if dist >= min_dist and dist <= max_dist:
+                    prot_atom_covalent_lig.append([j, i])
+                    res_id = pocket_arr.get_annotation("res_id")[j]
+                    chain_id = pocket_arr.get_annotation("chain_id")[j]
+                    
+                    res_ids = pocket.backbone.res_ids
+                    chain_ids = pocket.backbone.chain_ids
+                    
+                    res_id_mask = (res_ids == res_id)
+                    chain_id_mask = (chain_ids == chain_id)
+                    combined_mask = res_id_mask & chain_id_mask
+                    
+                    res_idx = np.where(combined_mask)[0]
+                    if len(res_idx > 0):
+                        prot_res_covalent_lig.append([res_idx[0], i])
+                        
+                   
+        if prot_atom_covalent_lig:
+            prot_atom_covalent_lig = torch.tensor(prot_atom_covalent_lig, dtype=torch.long).t()
+        else:
+            prot_atom_covalent_lig = torch.zeros((2, 0), dtype=torch.long)
+        
+        if prot_res_covalent_lig:
+            prot_res_covalent_lig = torch.tensor(prot_res_covalent_lig, dtype=torch.long).t()
+        else:
+            prot_res_covalent_lig = torch.zeros((2, 0), dtype=torch.long)
+                
+        return prot_atom_covalent_lig, prot_res_covalent_lig
+        
+        
     def convert_ligand(
         self,
         ligand: LigandData,
@@ -543,79 +582,15 @@ class PlinderDataset(ZarrDataset):
             "lig_to_lig": lig_edge_idxs,
         }
         if ligand.is_covalent and ligand.linkages and pocket is not None:
-            prot_atom_to_lig_idxs = []
-            prot_res_to_lig_idxs = []
-            lig_asym_id = ligand_id.split(".")[1]
-
-            lig_identifier = f"{ligand.ccd}:{lig_asym_id}"
-
-            for linkage in ligand.linkages:
-                prtnr1, prtnr2 = linkage.split("__")
-
-                if lig_identifier in prtnr1:
-                    lig_part = prtnr1
-                    prot_part = prtnr2
-                elif lig_identifier in prtnr2:
-                    lig_part = prtnr2
-                    prot_part = prtnr1
-                else:
-                    continue
-
-                (
-                    prot_auth_resid,
-                    prot_resname,
-                    prot_asym_id,
-                    prot_seq_resid,
-                    prot_atom_name,
-                ) = prot_part.split(":")
-                (
-                    lig_auth_resid,
-                    lig_resname,
-                    lig_asym_id,
-                    lig_seq_resid,
-                    lig_atom_name,
-                ) = lig_part.split(":")
-
-                prot_atom_idx = None
-                for i, atom_name in enumerate(pocket.atom_names):
-                    if (
-                        pocket.res_ids[i] == int(prot_seq_resid)
-                        and atom_name == prot_atom_name
-                    ):
-                        prot_atom_idx = i
-                        break
-
-                lig_atom_idx = None
-                for i, atom_type in enumerate(ligand.atom_types):
-                    atom_name = lig_atom_type_map[atom_type]
-                    if atom_name == lig_atom_name[0] and lig_auth_resid == i:
-                        lig_atom_idx = i
-                        break
-
-                prot_res_idx = None
-                for i, res_id in enumerate(pocket.backbone.res_ids):
-                    if res_id == int(prot_seq_resid):
-                        prot_res_idx = i
-                        break
-
-                if prot_atom_idx is not None and lig_atom_idx is not None:
-                    prot_atom_to_lig_idxs.append([prot_atom_idx, lig_atom_idx])
-
-                if prot_res_idx is not None and lig_atom_idx is not None:
-                    prot_res_to_lig_idxs.append([prot_res_idx, lig_atom_idx])
-
-            if prot_atom_to_lig_idxs:
-                prot_atom_to_lig_tensor = torch.tensor(
-                    prot_atom_to_lig_idxs, dtype=torch.long
-                ).t()
+            prot_atom_to_lig_tensor, prot_res_to_lig_tensor = self.infer_covalent_bonds(
+                ligand, pocket, lig_atom_type_map
+            )
+            if prot_atom_to_lig_tensor.shape[1] > 0:
                 edge_idxs["prot_atom_covalent_lig"] = prot_atom_to_lig_tensor
                 lig_to_prot_atom_tensor = prot_atom_to_lig_tensor[[1, 0]]
                 edge_idxs["lig_covalent_prot_atom"] = lig_to_prot_atom_tensor
 
-            if prot_res_to_lig_idxs:
-                prot_res_to_lig_tensor = torch.tensor(
-                    prot_res_to_lig_idxs, dtype=torch.long
-                ).t()
+            if prot_res_to_lig_tensor.shape[1] > 0:
                 edge_idxs["prot_res_covalent_lig"] = prot_res_to_lig_tensor
                 lig_to_prot_res_tensor = prot_res_to_lig_tensor[[1, 0]]
                 edge_idxs["lig_covalent_prot_res"] = lig_to_prot_res_tensor
@@ -675,77 +650,24 @@ class PlinderDataset(ZarrDataset):
             if has_bonds:
                 bond_types = torch.from_numpy(ligand_data.bond_types).long()
                 bond_indices = torch.from_numpy(ligand_data.bond_indices).long()
-
+                
                 adjusted_indices = bond_indices.clone()
-                adjusted_indices[0, :] += node_offset
-                adjusted_indices[1, :] += node_offset
-
+                adjusted_indices[:, 0] += node_offset
+                adjusted_indices[:, 1] += node_offset
 
                 all_bond_types.append(bond_types)
                 all_bond_indices.append(adjusted_indices)
 
             if ligand_data.is_covalent and ligand_data.linkages and pocket is not None:
-                npnde_asym_id = npnde_id.split(".")[1]
-                npnde_identifier = f"{ligand_data.ccd}:{npnde_asym_id}"
-
-                for linkage in ligand_data.linkages:
-                    prtnr1, prtnr2 = linkage.split("__")
-
-                    if npnde_identifier in prtnr1:
-                        npnde_part = prtnr1
-                        prot_part = prtnr2
-                    elif npnde_identifier in prtnr2:
-                        npnde_part = prtnr2
-                        prot_part = prtnr1
-                    else:
-                        continue
-
-                    (
-                        prot_auth_resid,
-                        prot_resname,
-                        prot_asym_id,
-                        prot_seq_resid,
-                        prot_atom_name,
-                    ) = prot_part.split(":")
-                    (
-                        npnde_auth_resid,
-                        npnde_resname,
-                        npnde_asym_id,
-                        npnde_seq_resid,
-                        npnde_atom_name,
-                    ) = npnde_part.split(":")
-
-                    prot_atom_idx = None
-                    for i, atom_name in enumerate(pocket.atom_names):
-                        if (
-                            pocket.res_ids[i] == int(prot_seq_resid)
-                            and atom_name == prot_atom_name
-                        ):
-                            prot_atom_idx = i
-                            break
-
-                    npnde_atom_idx = None
-                    for i, atom_type in enumerate(ligand_data.atom_types):
-                        atom_name = npnde_atom_type_map[atom_type]
-                        if atom_name == npnde_atom_name[0] and npnde_auth_resid == i:
-                            npnde_atom_idx = i
-                            break
-
-                    prot_res_idx = None
-                    for i, res_id in enumerate(pocket.backbone.res_ids):
-                        if res_id == int(prot_seq_resid):
-                            prot_res_idx = i
-                            break
-
-                    if prot_atom_idx is not None and npnde_atom_idx is not None:
-                        all_prot_atom_to_npnde_idxs.append(
-                            [prot_atom_idx, npnde_atom_idx + node_offset]
-                        )
-
-                    if prot_res_idx is not None and npnde_atom_idx is not None:
-                        all_prot_res_to_npnde_idxs.append(
-                            [prot_res_idx, npnde_atom_idx + node_offset]
-                        )
+                prot_atom_to_npnde_tensor, prot_res_to_npnde_tensor = self.infer_covalent_bonds(
+                    ligand_data, pocket, npnde_atom_type_map
+                )
+                if prot_atom_to_npnde_tensor.shape[1] > 0:
+                    prot_atom_to_npnde_tensor[1, :] += node_offset
+                    all_prot_atom_to_npnde_idxs.append(prot_atom_to_npnde_tensor)
+                if prot_res_to_npnde_tensor.shape[1] > 0:
+                    prot_res_to_npnde_tensor[1, :] += node_offset
+                    all_prot_res_to_npnde_idxs.append(prot_res_to_npnde_tensor)
 
             node_offset += coords.shape[0]
 
@@ -769,6 +691,7 @@ class PlinderDataset(ZarrDataset):
             combined_bond_types = torch.cat(all_bond_types, dim=0)
             combined_bond_indices = torch.cat(all_bond_indices, dim=0)
 
+            k = self.graph_config["edges"]["npnde_to_npnde"]["params"]["k"]
             npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = (
                 add_k_hop_edges(
                     combined_coords,
@@ -776,6 +699,7 @@ class PlinderDataset(ZarrDataset):
                     combined_atom_charges,
                     combined_bond_types,
                     combined_bond_indices,
+                    k=k
                 )
             )
             npnde_c = self.encode_charges(npnde_c)
@@ -798,17 +722,15 @@ class PlinderDataset(ZarrDataset):
             }
 
         if all_prot_atom_to_npnde_idxs:
-            prot_atom_to_npnde_tensor = torch.tensor(
-                all_prot_atom_to_npnde_idxs, dtype=torch.long
-            ).t()
+            prot_atom_to_npnde_tensor = torch.cat(all_prot_atom_to_npnde_idxs, dim=1)
             edge_idxs["prot_atom_covalent_npnde"] = prot_atom_to_npnde_tensor
             npnde_to_prot_atom_tensor = prot_atom_to_npnde_tensor[[1, 0]]
             edge_idxs["npnde_covalent_prot_atom"] = npnde_to_prot_atom_tensor
 
         if all_prot_res_to_npnde_idxs:
-            prot_res_to_npnde_tensor = torch.tensor(
-                all_prot_res_to_npnde_idxs, dtype=torch.long
-            ).t()
+            prot_res_to_npnde_tensor = torch.cat(
+                all_prot_res_to_npnde_idxs, dim=1
+            )
             edge_idxs["prot_res_covalent_npnde"] = prot_res_to_npnde_tensor
             npnde_to_prot_res_tensor = prot_res_to_npnde_tensor[[1, 0]]
             edge_idxs["npnde_covalent_prot_res"] = npnde_to_prot_res_tensor

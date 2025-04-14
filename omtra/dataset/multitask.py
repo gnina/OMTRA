@@ -81,7 +81,15 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
 
     def __len__(self):
-        pass
+        # TODO: no idea if this is whats supposed to happen, check with ian 
+        total_length = 0
+        for name in self.datasets: 
+            if name == 'plinder':
+                for plinder_dataset in self.datasets[name].values():
+                    total_length += len(plinder_dataset)
+            else:
+                total_length += len(self.datasets[name])
+        return total_length
 
     def __getitem__(self, index):
         task_idx, dataset_idx, local_idx = index

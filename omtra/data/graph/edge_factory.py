@@ -10,6 +10,8 @@ def get_edge_builders(graph_config):
     symmetric_etypes = graph_config.get('symmetric_etypes', [])
     
     for edge_type, config in edge_configs:
+        if edge_type == 'npnde_to_npnde':
+            continue
         builder_type = config.get('type')
         params = config.get('params', {})
     

@@ -1,6 +1,8 @@
 import numpy as np
 from typing import List, Optional, Dict
 from dataclasses import dataclass
+import biotite.structure as struc
+from omtra.constants import charge_map
 
 @dataclass
 class BackboneData:
@@ -22,6 +24,20 @@ class StructureData:
     backbone: BackboneData
     pocket_embedding: Optional[np.ndarray] = None
     cif: Optional[str] = None
+    
+    def to_atom_array(self) -> struc.AtomArray:
+        n_atoms = len(self.coords)
+        atom_array = struc.AtomArray(n_atoms)
+        
+        atom_array.coord = self.coords
+        
+        atom_array.set_annotation("atom_name", self.atom_names)
+        atom_array.set_annotation("element", self.elements)
+        atom_array.set_annotation("res_id", self.res_ids)
+        atom_array.set_annotation("res_name", self.res_names)
+        atom_array.set_annotation("chain_id", self.chain_ids)
+        
+        return atom_array
 
 
 @dataclass
@@ -37,6 +53,20 @@ class LigandData:
     linkages: Optional[List[str]] = (
         None  # "{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}__{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}"
     )
+    
+    def to_atom_array(self, atom_type_map) -> struc.AtomArray:
+        n_atoms = len(self.coords)
+        atom_array = struc.AtomArray(n_atoms)
+        
+        atom_array.coord = self.coords
+        atom_array.set_annotation("atom_name", np.array([atom_type_map[atom] for atom in self.atom_types]))
+        atom_array.set_annotation("element", np.array([atom_type_map[atom] for atom in self.atom_types])) 
+        atom_array.set_annotation("res_id", np.full(n_atoms, 1, dtype=int))
+        atom_array.set_annotation("res_name", np.full(n_atoms, self.ccd))
+        atom_array.set_annotation("chain_id", np.full(n_atoms, self.ccd))
+        atom_array.set_annotation("charge", np.array([charge_map[int(charge)] for charge in self.atom_charges]))
+        
+        return atom_array
 
 
 @dataclass

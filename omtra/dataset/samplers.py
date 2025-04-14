@@ -1,5 +1,6 @@
 
 import torch
+import torch.distributed
 from torch.utils.data import Sampler, DistributedSampler
 from typing import Dict, List
 
@@ -40,6 +41,8 @@ class MultiTaskSampler(Sampler):
         self.batch_idx = 0
 
         if self.distributed:
+            if torch.distributed.is_initialized():
+                self.cpu_group = torch.distributed.new_group(backend="gloo")
             self.num_replicas = num_replicas if num_replicas is not None else torch.distributed.get_world_size()
             self.rank = rank if rank is not None else torch.distributed.get_rank()
 
@@ -126,8 +129,8 @@ class MultiTaskSampler(Sampler):
             task_idx_tensor = torch.tensor(0, dtype=torch.int64)
             dataset_idx_tensor = torch.tensor(0, dtype=torch.int64)
 
-        torch.distributed.broadcast(task_idx_tensor, src=0)
-        torch.distributed.broadcast(dataset_idx_tensor, src=0)
+        torch.distributed.broadcast(task_idx_tensor, src=0, group=self.cpu_group)
+        torch.distributed.broadcast(dataset_idx_tensor, src=0, group=self.cpu_group)
 
         task_idx = task_idx_tensor.item()
         dataset_idx = dataset_idx_tensor.item()
