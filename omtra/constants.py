@@ -1,3 +1,5 @@
+from rdkit import Chem
+
 ph_idx_to_type = [
     "Aromatic",
     "HydrogenDonor",
@@ -32,6 +34,9 @@ protein_element_map = [
     "V",
     "BE",
 ]
+
+bond_type_map = [None, Chem.rdchem.BondType.SINGLE, Chem.rdchem.BondType.DOUBLE, Chem.rdchem.BondType.TRIPLE,
+             Chem.rdchem.BondType.AROMATIC, None]
 
 lig_atom_type_map = ["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"]
 npnde_atom_type_map = [

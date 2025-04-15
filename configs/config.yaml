@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - model: default
-  - trainer: distributed
+  - trainer: default
   - task_group: protein
   - graph: default
   - prior: default
@@ -25,13 +25,10 @@ plinder_path: ${omtra_root:}/data/plinder
 # run names and run ids to the actual hydra output directory
 symlink_dir: ./wandb_symlinks
 
-trainer:
-  use_distributed_sampler: False
-  devices: 2
 
 task_group:
   datamodule:
-    distributed: True
+    # distributed: True
 
 hydra:
   run:
