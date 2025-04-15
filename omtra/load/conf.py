@@ -118,8 +118,8 @@ def build_td_coupling(task_phases, dataset_task_coupling) -> TaskDatasetCoupling
         task_space.add(task_name)
         for dataset_name, _ in dataset_probs:
             dataset_space.add(dataset_name)
-    task_space = list(task_space)
-    dataset_space = list(dataset_space)
+    task_space = sorted(list(task_space))
+    dataset_space = sorted(list(dataset_space))
     
     n_phases = len(task_phases)
     phases_task_space = set()

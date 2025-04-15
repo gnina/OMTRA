@@ -20,12 +20,26 @@ from omtra.data.plinder import (
 from omtra.data.pharmacophores import get_pharmacophores
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.misc import bad_mol_reporter
-from omtra.constants import lig_atom_type_map, npnde_atom_type_map
+from omtra.constants import lig_atom_type_map, npnde_atom_type_map, aa_substitutions, residue_to_single
 from omtra_pipelines.plinder_dataset.utils import _DEFAULT_DISTANCE_RANGE, setup_logger
 from omtra_pipelines.plinder_dataset.filter import filter
 from plinder.core import PlinderSystem
 from rdkit import Chem
 
+import torch
+from esm.models.esm3 import ESM3
+from esm.sdk.api import (
+    ESM3InferenceClient,
+    ESMProtein,
+    LogitsConfig,
+    LogitsOutput,
+    )
+from esm.utils.structure.protein_chain import ProteinChain
+from esm.utils.structure.protein_complex import ProteinComplex
+
+EMBEDDING_CONFIG = LogitsConfig(
+    sequence=False, return_embeddings=True, return_hidden_states=False
+)
 logger = setup_logger(
     __name__,
 )
@@ -292,7 +306,7 @@ class SystemProcessor:
         linked_id: str,
         ligand_data: Dict[str, LigandData],
         has_covalent: bool = False,
-    ) -> (Dict[str, Any], Dict[int, int]):
+    ) -> Tuple[Dict[str, Any], Dict[int, int]]:
         holo = self.system.holo_structure
         linked_structure = self.system.alternate_structures[linked_id]
         linked_structure.set_chain(holo.protein_chain_ordered[0])
@@ -550,6 +564,93 @@ class SystemProcessor:
         )
         return npnde
 
+
+    def embed_protein_complex(self, model: ESM3InferenceClient, protein_complex: ProteinComplex) -> np.ndarray:
+        
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        model =  model.to(device)
+
+        protein = ESMProtein.from_protein_complex(protein_complex)
+        protein_tensor = model.encode(protein)
+        output = model.logits(protein_tensor, EMBEDDING_CONFIG)
+        if device == torch.device("cuda"):
+            model.to(torch.device("cpu"))
+        return output.embeddings.cpu().numpy()
+
+    def embed_chain(self, model: ESM3InferenceClient, protein_chain: ProteinChain) -> np.ndarray:
+        
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        model =  model.to(device)
+
+        protein = ESMProtein.from_protein_chain(protein_chain)
+        protein_tensor = model.encode(protein)
+        output = model.logits(protein_tensor, EMBEDDING_CONFIG)
+        if device == torch.device("cuda"):
+            model.to(torch.device("cpu"))
+        return output.embeddings.cpu().numpy()
+
+
+    def ESM3_embed(self, res_name:np.ndarray, chain_id:np.ndarray, backbone_data: np.ndarray, bb_mask: np.ndarray[bool]) -> np.ndarray:  
+        
+        model = ESM3.from_pretrained("esm3-open", device=torch.device("cpu")) 
+        
+        residue_names = res_name[bb_mask]
+        chain_ids = chain_id[bb_mask]
+        coords = backbone_data
+
+        # check if we need to split pocket sequence by chain_id to concatenate for protein_complex
+        if len(set(chain_ids)) > 1:
+            unique_chain_id = set()
+            unique_chain_id = [chain for chain in chain_ids if chain not in unique_chain_id]
+            chain_mask = []
+            split_seq = []
+            for chain in unique_chain_id:
+                chain_mask.append(np.where(chain_ids == chain)[0])
+                split_seq.append(residue_names[chain_mask[-1]])
+        else:
+            chain_mask, split_seq = None, None
+
+
+        if split_seq:
+            concat_seq = []
+            esm_chains = []
+            layers = list(coords)
+            for seq in range(len(split_seq)):
+                temp = []
+                if len(layers) == 0: 
+                    break 
+                for i in range(0, len(seq),3):
+                    if residue_names[i] not in aa_substitutions:
+                        temp.append(residue_to_single[seq[i]]) 
+                    else: 
+                        try: 
+                            temp.append(aa_substitutions[seq[i]]) 
+                        except: 
+                            temp.append(residue_to_single['UNK'])
+                concat_seq.append(temp)
+
+                esm_chains.append(ProteinChain.from_backbone_atom_coordinates(layers[0:len(temp)], sequence=temp))
+                layers = layers[len(temp)+1:]
+
+            concat_seq = '|'.join(concat_seq)
+            protein_complex = ProteinComplex.from_chains(esm_chains)
+            return self.embed_protein_complex(model, protein_complex)
+
+        else:
+            sequence = []
+            for i in range(0, len(residue_names),3):
+                if residue_names[i] not in aa_substitutions:
+                    sequence.append(residue_to_single[residue_names[i]]) 
+                else: 
+                    try: 
+                        sequence.append(aa_substitutions[residue_names[i]]) 
+                    except: 
+                        sequence.append(residue_to_single['UNK'])
+            
+            chain_seq = ''.join(sequence)
+            chain = ProteinChain.from_backbone_atom_coordinates(coords, sequence=chain_seq)
+            return self.embed_chain(model, chain)
+
     def extract_pocket(
         self,
         receptor: struc.AtomArray,
@@ -594,6 +695,8 @@ class SystemProcessor:
 
         bb_mask = struc.filter_peptide_backbone(pocket)
 
+        embedding = self.ESM3_embed(pocket.res_name, pocket.chain_id, backbone_data.coords, bb_mask)
+
         return StructureData(
             coords=pocket.coord,
             atom_names=pocket.atom_name,
@@ -603,11 +706,12 @@ class SystemProcessor:
             chain_ids=pocket.chain_id,
             backbone_mask=bb_mask,
             backbone=backbone_data,
+            pocket_embedding=embedding,
         )
 
     def filter_ligands(
         self,
-    ) -> (Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]):
+    ) -> Tuple[Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]]:
         # ligand_mols, npnde_mols = filter(self.system_id)
         filter_parquet = Path(
             "/net/galaxy/home/koes/tjkatz/OMTRA/omtra_pipelines/plinder_dataset/plinder_filtered.parquet"

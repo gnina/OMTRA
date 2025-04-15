@@ -13,9 +13,11 @@ import multiprocessing
 from pathlib import Path
 import wandb
 
+import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities import rank_zero_only
+from pytorch_lightning.strategies import DDPStrategy
 
 multiprocessing.set_start_method('spawn', force=True)
 mp.set_start_method("spawn", force=True)
@@ -51,7 +53,7 @@ def train(cfg: DictConfig):
                                     graph_config=cfg.graph,
                                     dists_file=dists_file,
                                 )
-
+    
     # figure out if we are resuming a previous run
     resume = cfg.get("ckpt_path") is not None
 
@@ -75,7 +77,7 @@ def train(cfg: DictConfig):
         
 
     wandb_logger = WandbLogger(
-        name=cfg['name'],
+        # name=cfg['name'],
         config=OmegaConf.to_container(cfg, resolve=True),
         # save_dir=run_dir,  # ensures logs are stored with the Hydra output dir
         id=run_id,
@@ -112,13 +114,20 @@ def train(cfg: DictConfig):
         override_dir = None
     callbacks: List[pl.Callback] = instantiate_callbacks(cfg.callbacks, override_dir=override_dir)
 
-
+    if cfg.trainer.get("devices", 1) > 1:
+        strategy = DDPStrategy(find_unused_parameters=True)
+    else:
+        strategy = "auto"
+        
     trainer = pl.Trainer(
-        logger=wandb_logger, 
-        **cfg.trainer, 
-        callbacks=callbacks
+        logger=wandb_logger,
+        strategy=strategy,
+        **cfg.trainer,
+        sync_batchnorm=False,
+        callbacks=callbacks,
     )
-
+    
+    torch.cuda.empty_cache()
     trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
 
 

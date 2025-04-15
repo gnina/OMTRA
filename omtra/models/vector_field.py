@@ -19,7 +19,7 @@ from omtra.tasks.modalities import (
 )
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
-from omtra.data.graph import to_canonical_etype
+from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
@@ -113,13 +113,17 @@ class VectorField(nn.Module):
             for modality in task_class.modalities_generated:
                 modality_present_space.add(modality.name)
                 modality_generated_space.add(modality.name)
+        
+        modality_present_space = sorted(list(modality_present_space))
+        modality_generated_space = sorted(list(modality_generated_space))
 
         modalities_present_cls = [name_to_modality(modality_name) for modality_name in modality_present_space]
         modalities_generated_cls = [name_to_modality(modality_name) for modality_name in modality_generated_space]
 
         # get the set of all nodes present in our graphs
         self.node_types = set(m.entity_name for m in modalities_present_cls if m.graph_entity == "node")
-
+        self.node_types = sorted(list(self.node_types))
+        
         # create token embeddings for all categorical features that we are modeling
         for m in modalities_present_cls:
             needs_token_embed = m.n_categories is not None and m.n_categories > 0
@@ -144,10 +148,19 @@ class VectorField(nn.Module):
             self.edge_types.add(modality.entity_name)
         
         # get all edge types that we need to support
-        self.edge_types = set()
+        # self.edge_types = set()
         for task in task_classes:
             self.edge_types.update(get_edges_for_task(task, graph_config))
-            
+        
+        missing_inv_edges = set()
+        for etype in self.edge_types:
+            inv_etype = get_inv_edge_type(etype)
+            if inv_etype not in self.edge_types:
+                missing_inv_edges.add(inv_etype)
+        self.edge_types.update(missing_inv_edges)
+        
+        self.edge_types = sorted(list(self.edge_types))
+
         # create a task embedding
         self.task_embedding = nn.Embedding(len(td_coupling.task_space), self.task_embedding_dim)
 

@@ -95,11 +95,24 @@ class OMTRA(pl.LightningModule):
             **vector_field,
         )
 
-
         self.configure_loss_fns()
 
         self.save_hyperparameters()
-
+    
+    # some code for debugging parameter consistency issues across multiple GPUs
+    # def setup(self, stage=None):
+    #     if stage == "fit" and torch.distributed.is_initialized():
+    #         rank = torch.distributed.get_rank()
+    #         total_params = sum(p.numel() for p in self.parameters())
+    #         print(f"Rank {rank}, total parameters: {total_params}")
+            
+            # Examine parameters and their checksums
+    #         for name, param in self.named_parameters():
+                # Compute a checksum of parameter values
+                # This will detect if parameters have same shape but different values
+    #             checksum = torch.sum(param).item()
+    #             print(f"Rank {rank}, param {name}, shape {param.shape}, checksum {checksum:.4f}")  
+                           
     def configure_loss_fns(self):
 
         if self.time_scaled_loss:
@@ -145,7 +158,7 @@ class OMTRA(pl.LightningModule):
 
         # forward pass
         losses = self(g, task_name)
-
+        
         train_log_dict = {}
         for key, loss in losses.items():
             train_log_dict[f"{key}_train_loss"] = loss
@@ -164,6 +177,7 @@ class OMTRA(pl.LightningModule):
             sync_dist=True,
             on_step=True,
         )
+
         return total_loss
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
@@ -231,6 +245,7 @@ class OMTRA(pl.LightningModule):
                 weight = 1.0
             target = targets[modality.name]
             if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                losses[modality.name] = torch.tensor(0.0, device=g.device)
                 continue
             losses[modality.name] = (
                 self.loss_fn_dict[modality.name](vf_output[modality.name], target)

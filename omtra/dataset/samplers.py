@@ -1,5 +1,6 @@
 
 import torch
+import torch.distributed
 from torch.utils.data import Sampler, DistributedSampler
 from typing import Dict, List
 
@@ -62,7 +63,7 @@ class MultiTaskSampler(Sampler):
         p = self.p_dataset_task[phase_idx]
 
         # Flatten the tensor to work with torch.multinomial
-        flat_p = p.flatten()
+        flat_p = p.flatten().cpu() # NOTE: changed this to cpu bc cgpt said its not deterministic on gpu?
 
         # Draw a single sample from the flattened distribution
         index = torch.multinomial(flat_p, 1).item()
@@ -118,19 +119,28 @@ class MultiTaskSampler(Sampler):
                 raise NotImplementedError(f"Dataset {dataset_name} not supported")
 
     def get_td_pair_distributed(self):
+        # if not hasattr(self, "cpu_group"):
+            # self.cpu_group = torch.distributed.new_group(backend="gloo")
+            
+        device = torch.device(f"cuda:{self.rank}")
         if self.rank == 0:
             task_idx, dataset_idx = self.sample_task_and_dataset()
-            task_idx_tensor = torch.tensor(task_idx, dtype=torch.int64)
-            dataset_idx_tensor = torch.tensor(dataset_idx, dtype=torch.int64)
+            task_idx_tensor = torch.tensor(task_idx, dtype=torch.int64, device=device)
+            dataset_idx_tensor = torch.tensor(dataset_idx, dtype=torch.int64, device=device)
         else:
-            task_idx_tensor = torch.tensor(0, dtype=torch.int64)
-            dataset_idx_tensor = torch.tensor(0, dtype=torch.int64)
+            task_idx_tensor = torch.tensor(0, dtype=torch.int64, device=device)
+            dataset_idx_tensor = torch.tensor(0, dtype=torch.int64, device=device)
 
+        # torch.distributed.broadcast(task_idx_tensor, src=0, group=self.cpu_group)
+        # torch.distributed.broadcast(dataset_idx_tensor, src=0, group=self.cpu_group)
         torch.distributed.broadcast(task_idx_tensor, src=0)
         torch.distributed.broadcast(dataset_idx_tensor, src=0)
 
+        # task_idx = task_idx_tensor.cpu().item()
+        # dataset_idx = dataset_idx_tensor.cpu().item()
         task_idx = task_idx_tensor.item()
         dataset_idx = dataset_idx_tensor.item()
+        
         return task_idx, dataset_idx
 
     def __iter__(self):

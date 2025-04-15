@@ -1,0 +1,5 @@
+defaults:
+  - default
+
+devices: 2
+use_distributed_sampler: False

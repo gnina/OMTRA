@@ -22,6 +22,7 @@ class StructureData:
     chain_ids: np.ndarray
     backbone_mask: np.ndarray
     backbone: BackboneData
+    pocket_embedding: Optional[np.ndarray] = None
     cif: Optional[str] = None
     
     def to_atom_array(self) -> struc.AtomArray:
