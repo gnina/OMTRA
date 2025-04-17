@@ -683,10 +683,9 @@ class VectorField(nn.Module):
 
     def integrate(
         self,
-        g: dgl.DGLGraph,
-        node_batch_idx: Dict[str, torch.Tensor],
-        upper_edge_mask: Dict[str, torch.Tensor],
-        n_timesteps: int,
+        g: dgl.DGLHeteroGraph,
+        task_class: Task,
+        n_timesteps: int = 250,
         visualize=False,
         **kwargs,
     ):
@@ -694,17 +693,15 @@ class VectorField(nn.Module):
         t = torch.linspace(0, 1, n_timesteps, device=g.device)
 
         # get the corresponding alpha values for each timepoint
+        # TODO: in FlowMol alpha_t and alpha_t_prime were just tensors, now they are dicts mapping modalities to the interpolant value
+        # TODO: in FlowMol, we assumed there was an inteprolant alpha_t as the weight on the data distribution and that the weight on the prior was 1 - alpha_t
+        # i want to make this more general, assume we have alpha_t (weight on data) and beta_t (weight on prior)...conditional path functions were already written
+        # under this assumption, but i might have flipped alpha and beta from how i described them above
         alpha_t = self.interpolant_scheduler.alpha_t(
             t
         )  # has shape (n_timepoints, n_feats)
         alpha_t_prime = self.interpolant_scheduler.alpha_t_prime(t)
 
-        for ntype, featlist in canonical_node_features.items():
-            for feat in featlist:
-                g.nodes[ntype].data[f"{feat}_t"] = g.nodes[ntype].data[f"{feat}_0"]
-
-        for etype in self.edge_types:
-            g.edges[etype].data["e_t"] = g.edges[etype].data["e_0"]
 
         if visualize:
             traj_frames = {}
@@ -789,6 +786,7 @@ class VectorField(nn.Module):
         if visualize:
             # currently, traj_frames[key] is a list of lists. each sublist contains the frame for every molecule in the batch
             # we want to rearrange this so that traj_frames is a list of dictionaries, where each dictionary contains the frames for a single molecule
+            # TODO: holy indentation, batman!
             reshaped_traj_frames = []
             for sys_idx in range(g.batch_size):
                 system_dict = {}
