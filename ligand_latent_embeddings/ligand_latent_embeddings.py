@@ -1,21 +1,13 @@
-import zarr
 import numpy as np
-import math
+import dgl
 
 import torch
-from torch import nn, einsum
-import torch.utils.data as torch_data
+from torch import nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 
-
-import dgl
-
-import matplotlib.pyplot as plt
-
 from omtra.models.gvp import HeteroGVPConv, _rbf, _norm_no_nan
-from omtra.data.xace_ligand import sparse_to_dense
 from omtra.constants import lig_atom_type_map, charge_map
     
 
@@ -209,8 +201,7 @@ class Model(nn.Module):
 
         # Get node atom charges from graph and one-hot encode
         atom_charges = g.nodes['lig'].data['c_1_true']  
-        shifted_charges = atom_charges + 5      # TODO: Remove. Will be fixed by data loader
-        one_hot_atom_charges = F.one_hot(shifted_charges.to(torch.long), num_classes=self.num_atom_charges).float()
+        one_hot_atom_charges = F.one_hot(atom_charges.to(torch.long), num_classes=self.num_atom_charges).float()
 
         scalar_feats = torch.cat([one_hot_atom_types, one_hot_atom_charges], dim=1) # (n_atoms, n_atom_types + n_atom_charges)
 
@@ -231,7 +222,7 @@ class Model(nn.Module):
         
         """ Indexing into batched graph to get pairwise atom distances """
 
-        lig_features = g.nodes['lig'].data['x_1_true'] # (N, d) TODO: no 's' in my graph. change to match dataloader
+        lig_features = g.nodes['lig'].data['x_1_true'] # (N, d) Number of atoms
 
         # Get the number of 'lig' nodes in each graph component (this is a list or tensor)
         num_nodes_list = g.batch_num_nodes('lig')
@@ -306,8 +297,7 @@ class Model(nn.Module):
         atom_type_logits = scalar_feats_logits[:, :self.num_atom_types]    # (num_atoms, num_atom_types)
         atom_charge_logits = scalar_feats_logits[:, self.num_atom_types:]  # (num_atoms, num_atom_charges)
 
-
-        recon_loss = F.cross_entropy(atom_type_logits, atom_types.long()) + F.cross_entropy(atom_charge_logits, shifted_charges.long()) + F.cross_entropy(bond_order_logits, bond_orders_for_pairs.squeeze().long())   # Reconstruction loss
+        recon_loss = F.cross_entropy(atom_type_logits, atom_types.long()) + F.cross_entropy(atom_charge_logits, atom_charges.long()) + F.cross_entropy(bond_order_logits, bond_orders_for_pairs.squeeze().long())   # Reconstruction loss
         loss = loss + recon_loss
 
         return loss, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity
@@ -316,13 +306,11 @@ class Model(nn.Module):
 def display_graph(g):
     """" Displays node and edge feature shapes for a dgl graph """
 
-    # Print node features
     print("\nNode Features:")
     print("x:", g.nodes['lig'].data['x_1_true'].shape)
     print("a:", g.nodes['lig'].data['a_1_true'].shape)
     print("c", g.nodes['lig'].data['c_1_true'].shape)
     print("e:", g.edges['lig_to_lig'].data['e_1_true'].shape)
-    print(g.edges['lig_to_lig'].data['e_1_true'].dtype)
 
 
 """ Data Class """
@@ -389,7 +377,7 @@ num_bond_orders = len(charge_map)
 
 model = Model(num_atom_types=num_atom_types,    
                  num_atom_charges=num_bond_orders,
-                 num_bond_orders=5, # TODO: no in constants.py
+                 num_bond_orders=5, # TODO: not in constants.py
                  vector_size=4,
                  num_gvp_layers=1,
                  mlp_hidden_size=128,
@@ -424,10 +412,10 @@ print("Perplexity:", perplexity)
 Test 2:  Train on a small batch
 """
 class PharmitWrapperDataset(Dataset):
-    def __init__(self, base_dataset, graph_type, length):
-        self.base_dataset = base_dataset
+    def __init__(self, pharmit_dataset, graph_type):
+        self.base_dataset = pharmit_dataset
         self.graph_type = graph_type
-        self.length = length
+        self.length = len(pharmit_dataset)
 
     def __len__(self):
         return self.length
@@ -435,25 +423,25 @@ class PharmitWrapperDataset(Dataset):
     def __getitem__(self, idx):
         return self.base_dataset[(self.graph_type, idx)]
 
-wrapped_dataset = PharmitWrapperDataset(pharmit_dataset, 'denovo_ligand', length=10000)
-
 def collate_fn(batch):
     return dgl.batch(batch)
 
+# Wrapper so we can use PyTorch's DataLoader
+wrapped_dataset = PharmitWrapperDataset(pharmit_dataset, 'denovo_ligand')
+
+# Hyperparameters
 batch_size = 100
-training_loader = DataLoader(wrapped_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-
-
-learning_rate = 1e-3    # From VQ-VAE paper
+learning_rate = 1e-3 
 
 # Adam Optimizer
 optimizer = optim.Adam(model.parameters(), lr=learning_rate, amsgrad=False)
-
 
 model.train()
 train_res_error = []
 train_res_perplexity = []
 
+# Data Loader
+training_loader = DataLoader(wrapped_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 loader_iter = iter(training_loader)
 
 for i in range(10):
