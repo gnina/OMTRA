@@ -17,53 +17,6 @@ import matplotlib.pyplot as plt
 from omtra.models.gvp import HeteroGVPConv, _rbf, _norm_no_nan
 from omtra.data.xace_ligand import sparse_to_dense
 from omtra.constants import lig_atom_type_map, charge_map
-
-
-
-
-class ZarrDataset(torch_data.Dataset):
-    def __init__(self, zarr_store):
-        self.zarr_store = zarr_store
-        self.n_graphs = self.zarr_store['lig/node/graph_lookup'].shape[0]
-
-    def __len__(self):
-        return self.n_graphs
-    
-    def __getitem__(self, idx):
-
-        # get node and edge data groups from zarr store
-        node_data = self.zarr_store['lig/node']
-        edge_data = self.zarr_store['lig/edge']
-
-        # lookup start and end indicies for node and edge data to pull just one graph from the full dataset
-        node_start_idx, node_end_idx = node_data['graph_lookup'][idx]
-        edge_start_idx, edge_end_idx = edge_data['graph_lookup'][idx]
-
-        # Pull out data for the graph
-        x = node_data['x'][node_start_idx:node_end_idx]
-        a = node_data['a'][node_start_idx:node_end_idx]
-        c = node_data['c'][node_start_idx:node_end_idx]
-        e = edge_data['e'][edge_start_idx:edge_end_idx]
-        edge_idxs = edge_data['edge_index'][edge_start_idx:edge_end_idx]
-
-        # Convert to PyTorch tensors
-        x_tensor = torch.tensor(x, dtype=torch.float32)
-        a_tensor = torch.tensor(a, dtype=torch.int32)
-        c_tensor = torch.tensor(c, dtype=torch.int32)
-        e_tensor = torch.tensor(e, dtype=torch.int32)
-
-        # Convert to dense representation
-        x_tensor, a_tensor, c_tensor, e_tensor, edge_idxs = sparse_to_dense(x_tensor, a_tensor, c_tensor, e_tensor, torch.tensor(edge_idxs, dtype=torch.int32))  
-
-        # Create heterogeneous graph
-        g = dgl.heterograph({('lig', 'lig_to_lig', 'lig'): (edge_idxs[0, :], edge_idxs[1, :])}, num_nodes_dict={'lig': node_end_idx - node_start_idx})
-
-        g.nodes['lig'].data['a_1_true'] = a_tensor
-        g.nodes['lig'].data['c_1_true'] = c_tensor
-        g.nodes['lig'].data['x_1_true'] = x_tensor
-        g.edges['lig_to_lig'].data['e_1_true'] = e_tensor.unsqueeze(1)
-
-        return g
     
 
 
