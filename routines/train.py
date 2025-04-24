@@ -7,6 +7,7 @@ from hydra.core.hydra_config import HydraConfig
 
 from omtra.dataset.data_module import MultiTaskDataModule
 from omtra.load.conf import merge_task_spec, instantiate_callbacks
+from omtra.load.quick import datamodule_from_config, model_from_config
 from omtra.utils import omtra_root
 import torch.multiprocessing as mp
 import multiprocessing
@@ -34,25 +35,12 @@ def train(cfg: DictConfig):
     # set seed everywhere (pytorch, numpy, python)
     pl.seed_everything(cfg.seed, workers=True)
 
-    print(f"⚛ Instantiating datamodule <{cfg.task_group.datamodule._target_}>")
-    datamodule: MultiTaskDataModule = hydra.utils.instantiate(
-        cfg.task_group.datamodule, 
-        # graph_config=cfg.graph,
-        # prior_config=cfg.prior
-    )
-
-    # get dists file from pharmit dir
-    # TODO: this is bad as it requires pharmit dataset to be in place
-    dists_file = Path(cfg.pharmit_path) / 'train_dists.npz'
-
     
-    print(f"⚛ Instantiating model <{cfg.model._target_}>")
-    model = hydra.utils.instantiate(cfg.model,
-                                    task_phases=cfg.task_group.task_phases,
-                                    task_dataset_coupling=cfg.task_group.dataset_task_coupling,
-                                    graph_config=cfg.graph,
-                                    dists_file=dists_file,
-                                )
+    # load datamodule
+    datamodule = datamodule_from_config(cfg)
+
+    # load model
+    model = model_from_config(cfg)
     
     # figure out if we are resuming a previous run
     resume = cfg.get("ckpt_path") is not None
@@ -115,7 +103,7 @@ def train(cfg: DictConfig):
     callbacks: List[pl.Callback] = instantiate_callbacks(cfg.callbacks, override_dir=override_dir)
 
     if cfg.trainer.get("devices", 1) > 1:
-        strategy = DDPStrategy(find_unused_parameters=True)
+        strategy = DDPStrategy(find_unused_parameters=True) # TODO: this is not necessary, strategy and find_unused_parameters should be set in the config
     else:
         strategy = "auto"
         
@@ -123,7 +111,7 @@ def train(cfg: DictConfig):
         logger=wandb_logger,
         strategy=strategy,
         **cfg.trainer,
-        sync_batchnorm=False,
+        sync_batchnorm=False, # TODO: move this to config
         callbacks=callbacks,
     )
     
