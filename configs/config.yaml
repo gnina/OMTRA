@@ -9,6 +9,8 @@ defaults:
   - callbacks: default
   - wandb_conf: default
 
+mode: omtra # mode for training, can be omtra (train omtra) or ligand_encoder (train just the ligand encoder)
+
 seed: 42
 
 name: i_forgot_to_name_my_run
@@ -25,11 +27,6 @@ plinder_path: ${omtra_root:}/data/plinder
 # this is a directory that will symlink wandb 
 # run names and run ids to the actual hydra output directory
 symlink_dir: ./wandb_symlinks
-
-
-task_group:
-  datamodule:
-    # distributed: True
 
 hydra:
   run:

@@ -7,7 +7,7 @@ from hydra.core.hydra_config import HydraConfig
 
 from omtra.dataset.data_module import MultiTaskDataModule
 from omtra.load.conf import merge_task_spec, instantiate_callbacks
-from omtra.load.quick import datamodule_from_config, model_from_config
+import omtra.load.quick as quick_load
 from omtra.utils import omtra_root
 import torch.multiprocessing as mp
 import multiprocessing
@@ -35,16 +35,28 @@ def train(cfg: DictConfig):
     # set seed everywhere (pytorch, numpy, python)
     pl.seed_everything(cfg.seed, workers=True)
 
+
+    mode = cfg.get("mode", None)
+    if mode is None:
+        raise ValueError("mode must specify a training mode (e.g. 'omtra', 'ligand_encoder', 'protein_encoder', etc.)")
     
     # load datamodule
-    datamodule = datamodule_from_config(cfg)
+    datamodule = quick_load.datamodule_from_config(cfg)
 
     # load model
-    model = model_from_config(cfg)
+    if mode == 'omtra':
+        lig_encoder_empty = cfg.model.ligand_encoder.is_empty()
+        lig_enc_ckpt_specified = cfg.model.ligand_encoder_checkpoint is not None
+        if not lig_encoder_empty and not lig_enc_ckpt_specified:
+            raise ValueError("ligand_encoder_checkpoint must be specified if omtra is doing latent ligand generation")
+        model = quick_load.omtra_from_config(cfg)
+    elif mode == 'ligand_encoder':
+        model = quick_load.ligand_encoder_from_config(cfg)
+    else:
+        raise ValueError(f"mode {mode} not recognized, must be 'omtra' or 'ligand_encoder'")
     
     # figure out if we are resuming a previous run
     resume = cfg.get("ckpt_path") is not None
-
 
     wandb_config = cfg.wandb_conf
     if resume:

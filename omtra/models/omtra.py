@@ -24,7 +24,7 @@ from omtra.models.vector_field import VectorField
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.data.distributions.plinder_dists import sample_n_lig_atoms_plinder, sample_n_pharms_plinder
 from omtra.data.distributions.pharmit_dists import sample_n_lig_atoms_pharmit, sample_n_pharms_pharmit
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
@@ -41,7 +41,7 @@ class OMTRA(pl.LightningModule):
         optimizer: DictConfig,
         vector_field: DictConfig,
         total_loss_weights: Dict[str, float] = {},
-        ligand_encoder: DictConfig = None,
+        ligand_encoder: DictConfig = DictConfig({}),
         ligand_encoder_checkpoint: str = None,
     ):
         super().__init__()
@@ -49,6 +49,7 @@ class OMTRA(pl.LightningModule):
         self.dists_file = dists_file
         self.graph_config = graph_config
         self.conditional_path_config = conditional_paths
+        self.optimizer_cfg = optimizer
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -98,11 +99,13 @@ class OMTRA(pl.LightningModule):
             graph_config=self.graph_config,
         )
 
-        if ligand_encoder is not None:
+        if not ligand_encoder.is_empty():
             self.ligand_encoder = hydra.utils.instantiate(ligand_encoder)
             if ligand_encoder_checkpoint is not None:
                 ligand_encoder_pre = type(self.ligand_encoder).load_from_checkpoint(ligand_encoder_checkpoint)
                 self.ligand_encoder.load_state_dict(ligand_encoder_pre.state_dict())
+        else:
+            self.ligand_encoder = None
 
         self.configure_loss_fns()
 
@@ -265,7 +268,7 @@ class OMTRA(pl.LightningModule):
         return losses
 
     def configure_optimizers(self):
-        optimizer = hydra.utils.instantiate(self.hparams.optimizer, params=self.parameters())
+        optimizer = hydra.utils.instantiate(self.optimizer_cfg, params=self.parameters())
         return optimizer
 
     def sample_conditional_path(
