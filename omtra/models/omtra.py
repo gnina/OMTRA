@@ -41,6 +41,8 @@ class OMTRA(pl.LightningModule):
         optimizer: DictConfig,
         vector_field: DictConfig,
         total_loss_weights: Dict[str, float] = {},
+        ligand_encoder: DictConfig = None,
+        ligand_encoder_checkpoint: str = None,
     ):
         super().__init__()
 
@@ -96,9 +98,15 @@ class OMTRA(pl.LightningModule):
             graph_config=self.graph_config,
         )
 
+        if ligand_encoder is not None:
+            self.ligand_encoder = hydra.utils.instantiate(ligand_encoder)
+            if ligand_encoder_checkpoint is not None:
+                ligand_encoder_pre = type(self.ligand_encoder).load_from_checkpoint(ligand_encoder_checkpoint)
+                self.ligand_encoder.load_state_dict(ligand_encoder_pre.state_dict())
+
         self.configure_loss_fns()
 
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
     
     # some code for debugging parameter consistency issues across multiple GPUs
     # def setup(self, stage=None):

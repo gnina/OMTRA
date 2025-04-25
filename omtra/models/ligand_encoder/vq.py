@@ -144,19 +144,19 @@ class Decoder(nn.Module):
 
 class LigandVQVAE(pl.LightningModule):
     def __init__(self,
-                 num_atom_types, 
-                 num_atom_charges,
-                 num_bond_orders,
-                 vector_size,
-                 num_gvp_layers,
-                 mlp_hidden_size,
-                 embedding_dim, 
-                 num_embeddings, 
-                 num_decod_hiddens, 
-                 num_decod_layers, 
-                 num_bond_decod_hiddens, 
-                 num_bond_decod_layers, 
-                 commitment_cost,
+                 num_atom_types: int, 
+                 num_atom_charges: int,
+                 num_bond_orders: int,
+                 vector_size: int = 12,
+                 num_gvp_layers: int = 3,
+                 mlp_hidden_size: int = 128,
+                 embedding_dim: int = 8, 
+                 num_embeddings: int = 100, # not sure what reasonable defualt would be here 
+                 num_decoder_hiddens: int = 128, # TODO: make same as encoder hidden dim? 
+                 num_decoder_layers: int = 3, 
+                 num_bond_decod_hiddens=64, 
+                 num_bond_decod_layers=2, 
+                 commitment_cost=0.25, # TODO: not sure what reasonable defualt would be here, but there should be numbers in OG vqvae paper
                  rbf_dim=32,
                  rbf_dmax=10):
                  
@@ -182,8 +182,8 @@ class LigandVQVAE(pl.LightningModule):
                                       commitment_cost = commitment_cost)
        
         self.decoder = Decoder(embedding_dim = embedding_dim,
-                               num_decod_hiddens = num_decod_hiddens,
-                               num_decod_layers = num_decod_layers,
+                               num_decod_hiddens = num_decoder_hiddens,
+                               num_decod_layers = num_decoder_layers,
                                num_bond_decod_hiddens = num_bond_decod_hiddens,
                                num_bond_decod_layers = num_bond_decod_layers,
                                num_atom_types = self.num_atom_types,
@@ -342,8 +342,8 @@ if __name__ == "__main__":
                     mlp_hidden_size=128,
                     embedding_dim=128,     
                     num_embeddings=100, 
-                    num_decod_hiddens=256, 
-                    num_decod_layers=3, 
+                    num_decoder_hiddens=256, 
+                    num_decoder_layers=3, 
                     num_bond_decod_hiddens=128, 
                     num_bond_decod_layers=3, 
                     commitment_cost=0.25)

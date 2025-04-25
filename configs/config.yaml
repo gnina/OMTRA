@@ -1,6 +1,7 @@
 defaults:
   - _self_
   - model: default
+  - ligand_encoder: none
   - trainer: default
   - task_group: protein
   - graph: default
