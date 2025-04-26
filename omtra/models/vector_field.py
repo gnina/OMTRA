@@ -686,6 +686,7 @@ class VectorField(nn.Module):
         self,
         g: dgl.DGLHeteroGraph,
         task_class: Task,
+        upper_edge_mask: Dict[str, torch.Tensor],
         n_timesteps: int = 250,
         visualize=False,
         **kwargs,
@@ -750,17 +751,17 @@ class VectorField(nn.Module):
         alpha_t_i: torch.Tensor,
         alpha_s_i: torch.Tensor,
         alpha_t_prime_i: torch.Tensor,
-        node_batch_idx: torch.Tensor,
-        edge_batch_idx: torch.Tensor,
+        node_batch_idxs: Dict[str, torch.Tensor],
+        edge_batch_idxs: Dict[str, torch.Tensor],
         upper_edge_mask: torch.Tensor,
         cat_temp_func: Callable,
         forward_weight_func: Callable,
-        prev_dst_dict: dict = None,
+        prev_dst_dict: Optional[Dict] = None,
         dfm_type: str = "campbell",
         stochasticity: float = 8.0,
         high_confidence_threshold: float = 0.9,
         last_step: bool = False,
-        inv_temp_func: Callable = None,
+        inv_temp_func: Optional[Callable] = None,
     ):
         device = g.device
 
@@ -786,8 +787,8 @@ class VectorField(nn.Module):
         dst_dict = self(
             g,
             task,
-            t=torch.full((g.batch_size,), t_i, device=g.device),
-            node_batch_idx=node_batch_idx,
+            t=torch.full((g.batch_size,), t_i, device=device),
+            node_batch_idx=node_batch_idxs,
             upper_edge_mask=upper_edge_mask,
             apply_softmax=True,
             remove_com=True,
@@ -842,9 +843,9 @@ class VectorField(nn.Module):
                     n_classes=modality.n_categories + 1,
                     mask_index=modality.n_categories + 1,
                     last_step=last_step,
-                    batch_idx=edge_batch_idx[upper_edge_mask[modality.entity_name]]
+                    batch_idx=edge_batch_idxs[upper_edge_mask[modality.entity_name]]
                     if modality.is_node
-                    else node_batch_idx[modality.entity_name],
+                    else node_batch_idxs[modality.entity_name],
                 )
 
                 # if we are doing edge features, we need to modify xt and x_1_sampled to have upper and lower edges

@@ -3,7 +3,7 @@ import torch.nn.functional as fn
 import torch.nn as nn
 import pytorch_lightning as pl
 import dgl
-from typing import Dict, List, Callable, Tuple
+from typing import Dict, List, Callable, Tuple, Optional
 from collections import defaultdict
 import wandb
 import itertools
@@ -329,16 +329,16 @@ class OMTRA(pl.LightningModule):
     @torch.no_grad()
     def sample(self, 
                task_name: str, 
-               g_list: List[dgl.DGLHeteroGraph] = None, # list of graphs containing conditional information (receptor structure, pharmacphore, ligand identity, etc)
+               g_list: Optional[List[dgl.DGLHeteroGraph]] = None, # list of graphs containing conditional information (receptor structure, pharmacphore, ligand identity, etc)
                n_replicates: int = 1, # number of replicates samples to draw per conditioning input in g_list, or just number of samples if a fully unconditional task
-               coms: torch.Tensor = None, # center of mass for adding ligands/pharms to systems
+               coms: Optional[torch.Tensor] = None, # center of mass for adding ligands/pharms to systems
                unconditional_n_atoms_dist: str = 'plinder', # distribution to use for sampling number of atoms in unconditional tasks
     ):
 
         task: Task = task_name_to_class(task_name)
-        groups_generated = task.groups_generated
+        groups_generated = task.modalities_generated
         groups_present = task.groups_present
-        groups_fixed = task.groups_fixed
+        groups_fixed = task.modalities_fixed
 
         # TODO: user-supplied n_atoms dict?
 
