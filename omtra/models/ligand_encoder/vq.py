@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from omtra.models.gvp import HeteroGVPConv, _rbf, _norm_no_nan
-from omtra.constants import lig_atom_type_map, charge_map
+from omtra.constants import lig_atom_type_map, charge_map, bond_type_map
 import pytorch_lightning as pl
     
 
@@ -15,6 +15,7 @@ import pytorch_lightning as pl
 class Encoder(nn.Module):
     def __init__(self, node_types, edge_types, scalar_size, vector_size, num_gvp_layers, mlp_hidden_size, embedding_dim, rbf_dim, rbf_dmax):
         super(Encoder, self).__init__()
+
 
         self.mlp = nn.Sequential(nn.Linear(scalar_size, mlp_hidden_size),
                                  nn.ReLU(),
@@ -27,10 +28,25 @@ class Encoder(nn.Module):
                                                 use_dst_feats= False,
                                                 rbf_dim = rbf_dim,
                                                 rbf_dmax= rbf_dmax
-                                                ) for i in range(num_gvp_layers)])   
+                                                ) for _ in range(num_gvp_layers)])   
         
 
-    def forward(self, g, scalar_feats, coord_feats, vector_feats, edge_feats, x_diff, d):
+    def forward(self, g, atom_types, atom_charges, coord_feats, vector_feats, edge_feats, x_diff, d, mask_prob):
+        
+        # Randomly mask atom types and charges
+        mask = (torch.rand(atom_types.shape[0], device=atom_types.device) < mask_prob).long()   # Binary mask
+        # Mask atom types
+        masked_atom_types = atom_types.clone()
+        masked_atom_types[mask.bool()] = 0  # Zero out the row first
+        masked_atom_types[mask.bool(), -1] = 1  # Set last index to 1 for masked atoms
+
+        # Mask atom charges
+        masked_atom_charges = atom_charges.clone()
+        masked_atom_charges[mask.bool()] = 0
+        masked_atom_charges[mask.bool(), -1] = 1    # Set last index to 1 for masked atoms
+
+        scalar_feats = torch.cat([masked_atom_types, masked_atom_charges], dim=1) # (n_atoms, n_atom_types + n_atom_charges)
+
         
         # Pass to MLP to change dimension 
         scalar_feats_reshaped = self.mlp(scalar_feats)  # (n_atoms, embedding_dim)
@@ -158,14 +174,16 @@ class LigandVQVAE(pl.LightningModule):
                  num_bond_decod_layers, 
                  commitment_cost,
                  rbf_dim=32,
-                 rbf_dmax=10):
+                 rbf_dmax=10,
+                 mask_prob=0.10):
                  
         super().__init__()
-        self.num_atom_types = num_atom_types
-        self.num_atom_charges = num_atom_charges
+        self.num_atom_types = num_atom_types+1  # Add 1 for masked atom type
+        self.num_atom_charges = num_atom_charges+1  # Add 1 for masked atom charge
+        self.vector_size = vector_size
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
-        self.vector_size = vector_size
+        self.mask_prob = mask_prob
         
         self.encoder = Encoder(node_types = ['lig'], # Only ligand nodes
                                edge_types = ['lig_to_lig'], # Only ligand edges
@@ -199,15 +217,13 @@ class LigandVQVAE(pl.LightningModule):
         """ Get relevant features from batched graph """
         # Get node atom types from graph and one-hot encode
         atom_types = g.nodes['lig'].data['a_1_true']    
-        one_hot_atom_types = F.one_hot(atom_types.to(torch.long), num_classes=self.num_atom_types).float()
+        one_hot_atom_types = F.one_hot(atom_types.to(torch.long), num_classes=self.num_atom_types).float()    
 
         # Get node atom charges from graph and one-hot encode
         atom_charges = g.nodes['lig'].data['c_1_true']  
         one_hot_atom_charges = F.one_hot(atom_charges.to(torch.long), num_classes=self.num_atom_charges).float()
 
-        scalar_feats = torch.cat([one_hot_atom_types, one_hot_atom_charges], dim=1) # (n_atoms, n_atom_types + n_atom_charges)
-
-        vector_feats = {'lig': torch.zeros((scalar_feats.shape[0], self.vector_size, 3), dtype=torch.float32)}    # Vector features
+        vector_feats = {'lig': torch.zeros((atom_types.shape[0], self.vector_size, 3), dtype=torch.float32)}    # Vector features
         coord_feats = {'lig': g.nodes['lig'].data['x_1_true']}   # Atom coordinates
         edge_feats = {'lig_to_lig': g.edges['lig_to_lig'].data['e_1_true'].unsqueeze(1)} # Bond order
         
@@ -291,7 +307,7 @@ class LigandVQVAE(pl.LightningModule):
 
 
         """ Pass to VQ-VAE model """
-        z_e = self.encoder(g, scalar_feats, coord_feats, vector_feats, edge_feats, x_diff, d)   # Encoding
+        z_e = self.encoder(g, one_hot_atom_types, one_hot_atom_charges, coord_feats, vector_feats, edge_feats, x_diff, d, self.mask_prob)   # Encoding
 
         loss, z_d, perplexity = self.vq_vae(z_e)    # Vector Quantization
         
@@ -323,30 +339,32 @@ if __name__ == "__main__":
     "pharmit_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit_dev",
     "task_group=no_protein"
     ]
-    cfg = load_cfg(overrides)
+    cfg = load_cfg(overrides=overrides)
     datamodule = datamodule_from_config(cfg)
 
     train_dataset = datamodule.load_dataset("train")
     pharmit_dataset = train_dataset.datasets['pharmit']
-
+    
 
 
     num_atom_types = len(lig_atom_type_map)
-    num_bond_orders = len(charge_map)
+    num_atom_charges = len(charge_map)
+    num_bond_orders = len(bond_type_map)
 
-    model = LigandVQVAE(num_atom_types=num_atom_types,    
-                    num_atom_charges=num_bond_orders,
-                    num_bond_orders=5, # TODO: not in constants.py
-                    vector_size=4,
-                    num_gvp_layers=1,
-                    mlp_hidden_size=128,
-                    embedding_dim=128,     
-                    num_embeddings=100, 
-                    num_decod_hiddens=256, 
-                    num_decod_layers=3, 
-                    num_bond_decod_hiddens=128, 
-                    num_bond_decod_layers=3, 
-                    commitment_cost=0.25)
+    model = LigandVQVAE(num_atom_types= num_atom_types,    
+                    num_atom_charges= num_atom_charges,
+                    num_bond_orders= num_bond_orders,
+                    vector_size= 4,
+                    num_gvp_layers= 1,
+                    mlp_hidden_size= 128,
+                    embedding_dim= 128,     
+                    num_embeddings= 100, 
+                    num_decod_hiddens= 256, 
+                    num_decod_layers= 3, 
+                    num_bond_decod_hiddens= 128, 
+                    num_bond_decod_layers= 3, 
+                    commitment_cost= 0.25)
+
 
     """ 
     Test 1: Passing one molecule through the model 
