@@ -367,7 +367,7 @@ class OMTRA(pl.LightningModule):
         if g_list is None:
             g_flat = []
             for _ in range(n_replicates):
-                g_list.append( build_complex_graph(
+                g_flat.append( build_complex_graph(
                     node_data={},
                     edge_idxs={},
                     edge_data={},

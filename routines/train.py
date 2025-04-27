@@ -45,8 +45,8 @@ def train(cfg: DictConfig):
 
     # load model
     if mode == 'omtra':
-        lig_encoder_empty = cfg.model.ligand_encoder.is_empty()
-        lig_enc_ckpt_specified = cfg.model.ligand_encoder_checkpoint is not None
+        lig_encoder_empty = cfg.ligand_encoder.is_empty()
+        lig_enc_ckpt_specified = cfg.ligand_encoder_checkpoint is not None
         if not lig_encoder_empty and not lig_enc_ckpt_specified:
             raise ValueError("ligand_encoder_checkpoint must be specified if omtra is doing latent ligand generation")
         model = quick_load.omtra_from_config(cfg)

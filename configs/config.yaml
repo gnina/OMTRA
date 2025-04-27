@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - model: default
-  - ligand_encoder: none
+  - ligand_encoder: no_ligand_encoder
   - trainer: default
   - task_group: protein
   - graph: default
@@ -22,6 +22,7 @@ max_steps: 100 # number of steps to train for
 
 pharmit_path: ${omtra_root:}/data/pharmit_dev
 plinder_path: ${omtra_root:}/data/plinder
+ligand_encoder_checkpoint: none
 
 
 # this is a directory that will symlink wandb 
