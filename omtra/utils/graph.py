@@ -9,6 +9,7 @@ def build_lookup_table(batch_num_nodes):
     return lookup_table
 
 
+# TODO: i don't think we should be using this; just the modalities
 canonical_node_features = {
     "lig": ["x", "a", "c"],
     "npnde": ["x", "a", "c"],

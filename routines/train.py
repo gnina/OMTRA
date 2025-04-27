@@ -45,8 +45,8 @@ def train(cfg: DictConfig):
 
     # load model
     if mode == 'omtra':
-        lig_encoder_empty = cfg.model.ligand_encoder.is_empty()
-        lig_enc_ckpt_specified = cfg.model.ligand_encoder_checkpoint is not None
+        lig_encoder_empty = cfg.ligand_encoder.is_empty()
+        lig_enc_ckpt_specified = cfg.model.get('ligand_encoder_checkpoint') is not None
         if not lig_encoder_empty and not lig_enc_ckpt_specified:
             raise ValueError("ligand_encoder_checkpoint must be specified if omtra is doing latent ligand generation")
         model = quick_load.omtra_from_config(cfg)
@@ -113,17 +113,10 @@ def train(cfg: DictConfig):
     else:
         override_dir = None
     callbacks: List[pl.Callback] = instantiate_callbacks(cfg.callbacks, override_dir=override_dir)
-
-    if cfg.trainer.get("devices", 1) > 1:
-        strategy = DDPStrategy(find_unused_parameters=True) # TODO: this is not necessary, strategy and find_unused_parameters should be set in the config
-    else:
-        strategy = "auto"
         
     trainer = pl.Trainer(
         logger=wandb_logger,
-        strategy=strategy,
         **cfg.trainer,
-        sync_batchnorm=False, # TODO: move this to config
         callbacks=callbacks,
     )
     

@@ -27,6 +27,7 @@ chmod +x build_env.sh
 - [ ] there is massive utiltiy in an on-the-fly (batched) addition of radius edges overlaid on top of edges that contain bond order as an edge feature
 - [ ] what to do with pharm interaction feature
 - [ ] pharmit dataset chemical space conditoning + predictor?
+- [ ] when training omtra with ligand encoder, inject encoder config from encoder checkpoint
 
 
 # How to train?

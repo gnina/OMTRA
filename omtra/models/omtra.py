@@ -191,6 +191,13 @@ class OMTRA(pl.LightningModule):
         )
 
         return total_loss
+    
+    def validation_step(self, batch_data, batch_idx):
+        g, task_name, dataset_name = batch_data
+
+        self.eval()
+        samples = self.sample(task_name, g_list=dgl.unbatch(g), n_replicates=2)
+        self.train()
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
         # sample time
@@ -348,9 +355,9 @@ class OMTRA(pl.LightningModule):
     ):
 
         task: Task = task_name_to_class(task_name)
-        groups_generated = task.modalities_generated
+        groups_generated = task.groups_generated
         groups_present = task.groups_present
-        groups_fixed = task.modalities_fixed
+        groups_fixed = task.groups_fixed
 
         # TODO: user-supplied n_atoms dict?
 

@@ -54,7 +54,16 @@ class Task:
             return 'pred'
         else:
             return 'no_links'
-
+        
+    @classproperty
+    def node_modalities_present(self) -> List[Modality]:
+        """Returns the node modalities for this task. This is a subset of the modalities present in the task."""
+        return [ m for m in self.modalities_present if m.is_node ]
+    
+    @classproperty
+    def edge_modalities_present(self) -> List[Modality]:
+        """Returns the edge modalities for this task. This is a subset of the modalities present in the task."""
+        return [ m for m in self.modalities_present if not m.is_node ]
 
 ##
 # tasks with ligand only
