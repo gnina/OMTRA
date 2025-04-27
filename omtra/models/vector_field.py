@@ -740,7 +740,7 @@ class VectorField(nn.Module):
         # under this assumption, but i might have flipped alpha and beta from how i described them above
         alpha_t = self.interpolant_scheduler.alpha_t(
             t, task
-        )  # has shape (n_timepoints, n_feats)
+        )  # has shape (n_timepoints, )
         alpha_t_prime = self.interpolant_scheduler.alpha_t_prime(t, task)
 
         if visualize:
@@ -766,6 +766,7 @@ class VectorField(nn.Module):
             # compute next step and set x_t = x_s
             g, dst_dict = self.step(
                 g=g,
+                task=task,
                 s_i=s_i,
                 t_i=t_i,
                 alpha_t_i=alpha_t_i,
@@ -776,7 +777,6 @@ class VectorField(nn.Module):
                 upper_edge_mask=upper_edge_mask,
                 cat_temp_func=cat_temp_func,
                 stochasticity=stochasticity,
-                high_confidence_threshold=high_confidence_threshold,
                 last_step=last_step,
                 prev_dst_dict=dst_dict,
                 **kwargs,
@@ -802,11 +802,12 @@ class VectorField(nn.Module):
     def step(
         self,
         g: dgl.DGLGraph,
+        task: Task,
         s_i: torch.Tensor,
         t_i: torch.Tensor,
-        alpha_t_i: torch.Tensor,
-        alpha_s_i: torch.Tensor,
-        alpha_t_prime_i: torch.Tensor,
+        alpha_t_i: Dict[str, torch.Tensor],
+        alpha_s_i: Dict[str, torch.Tensor],
+        alpha_t_prime_i: Dict[str, torch.Tensor],
         node_batch_idxs: Dict[str, torch.Tensor],
         edge_batch_idxs: Dict[str, torch.Tensor],
         upper_edge_mask: Dict[str, torch.Tensor],
@@ -822,8 +823,6 @@ class VectorField(nn.Module):
         else:
             eta = stochasticity
 
-        task = self.task_class
-
         # predict the destination of the trajectory given the current timepoint
         dst_dict = self(
             g,
@@ -832,7 +831,7 @@ class VectorField(nn.Module):
             node_batch_idx=node_batch_idxs,
             upper_edge_mask=upper_edge_mask,
             apply_softmax=True,
-            remove_com=True, # TODO: is this ...should this be set to True?
+            remove_com=True,  # TODO: is this ...should this be set to True?
             prev_dst_dict=prev_dst_dict,
         )
 
@@ -847,13 +846,14 @@ class VectorField(nn.Module):
             else:
                 continuous_modalities.append(m)
 
-
         # iterate over continuous modalities and apply updates
-        for m in continuous_modalities: 
+        for m in continuous_modalities:
             data_src = g.nodes if m.is_node else g.edges
 
             # skip if there are no nodes or edges of this type
-            num_entries = g.num_nodes(m.entity_name) if m.is_node else g.num_edges(m.entity_name)
+            num_entries = (
+                g.num_nodes(m.entity_name) if m.is_node else g.num_edges(m.entity_name)
+            )
             if num_entries == 0:
                 continue
 
@@ -884,7 +884,7 @@ class VectorField(nn.Module):
                 torch.log(p_s_1) / temperature, dim=-1
             )  # log probabilities
 
-            # TODO: other discrete sampling methods? 
+            # TODO: other discrete sampling methods?
             # TODO: path planning, probably in place of purity sampling
             xt, x_1_sampled = self.campbell_step(
                 g=g,
@@ -892,8 +892,8 @@ class VectorField(nn.Module):
                 p_1_given_t=p_s_1,
                 xt=xt,
                 stochasticity=eta,
-                alpha_t=alpha_t_i[m.entity_name],
-                alpha_t_prime=alpha_t_prime_i[m.entity_name],
+                alpha_t=alpha_t_i[m.name],
+                alpha_t_prime=alpha_t_prime_i[m.name],
                 dt=dt,
                 batch_size=g.batch_size,
                 batch_num_nodes=g.batch_num_edges(m.entity_name) // 2
@@ -901,9 +901,12 @@ class VectorField(nn.Module):
                 else g.batch_num_nodes(m.entity_name),
                 mask_index=m.n_categories,
                 last_step=last_step,
-                batch_idx=edge_batch_idxs[upper_edge_mask[m.entity_name]]
-                if m.is_node
+                batch_idx=edge_batch_idxs[m.entity_name]
+                if not m.is_node
                 else node_batch_idxs[m.entity_name],
+                upper_edge_mask=upper_edge_mask[m.entity_name]
+                if not m.is_node
+                else None,
             )
 
             # if we are doing edge features, we need to modify xt and x_1_sampled to have upper and lower edges
@@ -930,8 +933,8 @@ class VectorField(nn.Module):
         p_1_given_t: torch.Tensor,
         xt: torch.Tensor,
         stochasticity: float,
-        alpha_t: float,
-        alpha_t_prime: float,
+        alpha_t: torch.Tensor,
+        alpha_t_prime: torch.Tensor,
         dt,
         batch_size: int,
         batch_num_nodes: torch.Tensor,
@@ -954,14 +957,13 @@ class VectorField(nn.Module):
             g,
             m=m,
             xt=xt,
-            x1=x1,
             x1_probs=p_1_given_t,
             unmask_prob=unmask_prob,
             mask_index=mask_index,
             batch_size=batch_size,
             batch_num_nodes=batch_num_nodes,
-            node_batch_idx=batch_idx,
             device=xt.device,
+            upper_edge_mask=upper_edge_mask,
         )
 
         # This is without purity sampling
@@ -983,7 +985,7 @@ class VectorField(nn.Module):
 
         # unmask the nodes
         xt[will_unmask] = x1[will_unmask]
-        
+
         return xt, x1
 
     def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime):

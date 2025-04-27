@@ -75,7 +75,7 @@ def purity_sampling(
         nodes_to_unmask = torch.tensor([], device=device, dtype=torch.long)
 
     if not m.is_node:
-        will_unmask = torch.zeros(g.num_edges(), dtype=torch.bool, device=device)
+        will_unmask = torch.zeros(g.num_edges(m.entity_name), dtype=torch.bool, device=device)
         will_unmask[nodes_to_unmask] = True
         will_unmask = will_unmask[upper_edge_mask]
     else:

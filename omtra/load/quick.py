@@ -77,6 +77,7 @@ def omtra_from_config(cfg: DictConfig) -> OMTRA:
         dists_file=dists_file,
         ligand_encoder=cfg.ligand_encoder,
         _recursive_=False,
+        prior_config=cfg.prior,
     )
 
     return model

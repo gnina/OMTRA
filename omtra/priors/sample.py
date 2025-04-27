@@ -56,10 +56,10 @@ def sample_priors(g: dgl.DGLHeteroGraph, task_class: Task, prior_fns: dict, trai
                 args = [n, 3]
             elif modality.data_key == 'v':
                 # for v data, we need to pass the number of dimensions
-                args = [n, 4, 3]
+                args = [n, [4, 3]]
 
         # draw a sample from the prior
-        prior_sample = prior_func(*args)
+        prior_sample = prior_func(*args).to(g.device)
 
         # for edge features, make sure upper and lower triangle are the same
         # TODO: this logic may change if we decide to do something other fully-connected lig-lig edges
