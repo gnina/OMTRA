@@ -5,6 +5,7 @@ from torch.distributions import Binomial
 from omtra.tasks.modalities import Modality
 from functools import partial
 
+
 def purity_sampling(
     g: dgl.DGLHeteroGraph,
     modality: Modality,
@@ -15,10 +16,12 @@ def purity_sampling(
     batch_size,
     batch_num_nodes,
     device,
-    upper_edge_mask,):
-
-    masked_nodes = xt == mask_index # mask of which nodes are currently unmasked
-    purities = x1_probs.max(-1)[0] # the highest probability of any category for each node
+    upper_edge_mask,
+):
+    masked_nodes = xt == mask_index  # mask of which nodes are currently unmasked
+    purities = x1_probs.max(-1)[
+        0
+    ]  # the highest probability of any category for each node
 
     if not modality.is_node:
         # recreate a version of purities that includes lower edges
@@ -32,15 +35,19 @@ def purity_sampling(
         masked_nodes = masked_nodes_ul
 
     # compute the number of masked nodes per graph in the batch
-    indptr = torch.zeros(batch_size+1, device=device, dtype=torch.long)
+    indptr = torch.zeros(batch_size + 1, device=device, dtype=torch.long)
     indptr[1:] = batch_num_nodes.cumsum(0)
-    masked_nodes_per_graph = segment_csr(masked_nodes.long(), indptr) # has shape (batch_size,)
+    masked_nodes_per_graph = segment_csr(
+        masked_nodes.long(), indptr
+    )  # has shape (batch_size,)
 
     # set purities of unmasked nodes to -1
     purities[~masked_nodes] = -1
 
     # sample the number of nodes to unmask per graph
-    n_unmask_per_graph = Binomial(total_count=masked_nodes_per_graph, probs=unmask_prob).sample()
+    n_unmask_per_graph = Binomial(
+        total_count=masked_nodes_per_graph, probs=unmask_prob
+    ).sample()
 
     with g.local_scope():
         if not modality.is_node:
@@ -50,13 +57,12 @@ def purity_sampling(
             data_src = g.nodes[modality.entity_name].data
             topk_func = partial(dgl.topk_nodes, ntype=modality.entity_name)
 
-
-        data_src['purity'] = purities.unsqueeze(-1)
+        data_src["purity"] = purities.unsqueeze(-1)
         k = int(n_unmask_per_graph.max())
 
         if k != 0:
-            _, topk_idxs_batched = topk_func(g, feat='purity', k=k, sortby=0)
-            
+            _, topk_idxs_batched = topk_func(g, feat="purity", k=k, sortby=0)
+
             # topk_idxs contains indicies relative to each batch
             # but we need to convert them to batched-graph indicies
             topk_idxs_batched = topk_idxs_batched + indptr[:-1].unsqueeze(-1)
@@ -65,7 +71,7 @@ def purity_sampling(
     if k != 0:
         col_indices = torch.arange(k, device=device).unsqueeze(0)
         mask = col_indices < n_unmask_per_graph.unsqueeze(1)
-        
+
         # Apply mask to get only desired indices
         nodes_to_unmask = topk_idxs_batched[mask]
     else:

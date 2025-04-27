@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
+import torch_scatter
 import dgl
 import dgl.function as fn
 from collections import defaultdict
@@ -556,7 +557,7 @@ class VectorField(nn.Module):
 
     def denoise_graph(
         self,
-        g: dgl.DGLGraph,
+        g: dgl.DGLHeteroGraph,
         task_class: Task,
         node_scalar_features: Dict[str, torch.Tensor],
         node_vec_features: Dict[str, torch.Tensor],
@@ -632,19 +633,29 @@ class VectorField(nn.Module):
 
         # project node positions back into zero-COM subspace
         if remove_com:
-            raise NotImplementedError("need to do this correctly for hetero")
-            # TODO: operate on nodes present in the graph, not all nodes supported by the model
-            # TODO: can only remove 1 COM per system and everything elsse needs to come with it. I think this currently
-            # removes COM from each node type individually, destroying the structure of the system
+            all_positions = []
+            all_batch_idx = []
+
             for ntype in self.node_types:
                 if g.num_nodes(ntype) == 0:
                     continue
+                pos = node_positions[ntype]
+                batch = node_batch_idx[ntype]
+                all_positions.append(pos)
+                all_batch_idx.append(batch)
+
+            all_positions = torch.cat(all_positions, dim=0)
+            all_batch_idx = torch.cat(all_batch_idx, dim=0)
+
+            com = torch_scatter.scatter_mean(all_positions, all_batch_idx, dim=0)
+
+            for ntype in self.node_types:
+                if g.num_nodes(ntype) == 0:
+                    continue
+                batch = node_batch_idx[ntype]
                 g.nodes[ntype].data["x_1_pred"] = node_positions[ntype]
                 g.nodes[ntype].data["x_1_pred"] = (
-                    g.nodes[ntype].data["x_1_pred"]
-                    - dgl.readout_nodes(g, feat="x_1_pred", op="mean", ntype=ntype)[
-                        node_batch_idx[ntype]
-                    ]
+                    g.nodes[ntype].data["x_1_pred"] - com[batch]
                 )
                 node_positions[ntype] = g.nodes[ntype].data["x_1_pred"]
 
