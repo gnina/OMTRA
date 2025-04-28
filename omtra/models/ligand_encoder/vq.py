@@ -302,8 +302,8 @@ class LigandVQVAE(pl.LightningModule):
         
         atom_type_logits, atom_charge_logits, bond_order_logits = self.decoder(g, z_d)    # Decoding
 
-        atom_type_loss = self.atom_type_loss_fn(atom_type_logits, g.nodes['lig'].data['a_1_true'])
-        atom_charge_loss = self.atom_charge_loss_fn(atom_charge_logits, g.nodes['lig'].data['c_1_true'])
+        atom_type_loss = self.atom_type_loss_fn(atom_type_logits, target_atom_types)
+        atom_charge_loss = self.atom_charge_loss_fn(atom_charge_logits, target_atom_charges)
         bond_order_loss = self.bond_order_loss_fn(bond_order_logits, target_bond_orders)
 
         # recon_loss = atom_type_loss + atom_charge_loss + bond_order_loss
