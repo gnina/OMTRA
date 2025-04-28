@@ -8,62 +8,113 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from omtra.models.gvp import HeteroGVPConv, _rbf, _norm_no_nan
 from omtra.constants import lig_atom_type_map, charge_map, bond_type_map
+from omtra.data.graph.utils import get_upper_edge_mask
 import pytorch_lightning as pl
     
 
 
 class Encoder(nn.Module):
-    def __init__(self, node_types, edge_types, scalar_size, vector_size, num_gvp_layers, mlp_hidden_size, embedding_dim, rbf_dim, rbf_dmax):
+    def __init__(self, 
+            a_embed_dim: int = 16,
+            c_embed_dim: int = 8,
+            e_embed_dim: int = 8,
+            scalar_size: int = 128, 
+            vector_size: int = 4, 
+            num_gvp_layers: int = 3, 
+            latent_dim: int = 8, 
+            rbf_dim: int = 10, 
+            rbf_dmax: int = 32,
+            mask_prob: float = 0.0):
         super(Encoder, self).__init__()
 
+        self.mask_prob = mask_prob
+        self.scalar_size = scalar_size
+        self.vector_size = vector_size
+        self.latent_dim = latent_dim
+        self.rbf_dim = rbf_dim
+        self.rbf_dmax = rbf_dmax
 
-        self.mlp = nn.Sequential(nn.Linear(scalar_size, mlp_hidden_size),
-                                 nn.ReLU(),
-                                 nn.Linear(mlp_hidden_size, embedding_dim))
+
+        self.a_embedding = nn.Embedding(num_embeddings=len(lig_atom_type_map)+int(mask_prob>0), embedding_dim=a_embed_dim)
+        self.c_embedding = nn.Embedding(num_embeddings=len(charge_map)+int(mask_prob>0), embedding_dim=c_embed_dim)
+        self.e_embedding = nn.Embedding(num_embeddings=len(bond_type_map), embedding_dim=e_embed_dim)
+
+
+        self.to_node_scalars = nn.Sequential(
+            nn.Linear(a_embed_dim + c_embed_dim, scalar_size),
+            nn.ReLU(),
+        )
         
-        self.gvps = nn.ModuleList([HeteroGVPConv(node_types= node_types,
-                                                edge_types= edge_types,
-                                                scalar_size= embedding_dim,
-                                                vector_size= vector_size,
+        edge_feat_size = {'lig_to_lig': e_embed_dim}
+        self.gvps = nn.ModuleList([HeteroGVPConv(node_types=['lig'],
+                                                edge_types=['lig_to_lig'],
+                                                scalar_size=scalar_size,
+                                                vector_size=vector_size,
                                                 use_dst_feats= False,
                                                 rbf_dim = rbf_dim,
-                                                rbf_dmax= rbf_dmax
+                                                rbf_dmax= rbf_dmax,
+                                                edge_feat_size=edge_feat_size,
                                                 ) for _ in range(num_gvp_layers)])   
         
-
-    def forward(self, g, atom_types, atom_charges, coord_feats, vector_feats, edge_feats, x_diff, d, mask_prob):
+        self.to_atom_latents = nn.Sequential(nn.Linear(scalar_size, latent_dim*2),
+                                 nn.ReLU(),
+                                 nn.Linear(latent_dim*2, latent_dim))
         
-        # Randomly mask atom types and charges
-        mask = (torch.rand(atom_types.shape[0], device=atom_types.device) < mask_prob).long()   # Binary mask
-        # Mask atom types
-        masked_atom_types = atom_types.clone()
-        masked_atom_types[mask.bool()] = 0  # Zero out the row first
-        masked_atom_types[mask.bool(), -1] = 1  # Set last index to 1 for masked atoms
 
-        # Mask atom charges
-        masked_atom_charges = atom_charges.clone()
-        masked_atom_charges[mask.bool()] = 0
-        masked_atom_charges[mask.bool(), -1] = 1    # Set last index to 1 for masked atoms
+    def forward(self, g):
 
-        scalar_feats = torch.cat([masked_atom_types, masked_atom_charges], dim=1) # (n_atoms, n_atom_types + n_atom_charges)
+        atom_types = g.nodes['lig'].data['a_1_true'].clone()    # Atom types, has shape (n_nodes,)
+        atom_charges = g.nodes['lig'].data['c_1_true'].clone()  # Atom charges, has shape (n_nodes,)
+        bond_orders = g.edges['lig_to_lig'].data['e_1_true']  # Bond orders, has shape (n_edges,)
 
+        # apply random masking
+        mask = torch.rand_like(atom_types.float()) < self.mask_prob   # Binary mask
+        atom_types[mask] = len(lig_atom_type_map)  # Set masked atom types to the last index (masked atom type)
+        atom_charges[mask] = len(charge_map)  # Set masked atom charges to the last index (masked atom charge)
+
+        # embed discrete data
+        node_scalar_inputs = [self.a_embedding(atom_types), self.c_embedding(atom_charges)]  # (n_nodes, a_embed_dim + c_embed_dim)
+        scalar_feats = {
+            'lig': self.to_node_scalars(torch.cat(node_scalar_inputs, dim=1))  # (n_nodes, scalar_size)
+        }
+
+        # embed edge data
+        edge_feats = {
+            'lig_to_lig': self.e_embedding(bond_orders)  # (n_edges, e_embed_dim)
+        }
+
+
+
+        ####
+        # convert graph data into a format to be passed into the message-passing lyaers
+        ####
+        vector_feats = {'lig': torch.zeros((atom_types.shape[0], self.vector_size, 3))}    # Vector features
+        coord_feats = {'lig': g.nodes['lig'].data['x_1_true']}   # Atom coordinates
         
-        # Pass to MLP to change dimension 
-        scalar_feats_reshaped = self.mlp(scalar_feats)  # (n_atoms, embedding_dim)
-        scalar_feats_reshaped = {'lig': scalar_feats_reshaped}
+        edges = g.edges(etype='lig_to_lig')
+        diff = coord_feats['lig'][edges[0]] - coord_feats['lig'][edges[1]]
+        d = _norm_no_nan(diff)  # (num_edges,)
+        x_diff = diff / d.unsqueeze(1)   # (num_edges,)
+
+        d_rbf = _rbf(d, D_min=0, D_max=self.rbf_dmax, D_count=self.rbf_dim) # _rbf:  D_min=0 and D_max=10, D_count=32
+        d = {'lig_to_lig': d_rbf}   # Pairiwise distances 
+        x_diff = {'lig_to_lig': x_diff} 
 
         # Sequentially pass through HeteroGVPConv layers
         for gvp_layer in self.gvps:
-            scalar_feats_reshaped, vector_feats = gvp_layer(g= g,
-                               scalar_feats= scalar_feats_reshaped,
-                               coord_feats= coord_feats,
+            scalar_feats, vector_feats = gvp_layer(g=g,
+                               scalar_feats=scalar_feats,
+                               coord_feats=coord_feats,
                                vec_feats= vector_feats,
                                edge_feats= edge_feats,
                                x_diff= x_diff,
                                d= d
                                )
             
-        return scalar_feats_reshaped['lig']
+        # convert ligand scalar features to latent atom types
+        atom_latents = self.to_atom_latents(scalar_feats['lig'])  # (n_nodes, latent_dim)
+            
+        return atom_latents
 
 
 
@@ -106,108 +157,122 @@ class VectorQuantizer(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, embedding_dim, num_decod_hiddens, num_decod_layers, num_bond_decod_hiddens, num_bond_decod_layers, num_atom_types, num_atom_charges, num_bond_orders):
+    def __init__(self, 
+                 latent_dim, 
+                 num_decod_hiddens, 
+                 num_bond_decod_hiddens, 
+                 rbf_dmax=10,
+                 rbf_dim=32,
+                 ):
         super(Decoder, self).__init__()
-        
-        # Decoder for reconstructing atom type and charge logits from latent vector
-        decod_layers = [nn.Linear(embedding_dim, num_decod_hiddens), nn.ReLU()]  # Input layer + activation
-        
-        # Add hidden layers
-        for _ in range(num_decod_layers):
-            decod_layers.append(nn.Linear(num_decod_hiddens, num_decod_hiddens))
-            decod_layers.append(nn.ReLU())  # Non-linearity between layers
-        
-        # Output layer
-        decod_layers.append(nn.Linear(num_decod_hiddens, num_atom_types+num_atom_charges))
+
+        self.n_atom_types = len(lig_atom_type_map)
+        self.n_atom_charges = len(charge_map)
+        self.n_bond_orders = len(bond_type_map)
+        self.rbf_dmax = rbf_dmax
+        self.rbf_dim = rbf_dim
 
         # Use nn.Sequential to define the entire model
-        self.decoder = nn.Sequential(*decod_layers)
-
-
-        # MLP to predict bond order from atom type and charge logits
-        bond_decod_layers = [
-            nn.Linear(embedding_dim+1, num_bond_decod_hiddens),
-            nn.ReLU()
-        ]
-        
-        # Add hidden layers
-        for _ in range(num_bond_decod_layers):
-            bond_decod_layers.append(nn.Linear(num_bond_decod_hiddens, num_bond_decod_hiddens))
-            bond_decod_layers.append(nn.ReLU())
-        
-        # Ouptut layer
-        bond_decod_layers.append(nn.Linear(num_bond_decod_hiddens, num_bond_orders))
+        self.atom_decoder = nn.Sequential(
+            nn.Linear(latent_dim, num_decod_hiddens),
+            nn.ReLU(),
+            nn.Linear(num_decod_hiddens, self.n_atom_types + self.n_atom_charges),
+        )
         
         # Use nn.Sequential to define the entire model
-        self.bond_decoder = nn.Sequential(*bond_decod_layers)
+        self.bond_decoder = nn.Sequential(
+            nn.Linear(latent_dim+rbf_dim, num_bond_decod_hiddens),
+            nn.ReLU(),
+            nn.Linear(num_bond_decod_hiddens, self.n_bond_orders),
+        )
 
     
 
-    def forward(self, quantized, dists, pair_indices):
+    def forward(self, g:dgl.DGLHeteroGraph, quantized: torch.Tensor):
 
-        scalar_feats_logits = self.decoder(quantized)  # (num_atoms, num_atom_types + num_atom_charges)
+        lig_atom_positions = g.nodes['lig'].data['x_1_true'] # (N, d) Number of atoms
 
-        scalar_feats_0 = quantized[pair_indices[:, 0]]
-        scalar_feats_1 = quantized[pair_indices[:, 1]]
+        # Get the number of 'lig' nodes in each graph component (this is a list or tensor)
+        num_nodes_list = g.batch_num_nodes('lig')
 
-        combined_quantized_dists = torch.concat([scalar_feats_0+scalar_feats_1, dists], dim=1) # (P, num_atom_types + num_atom_charges + 1)
-        
+        upper_edge_mask = get_upper_edge_mask(g, 'lig_to_lig')  # (num_edges,)
+
+        src_idxs, dst_idxs = g.edges(etype='lig_to_lig')  # (2, num_edges)
+        pair_indices = torch.stack([src_idxs, dst_idxs], dim=1)  # (num_edges, 2)
+        pair_indices = pair_indices[upper_edge_mask]  # (num_pairs, 2)
+
+        # Get the positions of each atom in the pair
+        x = g.nodes['lig'].data['x_1_true']  # (N, 3)
+        x_i = x[pair_indices[:, 0]]  # (P, 3)
+        x_j = x[pair_indices[:, 1]]  # (P, 3)
+
+        # Euclidean distance
+        dists = _norm_no_nan(x_i - x_j)  # (P,)
+        dists = _rbf(dists, D_min=0, D_max=self.rbf_dmax, D_count=self.rbf_dim)  # (P, rbf_dim)
+
+        # project latent atom types to atom types and charges
+        scalar_feats_logits = self.atom_decoder(quantized)  # (num_atoms, num_atom_types + num_atom_charges)
+        atom_type_logits = scalar_feats_logits[:, :self.n_atom_types]    # (num_atoms, num_atom_types)
+        atom_charge_logits = scalar_feats_logits[:, self.n_atom_types:]  # (num_atoms, num_atom_charges)
+
+        # predict bond orders for pairs of atoms
+        pair_node_feats = quantized[pair_indices[:, 0]] + quantized[pair_indices[:, 1]]  # (P, latent_dim)
+        combined_quantized_dists = torch.concat([pair_node_feats, dists], dim=1) # (P, rbf_dim + latent_dim)
         bond_order_logits = self.bond_decoder(combined_quantized_dists)    # (P, num_bond_orders)
        
-        return scalar_feats_logits, bond_order_logits
+        return atom_type_logits, atom_charge_logits, bond_order_logits
     
 
 
 class LigandVQVAE(pl.LightningModule):
     def __init__(self,
-                 num_atom_types, 
-                 num_atom_charges,
-                 num_bond_orders,
-                 vector_size,
+                 scalar_size: int, # scalar features for message passing
+                 vector_size: int, # vector features for message passing
                  num_gvp_layers,
-                 mlp_hidden_size,
-                 embedding_dim, 
-                 num_embeddings, 
+                 latent_dim, # size of latent atom types
+                 num_embeddings, # size of the codebook
                  num_decod_hiddens, 
-                 num_decod_layers, 
                  num_bond_decod_hiddens, 
-                 num_bond_decod_layers, 
                  commitment_cost,
+                 a_embed_dim=16,
+                 c_embed_dim=8,
+                 e_embed_dim=8,
                  rbf_dim=32,
                  rbf_dmax=10,
                  mask_prob=0.10):
                  
         super().__init__()
 
-        self.num_atom_types = num_atom_types+1  # Add 1 for masked atom type
-        self.num_atom_charges = num_atom_charges+1  # Add 1 for masked atom charge
+        self.mask_prob = mask_prob
+        self.n_mask_feats = int(mask_prob > 0)  # Number of masked features (atom types and charges)
+
+        self.num_atom_types = len(lig_atom_type_map) 
+        self.num_atom_charges = len(charge_map) 
         self.vector_size = vector_size
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
         self.mask_prob = mask_prob
         
-        self.encoder = Encoder(node_types = ['lig'], # Only ligand nodes
-                               edge_types = ['lig_to_lig'], # Only ligand edges
-                               scalar_size= self.num_atom_types + self.num_atom_charges, 
+        self.encoder = Encoder(
+                               scalar_size=scalar_size, 
                                vector_size = vector_size,
+                               a_embed_dim= a_embed_dim,
+                               c_embed_dim= c_embed_dim,
+                               e_embed_dim= e_embed_dim,
                                num_gvp_layers= num_gvp_layers, 
-                               mlp_hidden_size= mlp_hidden_size,
-                               embedding_dim=  embedding_dim,
+                               latent_dim=latent_dim,
                                rbf_dim = self.rbf_dim,
                                rbf_dmax = self.rbf_dmax)
 
         self.vq_vae = VectorQuantizer(num_embeddings = num_embeddings,
-                                      embedding_dim = embedding_dim,
+                                      embedding_dim = latent_dim,
                                       commitment_cost = commitment_cost)
        
-        self.decoder = Decoder(embedding_dim = embedding_dim,
+        self.decoder = Decoder(latent_dim = latent_dim,
                                num_decod_hiddens = num_decod_hiddens,
-                               num_decod_layers = num_decod_layers,
                                num_bond_decod_hiddens = num_bond_decod_hiddens,
-                               num_bond_decod_layers = num_bond_decod_layers,
-                               num_atom_types = self.num_atom_types,
-                               num_atom_charges = self.num_atom_charges,
-                               num_bond_orders = num_bond_orders
+                               rbf_dim=self.rbf_dim,
+                               rbf_dmax=self.rbf_dmax
                                )
         
         self.save_hyperparameters()
@@ -223,116 +288,30 @@ class LigandVQVAE(pl.LightningModule):
 
     def forward(self, g: dgl.DGLHeteroGraph): 
         """ Get relevant features from batched graph """
-        # Get node atom types from graph and one-hot encode
-        atom_types = g.nodes['lig'].data['a_1_true']    
-        one_hot_atom_types = F.one_hot(atom_types.to(torch.long), num_classes=self.num_atom_types).float()    
 
-        # Get node atom charges from graph and one-hot encode
-        atom_charges = g.nodes['lig'].data['c_1_true']  
-        one_hot_atom_charges = F.one_hot(atom_charges.to(torch.long), num_classes=self.num_atom_charges).float()
-
-        vector_feats = {'lig': torch.zeros((atom_types.shape[0], self.vector_size, 3), dtype=torch.float32)}    # Vector features
-        coord_feats = {'lig': g.nodes['lig'].data['x_1_true']}   # Atom coordinates
-        edge_feats = {'lig_to_lig': g.edges['lig_to_lig'].data['e_1_true'].unsqueeze(1)} # Bond order
-        
-        edges = g.edges(etype='lig_to_lig')
-        diff = coord_feats['lig'][edges[0]] - coord_feats['lig'][edges[1]]
-        d = _norm_no_nan(diff)  # (num_edges,)
-        x_diff = diff / d.unsqueeze(1)   # (num_edges,)
-
-        d_rbf = _rbf(d, D_min=0, D_max=self.rbf_dmax, D_count=self.rbf_dim) # _rbf:  D_min=0 and D_max=10, D_count=32
-        d = {'lig_to_lig': d_rbf}   # Pairiwise distances 
-        x_diff = {'lig_to_lig': x_diff} 
-
-       
-        
-        """ Indexing into batched graph to get pairwise atom distances """
-
-        lig_features = g.nodes['lig'].data['x_1_true'] # (N, d) Number of atoms
-
-        # Get the number of 'lig' nodes in each graph component (this is a list or tensor)
-        num_nodes_list = g.batch_num_nodes('lig')
-
-        # Convert the list to a tensor (ensure it is on the same device as lig_features)
-        num_nodes_tensor = num_nodes_list.clone().detach().to(device=lig_features.device)
-
-        # Precompute the offsets by using torch.cumsum.
-        # The offset for each graph is the cumulative sum of nodes in previous graphs.
-        # For instance, if num_nodes_tensor = [n1, n2, n3, ...],
-        # then offsets = [0, n1, n1+n2, ...].
-        offsets = torch.cat([
-            torch.zeros(1, dtype=torch.long, device=lig_features.device),
-            num_nodes_tensor.cumsum(dim=0)[:-1]
-        ])
-
-        pair_indices_list = []  # to accumulate indices for each subgraph
-
-        # Zip together the precomputed offset with the corresponding number of nodes.
-        for offset, num_nodes in zip(offsets, num_nodes_list):
-            # Only consider graphs with at least 2 nodes
-            if num_nodes < 2:
-                continue
-
-            # Get unique pair indices within the current subgraph.
-            # This returns a tensor of shape [2, num_pairs] where the first row is the
-            # row indices and the second row is the column indices (with row < col).
-            local_indices = torch.triu_indices(num_nodes, num_nodes, offset=1)
-            
-            # Adjust the local indices to be global in the batched graph by adding the offset.
-            global_indices = local_indices + offset
-            pair_indices_list.append(global_indices)
-
-        # Concatenate the indices from all subgraphs along the pair (second) dimension.
-        if pair_indices_list:
-            # pair_indices shape will be [2, total_num_pairs]
-            pair_indices = torch.cat(pair_indices_list, dim=1)
-            
-            # Transpose to shape [total_num_pairs, 2] so that each row is a pair of indices.
-            pair_indices = pair_indices.t()  # shape: [P, 2]
-        else:
-            pair_indices = torch.empty((0, 2), dtype=torch.long, device=lig_features.device)
-
-
-        # Get corresponding set of bond orders
-        bond_orders = g.edges['lig_to_lig'].data['e_1_true'].unsqueeze(1).view(-1)
-        src, dest = g.edges(etype='lig_to_lig')
-
-        # Create a lookup matrix of size [N, N] where N is total number of lig nodes
-        N = g.num_nodes('lig')
-        lookup = torch.zeros((N, N), dtype=torch.int64, device=g.device)
-        lookup[src, dest] = bond_orders
-        lookup[dest, src] = bond_orders
-
-        bond_orders_for_pairs = lookup[pair_indices[:, 0], pair_indices[:, 1]].unsqueeze(1)
-
-        # Get the positions of each atom in the pair
-        x_i = coord_feats['lig'][pair_indices[:, 0]]  # (P, 3)
-        x_j = coord_feats['lig'][pair_indices[:, 1]]  # (P, 3)
-
-        # Euclidean distance
-        dists = _norm_no_nan(x_i - x_j).unsqueeze(1)  # (P, 1)
-
+        target_atom_types = g.nodes['lig'].data['a_1_true']  # (n_nodes,)
+        target_atom_charges = g.nodes['lig'].data['c_1_true']  # (n_nodes,)
+        upper_edge_mask = get_upper_edge_mask(g, 'lig_to_lig')  # (n_edges,)
+        target_bond_orders = g.edges['lig_to_lig'].data['e_1_true'][upper_edge_mask]  # (n_edges,)
 
 
         """ Pass to VQ-VAE model """
-        z_e = self.encoder(g, one_hot_atom_types, one_hot_atom_charges, coord_feats, vector_feats, edge_feats, x_diff, d, self.mask_prob)   # Encoding
+        z_e = self.encoder(g)   # Encoding
 
         loss, z_d, perplexity = self.vq_vae(z_e)    # Vector Quantization
         
-        scalar_feats_logits, bond_order_logits = self.decoder(z_d, dists, pair_indices)    # Decoding
-        atom_type_logits = scalar_feats_logits[:, :self.num_atom_types]    # (num_atoms, num_atom_types)
-        atom_charge_logits = scalar_feats_logits[:, self.num_atom_types:]  # (num_atoms, num_atom_charges)
+        atom_type_logits, atom_charge_logits, bond_order_logits = self.decoder(g, z_d)    # Decoding
 
-        atom_type_loss = self.atom_type_loss_fn(atom_type_logits, atom_types.long())
-        atom_charge_loss = self.atom_charge_loss_fn(atom_charge_logits, atom_charges.long())
-        bond_order_loss = self.bond_order_loss_fn(bond_order_logits, bond_orders_for_pairs.squeeze().long())
+        atom_type_loss = self.atom_type_loss_fn(atom_type_logits, g.nodes['lig'].data['a_1_true'])
+        atom_charge_loss = self.atom_charge_loss_fn(atom_charge_logits, g.nodes['lig'].data['c_1_true'])
+        bond_order_loss = self.bond_order_loss_fn(bond_order_logits, target_bond_orders)
 
         # recon_loss = atom_type_loss + atom_charge_loss + bond_order_loss
         
         losses = {'vq+comittment': loss,
-                  'atom_type': atom_type_loss,
-                  'atom_charge': atom_charge_loss,
-                  'train_bond_order': bond_order_loss}
+                  'a_recon': atom_type_loss,
+                  'c_recon': atom_charge_loss,
+                  'e_recon': bond_order_loss}
 
         return losses, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity
     
@@ -375,9 +354,13 @@ def display_graph(g):
 """ Data Class """
 if __name__ == "__main__":
     from omtra.load.quick import load_cfg, datamodule_from_config
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument('--pharmit_path', type=str, default='/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit_dev')
+    args = p.parse_args()
 
     overrides = [
-    "pharmit_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit_dev",
+    f"pharmit_path={args.pharmit_path}",
     "task_group=no_protein"
     ]
     cfg = load_cfg(overrides=overrides)
@@ -385,25 +368,18 @@ if __name__ == "__main__":
 
     train_dataset = datamodule.load_dataset("train")
     pharmit_dataset = train_dataset.datasets['pharmit']
-    
 
-
-    num_atom_types = len(lig_atom_type_map)
-    num_atom_charges = len(charge_map)
-    num_bond_orders = len(bond_type_map)
-
-    model = LigandVQVAE(num_atom_types= num_atom_types,    
-                    num_atom_charges= num_atom_charges,
-                    num_bond_orders= num_bond_orders,
-                    vector_size= 4,
+    model = LigandVQVAE(
+                    a_embed_dim=16,
+                    c_embed_dim=8,
+                    e_embed_dim=8,
+                    scalar_size=128,  
+                    vector_size=4,
                     num_gvp_layers= 2,
-                    mlp_hidden_size= 128,
-                    embedding_dim= 128,     
+                    latent_dim=8,     
                     num_embeddings= 100, 
-                    num_decod_hiddens= 256, 
-                    num_decod_layers= 3, 
+                    num_decod_hiddens=128, 
                     num_bond_decod_hiddens= 128, 
-                    num_bond_decod_layers= 3, 
                     commitment_cost= 0.25)
 
 
@@ -418,7 +394,7 @@ if __name__ == "__main__":
     model.eval()
 
     with torch.no_grad():  # No gradient tracking is needed for inference
-        loss, recon_loss, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = model(g)
+        losses, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = model(g)
 
     print("Loss:", loss)
     print("Reconstruction Loss:", recon_loss)
