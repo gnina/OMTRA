@@ -56,6 +56,11 @@ def parse_args():
         default=None,
         help="Maximum number of pending jobs (default: 2*num_cpus)",
     )
+    parser.add_argument(
+        "--embeddings",
+        action="store_true",
+        help="If set, generate embeddings (default: False)",
+    )
 
     return parser.parse_args()
 
@@ -72,6 +77,7 @@ def main():
         output_path=args.output,
         num_workers=args.num_cpus,
         category=None,
+        embeddings=args.embeddings
     )
 
     df = pd.read_parquet(args.data).drop_duplicates("system_id")

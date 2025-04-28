@@ -40,6 +40,7 @@ class PlinderNoLinksZarrConverter:
         category: str = None,
         num_workers: int = 1,
         batch_size: int = 200,
+        embeddings: Optional[bool] = False,
     ):
         self.output_path = Path(output_path)
         self.struc_chunk_size = struc_chunk_size
@@ -50,6 +51,7 @@ class PlinderNoLinksZarrConverter:
         self.category = category
         self.num_workers = num_workers
         self.batch_size = batch_size
+        self.embeddings = embeddings
 
         if not self.output_path.exists():
             self.store = zarr.storage.LocalStore(str(self.output_path))
@@ -66,6 +68,15 @@ class PlinderNoLinksZarrConverter:
                 chunk = self.struc_chunk_size
                 if group == self.pocket:
                     chunk = self.pocket_chunk_size
+                    if self.embeddings:
+                        embedding_dim = 1536 #specific to ESM3
+                        group.create_array(
+                        "embeddings",
+                        shape=(0, embedding_dim),    
+                        chunks=(chunk, embedding_dim),
+                        dtype=np.float32,
+                        compressors=None,
+                    )
 
                 group.create_array(
                     "coords", shape=(0, 3), chunks=(chunk, 3), dtype=np.float32
@@ -223,7 +234,40 @@ class PlinderNoLinksZarrConverter:
 
             self.system_lookup = list(self.root.attrs["system_lookup"])
             self.npnde_lookup = list(self.root.attrs["npnde_lookup"])
+    def _append_embedding_data_batch(
+        self, group: zarr.Group, data_batch: List[StructureData]
+    ) -> List[Tuple[int, int, int, int]]:
+        
+        embeddings_indices = []
 
+        current_len = group["embeddings"].shape[0]
+        emb_counts = [data.pocket_embedding.shape[0] for data in data_batch]
+        emb_offsets = [current_len]
+
+        for i in range(len(emb_counts)):
+            emb_offsets.append(emb_offsets[-1] + emb_counts[i])
+
+        for i in range(len(data_batch)):
+            embeddings_indices.append(
+                (emb_offsets[i], emb_offsets[i + 1])
+            )
+
+        # double check we are generating embeddings then we'll return "atom_indices" with embedding indices for each pocket
+        if self.embeddings and "embeddings" in group.array_keys():
+            try:
+                all_embeddings = np.vstack(
+                [
+                    data.pocket_embedding
+                    for data in data_batch
+                    if getattr(data, "pocket_embedding", None) is not None 
+                ]
+            )
+                group["embeddings"].append(all_embeddings)
+            except Exception as e:
+                logger.warning(f"No embeddings found in batch, skipping. Error: {e}")
+        
+        return embeddings_indices
+        
     def _append_structure_data_batch(
         self, group: zarr.Group, data_batch: List[StructureData]
     ) -> List[Tuple[int, int, int, int]]:
@@ -421,7 +465,7 @@ class PlinderNoLinksZarrConverter:
 
     def _process_system(self, system_id: str):
         try:
-            system_processor = SystemProcessor(system_id=system_id, link_type=None)
+            system_processor = SystemProcessor(system_id=system_id, link_type=None, embeddings=self.embeddings)
             return system_processor.process_system()
 
         except Exception as e:
@@ -513,6 +557,9 @@ class PlinderNoLinksZarrConverter:
         pharm_indices = self._append_pharmacophore_data_batch(
             self.pharmacophore, pharm_data
         )
+        #embeddings are associated with pocket data so we use a similar function to track their indices
+        if self.embeddings:
+            embeddings_indices = self._append_embedding_data_batch(self.pocket, pocket_data)
 
         npnde_entries = []
         if npnde_data:
@@ -561,6 +608,12 @@ class PlinderNoLinksZarrConverter:
                 entry["pocket_bb_start"],
                 entry["pocket_bb_end"],
             ) = pocket_indices[i]
+            if self.embeddings: 
+                (
+                    entry["embeddings_start"],
+                    entry["embeddings_end"],
+                ) = embeddings_indices[i]
+
             entry["pharm_start"], entry["pharm_end"] = pharm_indices[i]
 
         self.system_lookup.extend(system_info)

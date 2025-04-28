@@ -18,6 +18,7 @@ python store_linked_structures.py \
     --num_systems 10 \ # optional, only stores num_systems systems for testing
     --num_cpus 32 \ # defaults to 1
     --max_pending 64 \ # Maximum number of pending jobs (default: 2*num_cpus)
+    --embeddings \ # optional, Generate ESM3 embeddings for associated protein pockets
 ```
 
 ### Storage without Linked Structures
@@ -36,6 +37,7 @@ python store_unlinked_structures.py \
     --num_systems 10 \ # optional, only stores num_systems systems for testing
     --num_cpus 32 \ # defaults to 1
     --max_pending 64 \ # Maximum number of pending jobs (default: 2*num_cpus)
+    --embeddings \ # optional, Generate ESM3 embeddings for associated protein pockets
 ```
 
 ### Plinder Pipeline
