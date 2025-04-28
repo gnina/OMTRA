@@ -463,6 +463,11 @@ class OMTRA(pl.LightningModule):
 
         if add_ligand:
             for g_idx, g_i in enumerate(g_flat):
+                # clear ligand nodes (and edges) if they exist
+                if g_i.num_nodes("lig") > 0:
+                    lig_node_ids = torch.arange(g_i.num_nodes("lig"), device=g_i.device)
+                    g_i.remove_nodes(lig_node_ids, ntype="lig")
+                    
                 # add lig atoms to each graph
                 g_i.add_nodes(
                     n_lig_atoms[g_idx].item(),
@@ -475,7 +480,7 @@ class OMTRA(pl.LightningModule):
                 )
                 assert edge_idxs.shape[0] == 2
                 g_i.add_edges(u=edge_idxs[0], v=edge_idxs[1], etype="lig_to_lig")
-
+        
         add_pharm = "pharmacophore" in groups_generated
         if protein_present and add_pharm:
             if "ligand_identity" in groups_present:
@@ -506,6 +511,11 @@ class OMTRA(pl.LightningModule):
 
         if add_pharm:
             for g_idx, g_i in enumerate(g_flat):
+                # clear pharm nodes (and edges) if they exist
+                if g_i.num_nodes("pharm") > 0:
+                    pharm_node_ids = torch.arange(g_i.num_nodes("pharm"), device=g_i.device)
+                    g_i.remove_nodes(pharm_node_ids, ntype="pharm")
+                    
                 # add pharm nodes to each graph
                 g_i.add_nodes(
                     n_pharm_nodes[g_idx].item(),
@@ -564,9 +574,6 @@ class OMTRA(pl.LightningModule):
         unbatched_graphs = dgl.unbatch(itg_result)
         sampled_systems = []
         for g_i in unbatched_graphs:
-            if g_i is None:
-                print("Warning: None type graph found after unbatching integration result")
-                continue
             sampled_system = SampledSystem(
                 g=g_i,
             )

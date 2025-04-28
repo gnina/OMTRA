@@ -15,7 +15,7 @@ from rdkit.Geometry import Point3D
 import numpy as np
 import biotite.structure as struc
 
-
+'''
 def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
     """Returns a boolean mask for the edges that lie in the upper triangle of the adjacency matrix for each molecule in the batch."""
     # this algorithm assumes that the edges are ordered such that the upper triangle edges come first, followed by the lower triangle edges for each graph in the batch
@@ -26,6 +26,11 @@ def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
     n_edges_pattern = (edges_per_mol / 2).int().repeat_interleave(2)
     upper_edge_mask = ul_pattern.repeat_interleave(n_edges_pattern).bool()
     return upper_edge_mask
+'''
+def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
+    src, dst = g.edges(etype=etype)
+    return src < dst
+
 
 
 def get_node_batch_idxs_ntype(g: dgl.DGLHeteroGraph, ntype: str):
@@ -321,8 +326,7 @@ class SampledSystem:
 
         # get just the upper triangle of the adjacency matrix
         # TODO: need to use lig_g not self.g for upper edge mask
-        upper_edge_mask = get_upper_edge_mask(self.g, etype="lig_to_lig")
-        # print(upper_edge_mask)
+        upper_edge_mask = get_upper_edge_mask(lig_g, etype=None)
         bond_types = bond_types[upper_edge_mask]
         bond_src_idxs = bond_src_idxs[upper_edge_mask]
         bond_dst_idxs = bond_dst_idxs[upper_edge_mask]
@@ -359,19 +363,15 @@ class SampledSystem:
             if charge != 0:
                 a.SetFormalCharge(int(charge))
             mol.AddAtom(a)
-
+                            
         # add bonds to rdkit molecule
         for bond_type, src_idx, dst_idx in zip(
             bond_types, bond_src_idxs, bond_dst_idxs
         ):
             src_idx = int(src_idx)
             dst_idx = int(dst_idx)
-            existing_bond = mol.GetBondBetweenAtoms(src_idx, dst_idx)
-            if existing_bond is None:
-                mol.AddBond(src_idx, dst_idx, self.bond_type_map[bond_type])
-            else:
-                # print(f"Warning: {existing_bond.GetBondType()} bond already exists between {src_idx} and {dst_idx}. Skipping addition of {bond_type} bond.")
-                continue
+            mol.AddBond(src_idx, dst_idx, self.bond_type_map[bond_type])
+
         try:
             mol = mol.GetMol()
         except Chem.KekulizeException:
