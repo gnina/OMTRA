@@ -36,7 +36,7 @@ protein_element_map = [
 ]
 
 bond_type_map = [None, Chem.rdchem.BondType.SINGLE, Chem.rdchem.BondType.DOUBLE, Chem.rdchem.BondType.TRIPLE,
-             Chem.rdchem.BondType.AROMATIC, None]
+             Chem.rdchem.BondType.AROMATIC]
 
 lig_atom_type_map = ["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"]
 npnde_atom_type_map = [

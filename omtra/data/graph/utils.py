@@ -1,6 +1,6 @@
 import dgl
 import torch
-from typing import Tuple, List
+from typing import Tuple, List, Union
 from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
@@ -167,6 +167,10 @@ class SampledSystem:
         self.bond_type_map = bond_type_map
         self.charge_map = charge_map
         self.protein_element_map = protein_element_map
+    
+    def get_n_lig_atoms(self) -> int:
+        n_lig_atoms = self.g.num_nodes(ntype="lig")
+        return n_lig_atoms 
 
     def get_atom_arr(self, reference: bool = False):
         """
@@ -251,7 +255,7 @@ class SampledSystem:
 
         return atom_array
 
-    def get_rdkit_ligand(self):
+    def get_rdkit_ligand(self) -> Union[None, Chem.Mol]:
         (
             positions,
             atom_types,
@@ -308,7 +312,7 @@ class SampledSystem:
 
         # get bond types and atom indicies for every edge, convert types from simplex to integer
         bond_types = lig_g.edata["e_1"]
-        bond_types[bond_types == 4] = 0  # set masked bonds to 0
+        bond_types[bond_types == 5] = 0  # set masked bonds to 0
         bond_src_idxs, bond_dst_idxs = lig_g.edges()
 
         # get just the upper triangle of the adjacency matrix
@@ -372,3 +376,16 @@ class SampledSystem:
         mol.AddConformer(conf)
 
         return mol
+    
+    def compute_valencies(self):
+        """Compute the valencies of every atom in the molecule. Returns a tensor of shape (num_atoms,)."""
+        n_atoms = self.get_n_lig_atoms()
+        _, _, _, bond_types, bond_src_idxs, bond_dst_idxs = self.extract_ligdata_from_graph()
+        adj = torch.zeros((n_atoms, n_atoms))
+        adjusted_bond_types = bond_types.clone()
+        adjusted_bond_types[adjusted_bond_types == 4] = 1.5
+        adjusted_bond_types = adjusted_bond_types.float()
+        adj[bond_src_idxs, bond_dst_idxs] = adjusted_bond_types
+        adj[bond_dst_idxs, bond_src_idxs] = adjusted_bond_types
+        valencies = torch.sum(adj, dim=-1).long()
+        return valencies
