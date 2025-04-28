@@ -3,7 +3,7 @@ from omtra.eval.reos import REOS
 from omtra.eval.ring_systems import RingSystemCounter, ring_counts_to_df
 from collections import Counter
 from rdkit import Chem
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 allowed_bonds = {
     "H": {0: 1, 1: 0, -1: 0},
@@ -93,7 +93,7 @@ def compute_validity(
     else:
         metrics = {
             "frac_valid_mols": frac_valid_mols,
-            "avg_frac_frac": avg_frag_frac,
+            "avg_frag_frac": avg_frag_frac,
             "avg_num_components": avg_num_components,
         }
     return metrics
@@ -105,7 +105,7 @@ def compute_stability(sampled_systems: List[SampledSystem]):
     n_stable_molecules = 0
     n_molecules = len(sampled_systems)
     for sys in sampled_systems:
-        n_stable_atoms_this_mol, mol_stable, n_fake_atoms = check_stability(sys)
+        n_stable_atoms_this_mol, mol_stable, n_fake_atoms  = check_stability(sys)
         n_atoms += sys.get_n_lig_atoms() - n_fake_atoms
         n_stable_atoms += n_stable_atoms_this_mol
         n_stable_molecules += int(mol_stable)
@@ -124,7 +124,7 @@ def compute_stability(sampled_systems: List[SampledSystem]):
     return metrics
 
 
-def check_stability(sys: SampledSystem) -> Dict[str, Any]:
+def check_stability(sys: SampledSystem) -> Tuple[int, bool, int]:
     if sys.exclude_charges:
         raise ValueError("Charges excluded, but required for stability check.")
 
@@ -172,13 +172,7 @@ def check_stability(sys: SampledSystem) -> Dict[str, Any]:
             mol_stable = False
         n_stable_atoms += int(is_stable)
 
-    metrics = {
-        "n_stable_atoms": n_stable_atoms,
-        "mol_stable": mol_stable,
-        "n_fake_atoms": n_fake_atoms,
-    }
-
-    return metrics
+    return n_stable_atoms, mol_stable, n_fake_atoms
 
 def reos_and_rings(samples: List[SampledSystem], return_raw=False):
         """ samples: list of SampledSystem objects. """

@@ -26,5 +26,8 @@ def get_eval(name: str):
     :param name: The name of the task.
     :return: The eval functions.
     """
+    if name not in eval_register:
+        raise ValueError(f"Eval function for {name} not found.")
+    
     return eval_register[name]
 

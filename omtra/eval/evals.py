@@ -29,12 +29,22 @@ def ligand_conformer(sampled_systems: List[SampledSystem]):
 ##
 @register_eval("denovo_ligand_pharmacophore")
 def denovo_ligand_pharmacophore(sampled_systems: List[SampledSystem]):
-    pass
+    metrics = compute_validity(sampled_systems)
+    metrics.update(compute_stability(sampled_systems))
+    metrics.update(reos_and_rings(sampled_systems))
+
+    # TODO: add pharm metrics
+    return metrics
 
 
 @register_eval("denovo_ligand_from_pharmacophore")
 def denovo_ligand_from_pharmacophore(sampled_systems: List[SampledSystem]):
-    pass
+    metrics = compute_validity(sampled_systems)
+    metrics.update(compute_stability(sampled_systems))
+    metrics.update(reos_and_rings(sampled_systems))
+
+    # TODO: add pharm metrics
+    return metrics
 
 
 ##
@@ -56,7 +66,7 @@ def protein_ligand_denovo(sampled_systems: List[SampledSystem]):
 @register_eval("expapo_conditioned_ligand_docking")
 @register_eval("flexible_docking")
 def flexible_docking(sampled_systems: List[SampledSystem]):
-    pass
+    return {}
 
 
 ##
@@ -64,7 +74,13 @@ def flexible_docking(sampled_systems: List[SampledSystem]):
 ##
 @register_eval("protein_ligand_pharmacophore_denovo")
 def protein_ligand_pharmacophore_denovo(sampled_systems: List[SampledSystem]):
-    pass
+    metrics = compute_validity(sampled_systems)
+    metrics.update(compute_stability(sampled_systems))
+    metrics.update(reos_and_rings(sampled_systems))
+    
+    # TODO: add system level metrics, pharm metrics
+    
+    return metrics
 
 
 ##
@@ -73,7 +89,7 @@ def protein_ligand_pharmacophore_denovo(sampled_systems: List[SampledSystem]):
 @register_eval("protein_pharmacophore")
 @register_eval("expapo_conditioned_protein_pharmacophore")
 def protein_pharmacophore(sampled_systems: List[SampledSystem]):
-    pass
+    return {}
 
 
 ##

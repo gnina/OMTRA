@@ -8,7 +8,7 @@ from typing import Union, List, Dict, Tuple
 class RingSystemCounter:
 
     def __init__(self):
-        self.ring_system_lookup = RingSystemLookup.default()
+        self.ring_system_lookup = RingSystemLookup()
 
     def count_ring_systems(self, rdmols: list) -> Tuple[Dict[str, int], Dict[str, int], int]:
         """

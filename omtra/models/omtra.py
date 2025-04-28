@@ -40,6 +40,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
+from omtra.eval.register import get_eval
 
 
 class OMTRA(pl.LightningModule):
@@ -215,6 +216,12 @@ class OMTRA(pl.LightningModule):
 
         self.eval()
         samples = self.sample(task_name, g_list=dgl.unbatch(g), n_replicates=2)
+        samples = [s.to("cpu") for s in samples if s is not None]
+
+        eval_fn = get_eval(task_name)
+        metrics = eval_fn(samples)
+        if metrics:
+            self.log_dict(metrics, sync_dist=True, batch_size=1)
         self.train()
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
@@ -376,7 +383,7 @@ class OMTRA(pl.LightningModule):
             torch.Tensor
         ] = None,  # center of mass for adding ligands/pharms to systems
         unconditional_n_atoms_dist: str = "plinder",  # distribution to use for sampling number of atoms in unconditional tasks
-    ):
+    ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
         groups_present = task.groups_present
@@ -557,6 +564,9 @@ class OMTRA(pl.LightningModule):
         unbatched_graphs = dgl.unbatch(itg_result)
         sampled_systems = []
         for g_i in unbatched_graphs:
+            if g_i is None:
+                print("Warning: None type graph found after unbatching integration result")
+                continue
             sampled_system = SampledSystem(
                 g=g_i,
             )

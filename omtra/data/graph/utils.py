@@ -168,6 +168,10 @@ class SampledSystem:
         self.charge_map = charge_map
         self.protein_element_map = protein_element_map
     
+    def to(self, device: str):
+        self.g = self.g.to(device)
+        return self
+    
     def get_n_lig_atoms(self) -> int:
         n_lig_atoms = self.g.num_nodes(ntype="lig")
         return n_lig_atoms 
@@ -316,7 +320,9 @@ class SampledSystem:
         bond_src_idxs, bond_dst_idxs = lig_g.edges()
 
         # get just the upper triangle of the adjacency matrix
+        # TODO: need to use lig_g not self.g for upper edge mask
         upper_edge_mask = get_upper_edge_mask(self.g, etype="lig_to_lig")
+        # print(upper_edge_mask)
         bond_types = bond_types[upper_edge_mask]
         bond_src_idxs = bond_src_idxs[upper_edge_mask]
         bond_dst_idxs = bond_dst_idxs[upper_edge_mask]
@@ -360,8 +366,12 @@ class SampledSystem:
         ):
             src_idx = int(src_idx)
             dst_idx = int(dst_idx)
-            mol.AddBond(src_idx, dst_idx, self.bond_type_map[bond_type])
-
+            existing_bond = mol.GetBondBetweenAtoms(src_idx, dst_idx)
+            if existing_bond is None:
+                mol.AddBond(src_idx, dst_idx, self.bond_type_map[bond_type])
+            else:
+                # print(f"Warning: {existing_bond.GetBondType()} bond already exists between {src_idx} and {dst_idx}. Skipping addition of {bond_type} bond.")
+                continue
         try:
             mol = mol.GetMol()
         except Chem.KekulizeException:
