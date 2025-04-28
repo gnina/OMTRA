@@ -4,6 +4,7 @@ from omtra.eval.ring_systems import RingSystemCounter, ring_counts_to_df
 from collections import Counter
 from rdkit import Chem
 from typing import List, Dict, Any, Optional, Tuple
+import peppr
 
 allowed_bonds = {
     "H": {0: 1, 1: 0, -1: 0},
@@ -220,3 +221,29 @@ def reos_and_rings(samples: List[SampledSystem], return_raw=False):
             ood_rate = -1
         
         return dict(flag_rate=flag_rate, ood_rate=ood_rate)
+
+def compute_peppr_metrics(sampled_systems: List[SampledSystem]):
+    evaluator = peppr.Evaluator(
+            [
+                peppr.DockQScore(),
+                peppr.ContactFraction(),
+                peppr.LigandRMSD(),
+                peppr.PocketAlignedLigandRMSD(),
+            ]
+        )
+    
+    for i, sys in enumerate(sampled_systems):
+        ref = sys.get_atom_arr(reference=True)
+        pose = sys.get_atom_arr(reference=False)
+        evaluator.feed(f"sample_{i}", ref, pose)
+    
+    metrics = evaluator.summarize_metrics()
+    return metrics
+
+def add_task_prefix(metrics: Dict[str, Any], task_name: str) -> Dict[str, Any]:
+    """Add the task name as a prefix to the metric names."""
+    new_metrics = {}
+    for key, value in metrics.items():
+        new_key = f"{task_name}/{key}"
+        new_metrics[new_key] = value
+    return new_metrics

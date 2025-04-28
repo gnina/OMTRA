@@ -41,6 +41,7 @@ from omegaconf import DictConfig, OmegaConf
 from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
 from omtra.eval.register import get_eval
+from omtra.eval.utils import add_task_prefix
 
 
 class OMTRA(pl.LightningModule):
@@ -225,14 +226,16 @@ class OMTRA(pl.LightningModule):
         # TODO: n_replicates and n_timesteps should not be hard-coded
         samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=20)
         samples = [s.to("cpu") for s in samples if s is not None]
-
+        
+        # TODO: compute evals and log them / do we want to log them separately for each task?
         eval_fn = get_eval(task_name)
         metrics = eval_fn(samples)
+        
         if metrics:
+            metrics = add_task_prefix(metrics, task_name)
             self.log_dict(metrics, sync_dist=True, batch_size=1)
         self.train()
-
-        # TODO: compute evals and log them
+        
         return 0.0
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):

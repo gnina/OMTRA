@@ -1,7 +1,6 @@
 from omtra.eval.register import register_eval
 from omtra.eval.utils import compute_validity, compute_stability, reos_and_rings
 from omtra.data.graph.utils import SampledSystem
-import peppr
 from typing import Dict, Any, Optional, List
 
 
