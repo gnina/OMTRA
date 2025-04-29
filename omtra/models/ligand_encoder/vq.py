@@ -87,7 +87,7 @@ class Encoder(nn.Module):
         ####
         # convert graph data into a format to be passed into the message-passing layers
         ####
-        vector_feats = {'lig': torch.zeros((atom_types.shape[0], self.vector_size, 3))}    # Vector features
+        vector_feats = {'lig': torch.zeros((atom_types.shape[0], self.vector_size, 3), device=g.device)}    # Vector features
         coord_feats = {'lig': g.nodes['lig'].data['x_1_true']}   # Atom coordinates
         
         edges = g.edges(etype='lig_to_lig')
@@ -311,7 +311,7 @@ class LigandVQVAE(pl.LightningModule):
     
 
     def training_step(self, batch, batch_idx):
-        g = batch
+        g, task_name, dataset_name = batch
         
         losses, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = self.forward(g)
 
@@ -330,7 +330,7 @@ class LigandVQVAE(pl.LightningModule):
         return total_loss
     
 
-    def configure_optimizers(self, lr=1e-3):
+    def configure_optimizers(self, lr=1e-4):
         optimizer = optim.Adam(self.parameters(), lr=lr)
         return optimizer
 

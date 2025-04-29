@@ -1,14 +1,19 @@
 _target_: omtra.models.ligand_encoder.vq.LigandVQVAE
 
-vector_size: 12
-num_gvp_layers: 3
-mlp_hidden_size: 128
-embedding_dim: 8
-num_embeddings: 100
-num_decoder_hiddens: 128
-num_decoder_layers: 3
-num_bond_decod_hiddens: 64
-num_bond_decod_layers: 2
-commitment_cost: 0.25
-rbf_dim: 32
-rbf_dmax: 10
+scalar_size: 128         # scalar features for message passing
+vector_size: 4           # vector features for message passing
+num_gvp_layers: 3        # number of GVP layers
+latent_dim: 8            # size of latent atom types
+num_embeddings: 100      # size of the codebook
+num_decod_hiddens: 64    # hidden layer size for atom decoder
+num_bond_decod_hiddens: 64  # hidden layer size for bond decoder
+commitment_cost: 0.25    # weight for commitment loss
+
+a_embed_dim: 16          # atom type embedding dim
+c_embed_dim: 8           # charge embedding dim
+e_embed_dim: 8           # edge type embedding dim
+
+rbf_dim: 32              # number of RBF features
+rbf_dmax: 10             # max distance for RBF
+
+mask_prob: 0.10          # atom masking probability

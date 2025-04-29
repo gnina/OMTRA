@@ -99,8 +99,9 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
         task = task_name_to_class(task_name)
 
-        dataset_obj = self.datasets[self.dataset_space[dataset_idx]]
-        if task.plinder_link_version is not None:
+        dataset_name = self.dataset_space[dataset_idx]
+        dataset_obj = self.datasets[dataset_name]
+        if dataset_name == 'plinder':
             # get the plinder link version that this task uses
             plinder_link_version = task.plinder_link_version
             dataset_obj = dataset_obj[plinder_link_version]

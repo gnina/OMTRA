@@ -51,7 +51,7 @@ def train(cfg: DictConfig):
             raise ValueError("ligand_encoder_checkpoint must be specified if omtra is doing latent ligand generation")
         model = quick_load.omtra_from_config(cfg)
     elif mode == 'ligand_encoder':
-        model = quick_load.ligand_encoder_from_config(cfg)
+        model = quick_load.lig_encoder_from_config(cfg)
     else:
         raise ValueError(f"mode {mode} not recognized, must be 'omtra' or 'ligand_encoder'")
     
