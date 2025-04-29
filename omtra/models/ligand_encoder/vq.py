@@ -5,7 +5,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
 from omtra.models.gvp import HeteroGVPConv, _rbf, _norm_no_nan
 from omtra.constants import lig_atom_type_map, charge_map, bond_type_map
 from omtra.data.graph.utils import get_upper_edge_mask
@@ -86,7 +85,7 @@ class Encoder(nn.Module):
 
 
         ####
-        # convert graph data into a format to be passed into the message-passing lyaers
+        # convert graph data into a format to be passed into the message-passing layers
         ####
         vector_feats = {'lig': torch.zeros((atom_types.shape[0], self.vector_size, 3))}    # Vector features
         coord_feats = {'lig': g.nodes['lig'].data['x_1_true']}   # Atom coordinates
@@ -189,11 +188,6 @@ class Decoder(nn.Module):
     
 
     def forward(self, g:dgl.DGLHeteroGraph, quantized: torch.Tensor):
-
-        lig_atom_positions = g.nodes['lig'].data['x_1_true'] # (N, d) Number of atoms
-
-        # Get the number of 'lig' nodes in each graph component (this is a list or tensor)
-        num_nodes_list = g.batch_num_nodes('lig')
 
         upper_edge_mask = get_upper_edge_mask(g, 'lig_to_lig')  # (num_edges,)
 
@@ -349,113 +343,4 @@ def display_graph(g):
     print("a:", g.nodes['lig'].data['a_1_true'].shape)
     print("c", g.nodes['lig'].data['c_1_true'].shape)
     print("e:", g.edges['lig_to_lig'].data['e_1_true'].shape)
-
-
-""" Data Class """
-if __name__ == "__main__":
-    from omtra.load.quick import load_cfg, datamodule_from_config
-    import argparse
-    p = argparse.ArgumentParser()
-    p.add_argument('--pharmit_path', type=str, default='/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit_dev')
-    args = p.parse_args()
-
-    overrides = [
-    f"pharmit_path={args.pharmit_path}",
-    "task_group=no_protein"
-    ]
-    cfg = load_cfg(overrides=overrides)
-    datamodule = datamodule_from_config(cfg)
-
-    train_dataset = datamodule.load_dataset("train")
-    pharmit_dataset = train_dataset.datasets['pharmit']
-
-    model = LigandVQVAE(
-                    a_embed_dim=16,
-                    c_embed_dim=8,
-                    e_embed_dim=8,
-                    scalar_size=128,  
-                    vector_size=4,
-                    num_gvp_layers= 2,
-                    latent_dim=8,     
-                    num_embeddings= 100, 
-                    num_decod_hiddens=128, 
-                    num_bond_decod_hiddens= 128, 
-                    commitment_cost= 0.25)
-
-
-    """ 
-    Test 1: Passing one molecule through the model 
-    """
-
-    idx = ('denovo_ligand', 0)
-    g = pharmit_dataset[idx]
-    display_graph(g)
-
-    model.eval()
-
-    with torch.no_grad():  # No gradient tracking is needed for inference
-        losses, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = model(g)
-
-    print("Loss:", loss)
-    print("Reconstruction Loss:", recon_loss)
-    print("Perplexity:", perplexity, '\n')
-
-
-    """
-    Test 2:  Train on a small batch
-    """
-    class PharmitWrapperDataset(Dataset):
-        def __init__(self, pharmit_dataset, graph_type):
-            self.base_dataset = pharmit_dataset
-            self.graph_type = graph_type
-            self.length = len(pharmit_dataset)
-
-        def __len__(self):
-            return self.length
-
-        def __getitem__(self, idx):
-            return self.base_dataset[(self.graph_type, idx)]
-
-    def collate_fn(batch):
-        return dgl.batch(batch)
-
-    # Wrapper so we can use PyTorch's DataLoader
-    wrapped_dataset = PharmitWrapperDataset(pharmit_dataset, 'denovo_ligand')
-
-    # Hyperparameters
-    batch_size = 100
-    learning_rate = 1e-3 
-
-    # Adam Optimizer
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, amsgrad=False)
-
-    model.train()
-    train_res_error = []
-    train_res_perplexity = []
-
-    # Data Loader
-    training_loader = DataLoader(wrapped_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    loader_iter = iter(training_loader)
-
-    for i in range(10):
-        batched_graph = next(loader_iter)
-        optimizer.zero_grad()
-
-        loss, recon_loss, atom_types_hat, atom_charges_hat, bond_order_hat, perplexity = model(batched_graph)
-        loss.backward()
-
-        optimizer.step()
-
-        train_res_error.append(loss.item())
-        train_res_perplexity.append(perplexity.item())
-
-        print('%d iterations' % (i+1))
-        print(f"Loss: {np.mean(train_res_error[-2:]):.3f}")  # Show last 2 iterations
-        print(f"Perplexity: {np.mean(train_res_perplexity[-2:]):.3f}")
-        print()
-
-
-
-
-
 
