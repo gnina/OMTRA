@@ -1,5 +1,11 @@
 from omtra.eval.register import register_eval
-from omtra.eval.utils import compute_validity, compute_stability, reos_and_rings
+from omtra.eval.utils import (
+    compute_validity,
+    compute_stability,
+    reos_and_rings,
+    compute_peppr_metrics_no_ref,
+    compute_peppr_metrics_ref,
+)
 from omtra.data.graph.utils import SampledSystem
 from typing import Dict, Any, Optional, List
 
@@ -58,6 +64,7 @@ def protein_ligand_denovo(sampled_systems: List[SampledSystem]):
     metrics.update(reos_and_rings(sampled_systems))
 
     # TODO: add system level metrics
+    metrics.update(compute_peppr_metrics_no_ref(sampled_systems))
     return metrics
 
 
@@ -65,7 +72,8 @@ def protein_ligand_denovo(sampled_systems: List[SampledSystem]):
 @register_eval("expapo_conditioned_ligand_docking")
 @register_eval("flexible_docking")
 def flexible_docking(sampled_systems: List[SampledSystem]):
-    return {}
+    metrics = compute_peppr_metrics_ref(sampled_systems)
+    return metrics
 
 
 ##
@@ -76,9 +84,9 @@ def protein_ligand_pharmacophore_denovo(sampled_systems: List[SampledSystem]):
     metrics = compute_validity(sampled_systems)
     metrics.update(compute_stability(sampled_systems))
     metrics.update(reos_and_rings(sampled_systems))
-    
+
     # TODO: add system level metrics, pharm metrics
-    
+    metrics.update(compute_peppr_metrics_no_ref(sampled_systems))
     return metrics
 
 

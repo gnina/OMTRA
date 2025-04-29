@@ -186,83 +186,138 @@ class SampledSystem:
         Get the system data represented as Biotite AtomArray
         :return: Biotite AtomArray
         """
+        # TODO: need to handle masked/fake elements
         if reference:
             feat_suffix = "1_true"
         else:
             feat_suffix = "1"
         ntypes = ["prot_atom", "lig", "npnde"]
-        n_atoms = 0
-        for ntype in ntypes:
-            n_atoms += self.g.num_nodes(ntype=ntype)
-
-        atom_array = struc.AtomArray(n_atoms)
-
-        coords = []
-        atom_names = []
-        elements = []
-        res_ids = []
-        res_names = []
-        chain_ids = []
+        
+        atom_arrays = []
 
         for ntype in ntypes:
             if self.g.num_nodes(ntype=ntype) == 0:
                 continue
-            coords.append(self.g.nodes[ntype].data[f"x_{feat_suffix}"].numpy())
+            atom_array = struc.AtomArray(self.g.num_nodes(ntype=ntype))
+            coords = self.g.nodes[ntype].data[f"x_{feat_suffix}"].numpy()
 
             if ntype == "prot_atom":
                 atypes = self.g.nodes[ntype].data[f"a_1_true"].numpy()
                 atom_type_map_array = np.array(self.protein_atom_type_map, dtype=object)
-                anames = atom_type_map_array[atypes]
-                atom_names.append(anames)
+                atom_names = atom_type_map_array[atypes]
 
-                eltypes = self.g.edges[ntype].data[f"e_1_true"].numpy()
+                eltypes = self.g.nodes[ntype].data[f"e_1_true"].numpy()
                 element_type_map_array = np.array(
                     self.protein_element_map, dtype=object
                 )
-                elnames = element_type_map_array[eltypes]
-                elements.append(elnames)
+                elements = element_type_map_array[eltypes]
 
-                res_ids.append(self.g.nodes[ntype].data["res_id"].numpy())
-                res_types = self.g.nodes[ntype].data["res_name"].numpy()
+                res_ids = self.g.nodes[ntype].data["res_id"].numpy()
+                res_types = self.g.nodes[ntype].data["res_names"].numpy()
                 res_type_map_array = np.array(self.residue_map, dtype=object)
-                resnames = res_type_map_array[res_types]
-                res_names.append(resnames)
+                res_names = res_type_map_array[res_types]
 
-                chain_ids.append(self.g.nodes[ntype].data["chain_id"].numpy())
+                chain_ids = self.g.nodes[ntype].data["chain_id"].numpy()
+                hetero = np.full_like(atom_names, False, dtype=bool)
+                atom_array.coord = coords
+
+                atom_array.set_annotation("atom_name", atom_names)
+                atom_array.set_annotation("element", elements)
+                atom_array.set_annotation("res_id", res_ids)
+                atom_array.set_annotation("res_name", res_names)
+                atom_array.set_annotation("chain_id", chain_ids)
+                atom_array.set_annotation("hetero", hetero)
+                atom_array.bonds = struc.connect_via_distances(atom_array)
+
 
             if ntype == "lig":
                 atypes = self.g.nodes[ntype].data[f"a_{feat_suffix}"].numpy()
                 atom_type_map_array = np.array(self.ligand_atom_type_map, dtype=object)
-                anames = atom_type_map_array[atypes]
-                atom_names.append(anames)
-                elements.append(anames)
-                res_id = np.max(res_ids) + 1
-                res_ids.append(np.full_like(atypes, res_id, dtype=int))
-                res_names.append(np.full_like(atypes, "LIG", dtype=object))
-                chain_ids.append(np.full_like(atypes, "LIG", dtype=object))
+                elements = atom_type_map_array[atypes]
+                atom_names = struc.create_atom_names(elements)
+
+                res_id = 0
+                res_ids = np.full_like(atypes, res_id, dtype=int)
+                res_names = np.full_like(atypes, "LIG", dtype=object)
+                chain_ids = np.full_like(atypes, "LIG", dtype=object)
+                hetero = np.full_like(atom_names, True, dtype=bool)
+                
+                charge_types = self.g.nodes[ntype].data[f"c_{feat_suffix}"].numpy()
+                charge_map_array = np.array(self.charge_map, dtype=object)
+                charges = charge_map_array[charge_types]
+                
+                bond_types = self.g.edges["lig_to_lig"].data[f"e_{feat_suffix}"].numpy()
+                bond_types = bond_types.astype(int)
+                bond_src_idxs, bond_dst_idxs = self.g.edges(etype="lig_to_lig")
+                bond_src_idxs, bond_dst_idxs = bond_src_idxs.numpy(), bond_dst_idxs.numpy()
+
+                upper_edge_mask = get_upper_edge_mask(self.g, etype="lig_to_lig").numpy()
+                bond_types[bond_types == 5] = 0
+                bond_types[bond_types == 4] = 9 # NOTE: generic aromatic bond is 9 in biotite
+                
+                bond_mask = (bond_types != 0) & upper_edge_mask
+                bond_types = bond_types[bond_mask]
+                bond_src_idxs = bond_src_idxs[bond_mask]
+                bond_dst_idxs = bond_dst_idxs[bond_mask]
+                
+                bond_array = np.stack([bond_src_idxs, bond_dst_idxs, bond_types], axis=1).astype(int)
+            
+                atom_array.coord = coords
+                atom_array.set_annotation("charge", charges)
+                atom_array.set_annotation("atom_name", atom_names)
+                atom_array.set_annotation("element", elements)
+                atom_array.set_annotation("res_id", res_ids)
+                atom_array.set_annotation("res_name", res_names)
+                atom_array.set_annotation("chain_id", chain_ids)
+                atom_array.set_annotation("hetero", hetero)
+                atom_array.bonds = struc.BondList(len(atom_array), bond_array)
 
             if ntype == "npnde":
                 atypes = self.g.nodes[ntype].data[f"a_{feat_suffix}"].numpy()
                 atom_type_map_array = np.array(self.npnde_atom_type_map, dtype=object)
-                anames = atom_type_map_array[atypes]
-                atom_names.append(anames)
-                elements.append(anames)
+                elements = atom_type_map_array[atypes]
+                atom_names = struc.create_atom_names(elements)
 
-                res_id = np.max(res_ids) + 1
-                res_ids.append(np.full_like(atypes, res_id, dtype=int))
-                res_names.append(np.full_like(atypes, "NPNDE", dtype=object))
+                res_id = 0
+                res_ids = np.full_like(atypes, res_id, dtype=int)
+                res_names = np.full_like(atypes, "NPND", dtype=object)
                 # TODO: might need to modify dataset to track individual npnde chains
-                chain_ids.append(np.full_like(atypes, "NPNDE", dtype=object))
+                chain_ids = np.full_like(atypes, "NPND", dtype=object)
+                hetero = np.full_like(atom_names, True, dtype=bool)
+                charge_types = self.g.nodes[ntype].data[f"c_{feat_suffix}"].numpy()
+                charge_map_array = np.array(self.charge_map, dtype=object)
+                charges = charge_map_array[charge_types]
+                
+                bond_types = self.g.edges["npnde_to_npnde"].data[f"e_{feat_suffix}"].numpy()
+                bond_types = bond_types.astype(int)
+                bond_src_idxs, bond_dst_idxs = self.g.edges(etype="npnde_to_npnde")
+                bond_src_idxs, bond_dst_idxs = bond_src_idxs.numpy(), bond_dst_idxs.numpy()
 
-        atom_array.coord = coords
+                upper_edge_mask = get_upper_edge_mask(self.g, etype="npnde_to_npnde").numpy()
+                bond_types[bond_types == 5] = 0
+                bond_types[bond_types == 4] = 9 # NOTE: generic aromatic bond is 9 in biotite
+                
+                bond_mask = (bond_types != 0) & upper_edge_mask
+                bond_types = bond_types[bond_mask]
+                bond_src_idxs = bond_src_idxs[bond_mask]
+                bond_dst_idxs = bond_dst_idxs[bond_mask]
+                
+                bond_array = np.stack([bond_src_idxs, bond_dst_idxs, bond_types], axis=1).astype(int)
+                
+                atom_array.coord = coords
+                atom_array.set_annotation("atom_name", atom_names)
+                atom_array.set_annotation("element", elements)
+                atom_array.set_annotation("res_id", res_ids)
+                atom_array.set_annotation("res_name", res_names)
+                atom_array.set_annotation("chain_id", chain_ids)
+                atom_array.set_annotation("charge", charges)
+                atom_array.set_annotation("hetero", hetero)
+                atom_array.bonds = struc.BondList(len(atom_array), bond_array)
 
-        atom_array.set_annotation("atom_name", atom_names)
-        atom_array.set_annotation("element", elements)
-        atom_array.set_annotation("res_id", res_ids)
-        atom_array.set_annotation("res_name", res_names)
-        atom_array.set_annotation("chain_id", chain_ids)
+            atom_arrays.append(atom_array)
+            system_arr = struc.concatenate(atom_arrays)
 
-        return atom_array
+        return system_arr
 
     def get_rdkit_ligand(self) -> Union[None, Chem.Mol]:
         (

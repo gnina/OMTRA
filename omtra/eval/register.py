@@ -1,5 +1,3 @@
-
-
 eval_register = {}
 
 # registers map task name to list of eval functions
@@ -19,7 +17,6 @@ def register_eval(name: str):
     return decorator
 
 
-
 def get_eval(name: str):
     """
     Get the eval function with the given task name.
@@ -28,6 +25,5 @@ def get_eval(name: str):
     """
     if name not in eval_register:
         raise ValueError(f"Eval function for {name} not found.")
-    
-    return eval_register[name]
 
+    return eval_register[name]

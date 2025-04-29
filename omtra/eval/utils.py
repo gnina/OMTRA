@@ -5,6 +5,7 @@ from collections import Counter
 from rdkit import Chem
 from typing import List, Dict, Any, Optional, Tuple
 import peppr
+from biotite import structure as struc
 
 allowed_bonds = {
     "H": {0: 1, 1: 0, -1: 0},
@@ -106,7 +107,7 @@ def compute_stability(sampled_systems: List[SampledSystem]):
     n_stable_molecules = 0
     n_molecules = len(sampled_systems)
     for sys in sampled_systems:
-        n_stable_atoms_this_mol, mol_stable, n_fake_atoms  = check_stability(sys)
+        n_stable_atoms_this_mol, mol_stable, n_fake_atoms = check_stability(sys)
         n_atoms += sys.get_n_lig_atoms() - n_fake_atoms
         n_stable_atoms += n_stable_atoms_this_mol
         n_stable_molecules += int(mol_stable)
@@ -175,70 +176,91 @@ def check_stability(sys: SampledSystem) -> Tuple[int, bool, int]:
 
     return n_stable_atoms, mol_stable, n_fake_atoms
 
+
 def reos_and_rings(samples: List[SampledSystem], return_raw=False):
-        """ samples: list of SampledSystem objects. """
-        rd_mols = [sample.get_rdkit_ligand() for sample in samples]
-        valid_idxs = []
-        sanitized_mols = []
-        for i, mol in enumerate(rd_mols):
-            try:
-                Chem.SanitizeMol(mol)
-                sanitized_mols.append(mol)
-                valid_idxs.append(i)
-            except:
-                continue
-        reos = REOS(active_rules=["Glaxo", "Dundee"])
-        ring_system_counter = RingSystemCounter()
+    """samples: list of SampledSystem objects."""
+    rd_mols = [sample.get_rdkit_ligand() for sample in samples]
+    valid_idxs = []
+    sanitized_mols = []
+    for i, mol in enumerate(rd_mols):
+        try:
+            Chem.SanitizeMol(mol)
+            sanitized_mols.append(mol)
+            valid_idxs.append(i)
+        except:
+            continue
+    reos = REOS(active_rules=["Glaxo", "Dundee"])
+    ring_system_counter = RingSystemCounter()
 
-        if len(sanitized_mols) != 0:
-            reos_flags = reos.mols_to_flag_arr(sanitized_mols)
-            ring_counts = ring_system_counter.count_ring_systems(sanitized_mols)
-        else:
-            reos_flags = None
-            ring_counts = None
+    if len(sanitized_mols) != 0:
+        reos_flags = reos.mols_to_flag_arr(sanitized_mols)
+        ring_counts = ring_system_counter.count_ring_systems(sanitized_mols)
+    else:
+        reos_flags = None
+        ring_counts = None
 
-        if return_raw:
-            result = {
-                        'reos_flag_arr': reos_flags,
-                        'reos_flag_header': reos.flag_arr_header,
-                        'smarts_arr': reos.smarts_arr,
-                        'ring_counts': ring_counts,
-                        'valid_idxs': valid_idxs
-                    }
-            return result
-        
-        if reos_flags is not None:
-            n_flags = reos_flags.sum()
-            n_mols = reos_flags.shape[0]
-            flag_rate = n_flags / n_mols
+    if return_raw:
+        result = {
+            "reos_flag_arr": reos_flags,
+            "reos_flag_header": reos.flag_arr_header,
+            "smarts_arr": reos.smarts_arr,
+            "ring_counts": ring_counts,
+            "valid_idxs": valid_idxs,
+        }
+        return result
 
-            sample_counts, chembl_counts, n_mols = ring_counts
-            df_ring = ring_counts_to_df(sample_counts, chembl_counts, n_mols)
-            ood_ring_count = df_ring[df_ring['chembl_count'] == 0]['sample_count'].sum()
-            ood_rate = ood_ring_count / n_mols
-        else:
-            flag_rate = -1
-            ood_rate = -1
-        
-        return dict(flag_rate=flag_rate, ood_rate=ood_rate)
+    if reos_flags is not None:
+        n_flags = reos_flags.sum()
+        n_mols = reos_flags.shape[0]
+        flag_rate = n_flags / n_mols
 
-def compute_peppr_metrics(sampled_systems: List[SampledSystem]):
+        sample_counts, chembl_counts, n_mols = ring_counts
+        df_ring = ring_counts_to_df(sample_counts, chembl_counts, n_mols)
+        ood_ring_count = df_ring[df_ring["chembl_count"] == 0]["sample_count"].sum()
+        ood_rate = ood_ring_count / n_mols
+    else:
+        flag_rate = -1
+        ood_rate = -1
+
+    return dict(flag_rate=flag_rate, ood_rate=ood_rate)
+
+
+def compute_peppr_metrics_no_ref(sampled_systems: List[SampledSystem]):
     evaluator = peppr.Evaluator(
-            [
-                peppr.DockQScore(),
-                peppr.ContactFraction(),
-                peppr.LigandRMSD(),
-                peppr.PocketAlignedLigandRMSD(),
-            ]
-        )
-    
+        [
+            peppr.ClashCount(),
+            peppr.BondLengthViolations(),
+        ]
+    )
+
+    for i, sys in enumerate(sampled_systems):
+        pose = sys.get_atom_arr(reference=False)
+        evaluator.feed(f"sample_{i}", pose, pose)
+
+    metrics = evaluator.summarize_metrics()
+    return metrics
+
+
+def compute_peppr_metrics_ref(sampled_systems: List[SampledSystem]):
+    evaluator = peppr.Evaluator(
+        [
+            peppr.ClashCount(),
+            peppr.BondLengthViolations(),
+            peppr.LDDTPLIScore(),
+            peppr.DockQScore(),
+            peppr.PocketAlignedLigandRMSD(),
+            peppr.GlobalLDDTScore(),
+        ]
+    )
+
     for i, sys in enumerate(sampled_systems):
         ref = sys.get_atom_arr(reference=True)
         pose = sys.get_atom_arr(reference=False)
         evaluator.feed(f"sample_{i}", ref, pose)
-    
+
     metrics = evaluator.summarize_metrics()
     return metrics
+
 
 def add_task_prefix(metrics: Dict[str, Any], task_name: str) -> Dict[str, Any]:
     """Add the task name as a prefix to the metric names."""
