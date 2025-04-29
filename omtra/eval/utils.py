@@ -247,9 +247,9 @@ def compute_peppr_metrics_ref(sampled_systems: List[SampledSystem]):
             peppr.ClashCount(),
             peppr.BondLengthViolations(),
             peppr.LDDTPLIScore(),
-            peppr.DockQScore(),
+            # peppr.DockQScore(),
             peppr.PocketAlignedLigandRMSD(),
-            peppr.GlobalLDDTScore(),
+            # peppr.GlobalLDDTScore(),
         ]
     )
 
