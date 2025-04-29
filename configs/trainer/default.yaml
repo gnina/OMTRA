@@ -4,4 +4,4 @@ devices: 1
 max_steps: ${max_steps}
 
 limit_val_batches: 1 # how many batches to use for validation
-val_check_interval: 10 # after how many training steps do we do a validation step
+val_check_interval: 200 # after how many training steps do we do a validation step

@@ -150,10 +150,6 @@ def main(cfg: DictConfig):
     else:
         cfg = merge_task_spec(cfg)
 
-
-    print("\n=== Training Config ===")
-    print(OmegaConf.to_yaml(cfg))
-
     # train the model
     _ = train(cfg)
 
