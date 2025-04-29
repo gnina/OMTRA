@@ -47,14 +47,23 @@ class Task:
     def plinder_link_version(self) -> str:
         prot_atom_prior = self.priors.get('prot_atom_x', None)
         if prot_atom_prior is None:
-            return None
+            return 'no_links'
         if prot_atom_prior['type'] == 'apo_exp':
             return 'exp'
         elif prot_atom_prior['type'] == 'apo_pred':
             return 'pred'
         else:
             return 'no_links'
-
+        
+    @classproperty
+    def node_modalities_present(self) -> List[Modality]:
+        """Returns the node modalities for this task. This is a subset of the modalities present in the task."""
+        return [ m for m in self.modalities_present if m.is_node ]
+    
+    @classproperty
+    def edge_modalities_present(self) -> List[Modality]:
+        """Returns the edge modalities for this task. This is a subset of the modalities present in the task."""
+        return [ m for m in self.modalities_present if not m.is_node ]
 
 ##
 # tasks with ligand only

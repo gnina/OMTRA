@@ -1,5 +1,6 @@
 import dgl
 import torch
+import math
 from omegaconf import DictConfig
 
 from omtra.dataset.zarr_dataset import ZarrDataset
@@ -61,6 +62,7 @@ class PlinderDataset(ZarrDataset):
             if link_version
             else f"{processed_data_dir}/no_links",
         )
+        self.split = split
         self.link_version = link_version
         self.graph_config = graph_config
         self.prior_config = prior_config
@@ -82,7 +84,7 @@ class PlinderDataset(ZarrDataset):
     def n_zarr_chunks(self):
         coords_arr = self.root["pocket/coords"]
         n_atoms = coords_arr.shape[0]
-        n_chunks = n_atoms // coords_arr.chunks[0]
+        n_chunks = math.ceil(n_atoms / coords_arr.chunks[0])
         return n_chunks
     
     @property

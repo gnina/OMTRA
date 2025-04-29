@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
+import torch_scatter
 import dgl
 import dgl.function as fn
 from collections import defaultdict
@@ -18,8 +19,8 @@ from omtra.tasks.modalities import (
     Modality,
     name_to_modality,
 )
+from omtra.utils.ctmc import purity_sampling
 from omtra.utils.embedding import get_time_embedding
-from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 from omtra.constants import (
     lig_atom_type_map,
@@ -60,13 +61,18 @@ class VectorField(nn.Module):
         token_dim: int = 64,
         attention: bool = False,
         n_heads: int = 1,
-        s_message_dim: int = None,
-        v_message_dim: int = None,
+        s_message_dim: Optional[int] = None,
+        v_message_dim: Optional[int] = None,
         dropout: float = 0.0,
         has_mask: bool = True,
         self_conditioning: bool = False,
         use_dst_feats: bool = False,
         dst_feat_msg_reduction_factor: float = 4,
+        stochasticity: float = 0.0,
+        high_confidence_threshold: float = 0.0,
+        cat_temperature_schedule: Union[str, Callable, float] = 0.05,
+        cat_temp_decay_max: float = 0.8,
+        cat_temp_decay_a: float = 2,
         # if we are using CTMC, input categorical features will have mask tokens,
         # this means their one-hot representations will have an extra dimension,
         # and the neural network instantiated by this method need to account for this
@@ -94,6 +100,18 @@ class VectorField(nn.Module):
 
         self.rbf_dmax = rbf_dmax
         self.rbf_dim = rbf_dim
+
+        self.eta = stochasticity
+        self.hc_thres = high_confidence_threshold
+
+        self.cat_temperature_schedule = cat_temperature_schedule
+        self.cat_temp_decay_max = cat_temp_decay_max
+        self.cat_temp_decay_a = cat_temp_decay_a
+        self.cat_temp_func = self.build_cat_temp_schedule(
+            cat_temperature_schedule=cat_temperature_schedule,
+            cat_temp_decay_max=cat_temp_decay_max,
+            cat_temp_decay_a=cat_temp_decay_a,
+        )
 
         assert n_vec_channels >= 3, "n_vec_channels must be >= 3"
         assert n_vec_channels >= 2 * n_pharmvec_channels, (
@@ -539,7 +557,7 @@ class VectorField(nn.Module):
 
     def denoise_graph(
         self,
-        g: dgl.DGLGraph,
+        g: dgl.DGLHeteroGraph,
         task_class: Task,
         node_scalar_features: Dict[str, torch.Tensor],
         node_vec_features: Dict[str, torch.Tensor],
@@ -615,19 +633,29 @@ class VectorField(nn.Module):
 
         # project node positions back into zero-COM subspace
         if remove_com:
-            raise NotImplementedError("need to do this correctly for hetero")
-            # TODO: operate on nodes present in the graph, not all nodes supported by the model
-            # TODO: can only remove 1 COM per system and everything elsse needs to come with it. I think this currently
-            # removes COM from each node type individually, destroying the structure of the system
+            all_positions = []
+            all_batch_idx = []
+
             for ntype in self.node_types:
                 if g.num_nodes(ntype) == 0:
                     continue
+                pos = node_positions[ntype]
+                batch = node_batch_idx[ntype]
+                all_positions.append(pos)
+                all_batch_idx.append(batch)
+
+            all_positions = torch.cat(all_positions, dim=0)
+            all_batch_idx = torch.cat(all_batch_idx, dim=0)
+
+            com = torch_scatter.scatter_mean(all_positions, all_batch_idx, dim=0)
+
+            for ntype in self.node_types:
+                if g.num_nodes(ntype) == 0:
+                    continue
+                batch = node_batch_idx[ntype]
                 g.nodes[ntype].data["x_1_pred"] = node_positions[ntype]
                 g.nodes[ntype].data["x_1_pred"] = (
-                    g.nodes[ntype].data["x_1_pred"]
-                    - dgl.readout_nodes(g, feat="x_1_pred", op="mean", ntype=ntype)[
-                        node_batch_idx[ntype]
-                    ]
+                    g.nodes[ntype].data["x_1_pred"] - com[batch]
                 )
                 node_positions[ntype] = g.nodes[ntype].data["x_1_pred"]
 
@@ -684,13 +712,25 @@ class VectorField(nn.Module):
     def integrate(
         self,
         g: dgl.DGLHeteroGraph,
-        task_class: Task,
+        task: Task,
+        upper_edge_mask: Dict[str, torch.Tensor],
         n_timesteps: int = 250,
+        stochasticity: float = 8.0,
+        cat_temp_func: Optional[Callable] = None,
+        tspan=None,
         visualize=False,
         **kwargs,
     ):
         # TODO: adapt flowmol integrate for hetero version
-        t = torch.linspace(0, 1, n_timesteps, device=g.device)
+        # TODO: figure out what should be attribute of class vs passed as arg vs pulled from cfg etc, nail down defaults
+
+        if cat_temp_func is None:
+            cat_temp_func = self.cat_temp_func
+
+        if tspan is None:
+            t = torch.linspace(0, 1, n_timesteps, device=g.device)
+        else:
+            t = tspan
 
         # get the corresponding alpha values for each timepoint
         # TODO: in FlowMol alpha_t and alpha_t_prime were just tensors, now they are dicts mapping modalities to the interpolant value
@@ -698,14 +738,13 @@ class VectorField(nn.Module):
         # i want to make this more general, assume we have alpha_t (weight on data) and beta_t (weight on prior)...conditional path functions were already written
         # under this assumption, but i might have flipped alpha and beta from how i described them above
         alpha_t = self.interpolant_scheduler.alpha_t(
-            t, task_class
-        )  # has shape (n_timepoints, n_feats)
-        alpha_t_prime = self.interpolant_scheduler.alpha_t_prime(t, task_class)
-
+            t, task
+        )  # has shape (n_timepoints, )
+        alpha_t_prime = self.interpolant_scheduler.alpha_t_prime(t, task)
 
         if visualize:
             raise NotImplementedError("visualization not implemented yet")
-        
+
         node_batch_idxs, edge_batch_idxs = get_batch_idxs(g)
 
         dst_dict = None
@@ -717,49 +756,64 @@ class VectorField(nn.Module):
             alpha_s_i = alpha_t[s_idx]
             alpha_t_prime_i = alpha_t_prime[s_idx - 1]
 
+            # determine if this is the last integration step
+            if s_idx == t.shape[0] - 1:
+                last_step = True
+            else:
+                last_step = False
+
             # compute next step and set x_t = x_s
             g, dst_dict = self.step(
-                g,
-                s_i,
-                t_i,
-                alpha_t_i,
-                alpha_s_i,
-                alpha_t_prime_i,
-                node_batch_idxs,
-                upper_edge_mask,
+                g=g,
+                task=task,
+                s_i=s_i,
+                t_i=t_i,
+                alpha_t_i=alpha_t_i,
+                alpha_s_i=alpha_s_i,
+                alpha_t_prime_i=alpha_t_prime_i,
+                node_batch_idxs=node_batch_idxs,
+                edge_batch_idxs=edge_batch_idxs,
+                upper_edge_mask=upper_edge_mask,
+                cat_temp_func=cat_temp_func,
+                stochasticity=stochasticity,
+                last_step=last_step,
                 prev_dst_dict=dst_dict,
                 **kwargs,
             )
 
         # set x_1 = x_t
-        for ntype in self.node_types:
-            for feat in canonical_node_features[ntype]:
-                g.nodes[ntype].data[f"{feat}_1"] = g.nodes[ntype].data[f"{feat}_t"]
+        for modality in task.node_modalities_present:
+            ntype = modality.entity_name
+            dk = modality.data_key
+            if g.num_nodes(ntype) == 0:
+                continue
+            g.nodes[ntype].data[f"{dk}_1"] = g.nodes[ntype].data[f"{dk}_t"]
 
-        for etype in self.edge_types:
-            g.edges[etype].data["e_1"] = g.edges[etype].data["e_t"]
+        for modality in task.edge_modalities_present:
+            etype = modality.entity_name
+            dk = modality.data_key
+            if g.num_edges(etype) == 0:
+                continue
+            g.edges[etype].data[f"{dk}_1"] = g.edges[etype].data[f"{dk}_t"]
 
         return g
 
     def step(
         self,
         g: dgl.DGLGraph,
+        task: Task,
         s_i: torch.Tensor,
         t_i: torch.Tensor,
-        alpha_t_i: torch.Tensor,
-        alpha_s_i: torch.Tensor,
-        alpha_t_prime_i: torch.Tensor,
-        node_batch_idx: torch.Tensor,
-        edge_batch_idx: torch.Tensor,
-        upper_edge_mask: torch.Tensor,
+        alpha_t_i: Dict[str, torch.Tensor],
+        alpha_s_i: Dict[str, torch.Tensor],
+        alpha_t_prime_i: Dict[str, torch.Tensor],
+        node_batch_idxs: Dict[str, torch.Tensor],
+        edge_batch_idxs: Dict[str, torch.Tensor],
+        upper_edge_mask: Dict[str, torch.Tensor],
         cat_temp_func: Callable,
-        forward_weight_func: Callable,
-        prev_dst_dict: dict = None,
-        dfm_type: str = "campbell",
+        prev_dst_dict: Optional[Dict] = None,
         stochasticity: float = 8.0,
-        high_confidence_threshold: float = 0.9,
         last_step: bool = False,
-        inv_temp_func: Callable = None,
     ):
         device = g.device
 
@@ -768,116 +822,126 @@ class VectorField(nn.Module):
         else:
             eta = stochasticity
 
-        if high_confidence_threshold is None:
-            hc_thresh = self.hc_thresh
-        else:
-            hc_thresh = high_confidence_threshold
-
-        if dfm_type is None:
-            dfm_type = self.dfm_type
-
-        if inv_temp_func is None:
-            inv_temp_func = lambda t: 1.0
-
-        task = self.task_class
-
         # predict the destination of the trajectory given the current timepoint
         dst_dict = self(
             g,
             task,
-            t=torch.full((g.batch_size,), t_i, device=g.device),
-            node_batch_idx=node_batch_idx,
+            t=torch.full((g.batch_size,), t_i, device=device),
+            node_batch_idx=node_batch_idxs,
             upper_edge_mask=upper_edge_mask,
             apply_softmax=True,
-            remove_com=True,
+            remove_com=True,  # TODO: is this ...should this be set to True?
             prev_dst_dict=prev_dst_dict,
         )
 
         dt = s_i - t_i
 
-        for modality in task.modalities_generated:
-            if modality.graph_entity == "node" and modality.data_key == "x":
-                ntype = modality.entity_name
-                if g.num_nodes(ntype) == 0:
+        # get continuous and categorical modalities
+        categorical_modalities = []
+        continuous_modalities = []
+        for m in task.modalities_generated:
+            if m.is_categorical:
+                categorical_modalities.append(m)
+            else:
+                continuous_modalities.append(m)
+
+        # iterate over continuous modalities and apply updates
+        for m in continuous_modalities:
+            data_src = g.nodes if m.is_node else g.edges
+
+            # skip if there are no nodes or edges of this type
+            num_entries = (
+                g.num_nodes(m.entity_name) if m.is_node else g.num_edges(m.entity_name)
+            )
+            if num_entries == 0:
+                continue
+
+            x_1 = dst_dict[m.name]
+            x_t = data_src[m.entity_name].data[f"{m.data_key}_t"]
+            vf = self.vector_field(x_t, x_1, alpha_t_i[m.name], alpha_t_prime_i[m.name])
+            data_src[m.entity_name].data[f"{m.data_key}_t"] = x_t + dt * vf
+            data_src[m.entity_name].data[f"{m.data_key}_1_pred"] = x_1.detach().clone()
+
+        # iterate over categorical modalities and apply updates
+        for m in categorical_modalities:
+            if m.is_node:
+                if g.num_nodes(m.entity_name) == 0:
                     continue
-                x_1 = dst_dict[modality.name]
-                x_t = g.nodes[ntype].data["x_t"]
-                vf = self.vector_field(x_t, x_1, alpha_t_i[0], alpha_t_prime_i[0])
-                g.nodes[ntype].data["x_t"] = x_t + dt * vf * inv_temp_func(t_i)
-                g.nodes[ntype].data["x_1_pred"] = x_1.detach().clone()
+                data_src = g.nodes[m.entity_name].data
+            else:
+                if g.num_edges(m.entity_name) == 0:
+                    continue
+                data_src = g.edges[m.entity_name].data
 
-            elif modality.is_categorical:
-                if modality.is_node:
-                    if g.num_nodes(modality.entity_name) == 0:
-                        continue
-                    data_src = g.nodes[modality.entity_name].data
-                else:
-                    if g.num_edges(modality.entity_name) == 0:
-                        continue
-                    data_src = g.edges[modality.entity_name].data
+            xt = data_src[f"{m.data_key}_t"]
+            if not m.is_node:
+                xt = xt[upper_edge_mask[m.entity_name]]
 
-                xt = data_src[f"{modality.data_key}_t"]
-                if not modality.is_node:
-                    xt = xt[upper_edge_mask[modality.entity_name]]
+            p_s_1 = dst_dict[m.name]
+            temperature = cat_temp_func(t_i)
+            p_s_1 = nn.functional.softmax(
+                torch.log(p_s_1) / temperature, dim=-1
+            )  # log probabilities
 
-                p_s_1 = dst_dict[modality.name]
-                temperature = cat_temp_func(t_i)
-                p_s_1 = nn.functional.softmax(
-                    torch.log(p_s_1) / temperature, dim=-1
-                )  # log probabilities
+            # TODO: other discrete sampling methods?
+            # TODO: path planning, probably in place of purity sampling
+            xt, x_1_sampled = self.campbell_step(
+                g=g,
+                m=m,
+                p_1_given_t=p_s_1,
+                xt=xt,
+                stochasticity=eta,
+                alpha_t=alpha_t_i[m.name],
+                alpha_t_prime=alpha_t_prime_i[m.name],
+                dt=dt,
+                batch_size=g.batch_size,
+                batch_num_nodes=g.batch_num_edges(m.entity_name) // 2
+                if not m.is_node
+                else g.batch_num_nodes(m.entity_name),
+                mask_index=m.n_categories,
+                last_step=last_step,
+                batch_idx=edge_batch_idxs[m.entity_name]
+                if not m.is_node
+                else node_batch_idxs[m.entity_name],
+                upper_edge_mask=upper_edge_mask[m.entity_name]
+                if not m.is_node
+                else None,
+            )
 
-                xt, x_1_sampled = self.campbell_step(
-                    p_1_given_t=p_s_1,
-                    xt=xt,
-                    stochasticity=eta,
-                    hc_thresh=hc_thresh,
-                    alpha_t=alpha_t_i[feat_idx],
-                    alpha_t_prime=alpha_t_prime_i[feat_idx],
-                    dt=dt,
-                    batch_size=g.batch_size,
-                    batch_num_nodes=g.batch_num_edges(modality.entity_name) // 2
-                    if not modality.is_node
-                    else g.batch_num_nodes(modality.entity_name),
-                    n_classes=modality.n_categories + 1,
-                    mask_index=modality.n_categories + 1,
-                    last_step=last_step,
-                    batch_idx=edge_batch_idx[upper_edge_mask[modality.entity_name]]
-                    if modality.is_node
-                    else node_batch_idx[modality.entity_name],
-                )
+            # if we are doing edge features, we need to modify xt and x_1_sampled to have upper and lower edges
+            if not m.is_node:
+                e_t = torch.zeros_like(data_src["e_t"])
+                e_t[upper_edge_mask[m.entity_name]] = xt
+                e_t[~upper_edge_mask[m.entity_name]] = xt
+                xt = e_t
 
-                # if we are doing edge features, we need to modify xt and x_1_sampled to have upper and lower edges
-                if not modality.is_node:
-                    e_t = torch.zeros_like(data_src["e_t"])
-                    e_t[upper_edge_mask[modality.entity_name]] = xt
-                    e_t[~upper_edge_mask[modality.entity_name]] = xt
-                    xt = e_t
+                e_1_sampled = torch.zeros_like(data_src["e_t"])
+                e_1_sampled[upper_edge_mask[m.entity_name]] = x_1_sampled
+                e_1_sampled[~upper_edge_mask[m.entity_name]] = x_1_sampled
+                x_1_sampled = e_1_sampled
 
-                    e_1_sampled = torch.zeros_like(data_src["e_t"])
-                    e_1_sampled[upper_edge_mask[modality.entity_name]] = x_1_sampled
-                    e_1_sampled[~upper_edge_mask[modality.entity_name]] = x_1_sampled
-                    x_1_sampled = e_1_sampled
-
-                data_src[f"{modality.data_key}_t"] = xt
-                data_src[f"{modality.data_key}_1_pred"] = x_1_sampled
+            data_src[f"{m.data_key}_t"] = xt
+            data_src[f"{m.data_key}_1_pred"] = x_1_sampled
 
         return g, dst_dict
 
     def campbell_step(
         self,
+        g: dgl.DGLHeteroGraph,
+        m: Modality,
         p_1_given_t: torch.Tensor,
         xt: torch.Tensor,
         stochasticity: float,
-        hc_thresh: float,
-        alpha_t: float,
-        alpha_t_prime: float,
+        alpha_t: torch.Tensor,
+        alpha_t_prime: torch.Tensor,
         dt,
         batch_size: int,
         batch_num_nodes: torch.Tensor,
-        n_classes: int,
         mask_index: int,
         last_step: bool,
         batch_idx: torch.Tensor,
+        upper_edge_mask: Optional[torch.Tensor],
+        use_conflict_remasking: bool = False,
     ):
         x1 = Categorical(p_1_given_t).sample()  # has shape (num_nodes,)
 
@@ -888,26 +952,25 @@ class VectorField(nn.Module):
         mask_prob = torch.clamp(mask_prob, min=0, max=1)
 
         # sample which nodes will be unmasked
-        if hc_thresh > 0:
-            # select more high-confidence predictions for unmasking than low-confidence predictions
-            will_unmask = purity_sampling(
-                xt=xt,
-                x1=x1,
-                x1_probs=p_1_given_t,
-                unmask_prob=unmask_prob,
-                mask_index=mask_index,
-                batch_size=batch_size,
-                batch_num_nodes=batch_num_nodes,
-                node_batch_idx=batch_idx,
-                hc_thresh=hc_thresh,
-                device=xt.device,
-            )
-        else:
-            # uniformly sample nodes to unmask
-            will_unmask = torch.rand(xt.shape[0], device=xt.device) < unmask_prob
-            will_unmask = will_unmask * (
-                xt == mask_index
-            )  # only unmask nodes that are currently masked
+        will_unmask = purity_sampling(
+            g,
+            m=m,
+            xt=xt,
+            x1_probs=p_1_given_t,
+            unmask_prob=unmask_prob,
+            mask_index=mask_index,
+            batch_size=batch_size,
+            batch_num_nodes=batch_num_nodes,
+            device=xt.device,
+            upper_edge_mask=upper_edge_mask,
+        )
+
+        # This is without purity sampling
+        # # uniformly sample nodes to unmask
+        # will_unmask = torch.rand(xt.shape[0], device=xt.device) < unmask_prob
+        # will_unmask = will_unmask * (
+        #     xt == mask_index
+        # )  # only unmask nodes that are currently masked
 
         if not last_step:
             # compute which nodes will be masked
@@ -922,13 +985,29 @@ class VectorField(nn.Module):
         # unmask the nodes
         xt[will_unmask] = x1[will_unmask]
 
-        xt = nn.functional.one_hot(xt, num_classes=n_classes).float()
-        x1 = nn.functional.one_hot(x1, num_classes=n_classes).float()
         return xt, x1
 
     def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime):
         vf = alpha_t_prime / (1 - alpha_t) * (x_1 - x_t)
         return vf
+
+    def build_cat_temp_schedule(
+        self, cat_temperature_schedule, cat_temp_decay_max, cat_temp_decay_a
+    ):
+        if cat_temperature_schedule == "decay":
+            cat_temp_func = lambda t: cat_temp_decay_max * torch.pow(
+                1 - t, cat_temp_decay_a
+            )
+        elif isinstance(cat_temperature_schedule, (float, int)):
+            cat_temp_func = lambda t: cat_temperature_schedule
+        elif callable(cat_temperature_schedule):
+            cat_temp_func = cat_temperature_schedule
+        else:
+            raise ValueError(
+                f"Invalid cat_temperature_schedule: {cat_temperature_schedule}"
+            )
+
+        return cat_temp_func
 
 
 class NodePositionUpdate(nn.Module):

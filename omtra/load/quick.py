@@ -59,11 +59,14 @@ def datamodule_from_config(cfg: DictConfig) -> MultiTaskDataModule:
 
     return datamodule
 
-def model_from_config(cfg: DictConfig) -> OMTRA:
+def omtra_from_config(cfg: DictConfig) -> OMTRA:
 
     print(f"⚛ Instantiating model <{cfg.model._target_}>")
 
     dists_file = Path(cfg.pharmit_path) / 'train_dists.npz'
+
+    # TODO: there is al ligand_encoder and we are training OMTRA, we need a ligand_encoder_checkpoint argument
+    # somewhere we need to check that this is the case and throw an error if not, perhaps in the train script?
 
     # load model
     model = hydra.utils.instantiate(
@@ -72,6 +75,22 @@ def model_from_config(cfg: DictConfig) -> OMTRA:
         task_dataset_coupling=cfg.task_group.dataset_task_coupling,
         graph_config=cfg.graph,
         dists_file=dists_file,
+        ligand_encoder=cfg.ligand_encoder,
+        _recursive_=False,
+        prior_config=cfg.prior,
     )
 
     return model
+
+def lig_encoder_from_config(cfg: DictConfig):
+
+    # check that ligand_encoder is set
+    if cfg.ligand_encoder is None:
+        raise ValueError("Ligand encoder is not set in the config. Please set it to a valid model.")
+
+    print(f"⚛ Instantiating Ligand Encoder <{cfg.ligand_encoder._target_}>")
+
+    # load model
+    lig_encoder = hydra.utils.instantiate(cfg.ligand_encoder)
+
+    return lig_encoder

@@ -60,6 +60,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
                 self.td_coupling,
                 self.edges_per_batch, 
                 distributed=self.distributed,
+                max_steps=self.max_steps,
             )
 
     def load_dataset(self, split: str):

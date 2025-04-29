@@ -26,6 +26,8 @@ class MultiTaskSampler(Sampler):
         self.multi_dataset = multi_dataset
         self.edges_per_batch = edges_per_batch
         self.max_steps = max_steps
+        if self.max_steps is None:
+            raise ValueError("max_steps must be specified")
         
         self.distributed = distributed
 
@@ -168,7 +170,7 @@ class MultiTaskSampler(Sampler):
             step_idx += 1
 
     def __len__(self):
-        return self.max_steps if self.max_steps is not None else float('inf')
+        return self.max_steps
     
     def state_dict(self):
         return {

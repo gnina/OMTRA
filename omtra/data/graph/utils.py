@@ -1,6 +1,6 @@
 import dgl
 import torch
-from typing import Tuple, List
+from typing import Tuple, List, Union
 from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
@@ -15,7 +15,7 @@ from rdkit.Geometry import Point3D
 import numpy as np
 import biotite.structure as struc
 
-
+'''
 def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
     """Returns a boolean mask for the edges that lie in the upper triangle of the adjacency matrix for each molecule in the batch."""
     # this algorithm assumes that the edges are ordered such that the upper triangle edges come first, followed by the lower triangle edges for each graph in the batch
@@ -26,6 +26,11 @@ def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
     n_edges_pattern = (edges_per_mol / 2).int().repeat_interleave(2)
     upper_edge_mask = ul_pattern.repeat_interleave(n_edges_pattern).bool()
     return upper_edge_mask
+'''
+def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
+    src, dst = g.edges(etype=etype)
+    return src < dst
+
 
 
 def get_node_batch_idxs_ntype(g: dgl.DGLHeteroGraph, ntype: str):
@@ -167,91 +172,154 @@ class SampledSystem:
         self.bond_type_map = bond_type_map
         self.charge_map = charge_map
         self.protein_element_map = protein_element_map
+    
+    def to(self, device: str):
+        self.g = self.g.to(device)
+        return self
+    
+    def get_n_lig_atoms(self) -> int:
+        n_lig_atoms = self.g.num_nodes(ntype="lig")
+        return n_lig_atoms 
 
     def get_atom_arr(self, reference: bool = False):
         """
         Get the system data represented as Biotite AtomArray
         :return: Biotite AtomArray
         """
+        # TODO: need to handle masked/fake elements
         if reference:
             feat_suffix = "1_true"
         else:
             feat_suffix = "1"
         ntypes = ["prot_atom", "lig", "npnde"]
-        n_atoms = 0
-        for ntype in ntypes:
-            n_atoms += self.g.num_nodes(ntype=ntype)
-
-        atom_array = struc.AtomArray(n_atoms)
-
-        coords = []
-        atom_names = []
-        elements = []
-        res_ids = []
-        res_names = []
-        chain_ids = []
+        
+        atom_arrays = []
 
         for ntype in ntypes:
             if self.g.num_nodes(ntype=ntype) == 0:
                 continue
-            coords.append(self.g.nodes[ntype].data[f"x_{feat_suffix}"].numpy())
+            atom_array = struc.AtomArray(self.g.num_nodes(ntype=ntype))
+            coords = self.g.nodes[ntype].data[f"x_{feat_suffix}"].numpy()
 
             if ntype == "prot_atom":
                 atypes = self.g.nodes[ntype].data[f"a_1_true"].numpy()
                 atom_type_map_array = np.array(self.protein_atom_type_map, dtype=object)
-                anames = atom_type_map_array[atypes]
-                atom_names.append(anames)
+                atom_names = atom_type_map_array[atypes]
 
-                eltypes = self.g.edges[ntype].data[f"e_1_true"].numpy()
+                eltypes = self.g.nodes[ntype].data[f"e_1_true"].numpy()
                 element_type_map_array = np.array(
                     self.protein_element_map, dtype=object
                 )
-                elnames = element_type_map_array[eltypes]
-                elements.append(elnames)
+                elements = element_type_map_array[eltypes]
 
-                res_ids.append(self.g.nodes[ntype].data["res_id"].numpy())
-                res_types = self.g.nodes[ntype].data["res_name"].numpy()
+                res_ids = self.g.nodes[ntype].data["res_id"].numpy()
+                res_types = self.g.nodes[ntype].data["res_names"].numpy()
                 res_type_map_array = np.array(self.residue_map, dtype=object)
-                resnames = res_type_map_array[res_types]
-                res_names.append(resnames)
+                res_names = res_type_map_array[res_types]
 
-                chain_ids.append(self.g.nodes[ntype].data["chain_id"].numpy())
+                chain_ids = self.g.nodes[ntype].data["chain_id"].numpy()
+                hetero = np.full_like(atom_names, False, dtype=bool)
+                atom_array.coord = coords
+
+                atom_array.set_annotation("atom_name", atom_names)
+                atom_array.set_annotation("element", elements)
+                atom_array.set_annotation("res_id", res_ids)
+                atom_array.set_annotation("res_name", res_names)
+                atom_array.set_annotation("chain_id", chain_ids)
+                atom_array.set_annotation("hetero", hetero)
+                atom_array.bonds = struc.connect_via_distances(atom_array)
+
 
             if ntype == "lig":
                 atypes = self.g.nodes[ntype].data[f"a_{feat_suffix}"].numpy()
                 atom_type_map_array = np.array(self.ligand_atom_type_map, dtype=object)
-                anames = atom_type_map_array[atypes]
-                atom_names.append(anames)
-                elements.append(anames)
-                res_id = np.max(res_ids) + 1
-                res_ids.append(np.full_like(atypes, res_id, dtype=int))
-                res_names.append(np.full_like(atypes, "LIG", dtype=object))
-                chain_ids.append(np.full_like(atypes, "LIG", dtype=object))
+                elements = atom_type_map_array[atypes]
+                atom_names = struc.create_atom_names(elements)
+
+                res_id = 0
+                res_ids = np.full_like(atypes, res_id, dtype=int)
+                res_names = np.full_like(atypes, "LIG", dtype=object)
+                chain_ids = np.full_like(atypes, "LIG", dtype=object)
+                hetero = np.full_like(atom_names, True, dtype=bool)
+                
+                charge_types = self.g.nodes[ntype].data[f"c_{feat_suffix}"].numpy()
+                charge_map_array = np.array(self.charge_map, dtype=object)
+                charges = charge_map_array[charge_types]
+                
+                bond_types = self.g.edges["lig_to_lig"].data[f"e_{feat_suffix}"].numpy()
+                bond_types = bond_types.astype(int)
+                bond_src_idxs, bond_dst_idxs = self.g.edges(etype="lig_to_lig")
+                bond_src_idxs, bond_dst_idxs = bond_src_idxs.numpy(), bond_dst_idxs.numpy()
+
+                upper_edge_mask = get_upper_edge_mask(self.g, etype="lig_to_lig").numpy()
+                bond_types[bond_types == 5] = 0
+                bond_types[bond_types == 4] = 9 # NOTE: generic aromatic bond is 9 in biotite
+                
+                bond_mask = (bond_types != 0) & upper_edge_mask
+                bond_types = bond_types[bond_mask]
+                bond_src_idxs = bond_src_idxs[bond_mask]
+                bond_dst_idxs = bond_dst_idxs[bond_mask]
+                
+                bond_array = np.stack([bond_src_idxs, bond_dst_idxs, bond_types], axis=1).astype(int)
+            
+                atom_array.coord = coords
+                atom_array.set_annotation("charge", charges)
+                atom_array.set_annotation("atom_name", atom_names)
+                atom_array.set_annotation("element", elements)
+                atom_array.set_annotation("res_id", res_ids)
+                atom_array.set_annotation("res_name", res_names)
+                atom_array.set_annotation("chain_id", chain_ids)
+                atom_array.set_annotation("hetero", hetero)
+                atom_array.bonds = struc.BondList(len(atom_array), bond_array)
 
             if ntype == "npnde":
                 atypes = self.g.nodes[ntype].data[f"a_{feat_suffix}"].numpy()
                 atom_type_map_array = np.array(self.npnde_atom_type_map, dtype=object)
-                anames = atom_type_map_array[atypes]
-                atom_names.append(anames)
-                elements.append(anames)
+                elements = atom_type_map_array[atypes]
+                atom_names = struc.create_atom_names(elements)
 
-                res_id = np.max(res_ids) + 1
-                res_ids.append(np.full_like(atypes, res_id, dtype=int))
-                res_names.append(np.full_like(atypes, "NPNDE", dtype=object))
+                res_id = 0
+                res_ids = np.full_like(atypes, res_id, dtype=int)
+                res_names = np.full_like(atypes, "NPND", dtype=object)
                 # TODO: might need to modify dataset to track individual npnde chains
-                chain_ids.append(np.full_like(atypes, "NPNDE", dtype=object))
+                chain_ids = np.full_like(atypes, "NPND", dtype=object)
+                hetero = np.full_like(atom_names, True, dtype=bool)
+                charge_types = self.g.nodes[ntype].data[f"c_{feat_suffix}"].numpy()
+                charge_map_array = np.array(self.charge_map, dtype=object)
+                charges = charge_map_array[charge_types]
+                
+                bond_types = self.g.edges["npnde_to_npnde"].data[f"e_{feat_suffix}"].numpy()
+                bond_types = bond_types.astype(int)
+                bond_src_idxs, bond_dst_idxs = self.g.edges(etype="npnde_to_npnde")
+                bond_src_idxs, bond_dst_idxs = bond_src_idxs.numpy(), bond_dst_idxs.numpy()
 
-        atom_array.coord = coords
+                upper_edge_mask = get_upper_edge_mask(self.g, etype="npnde_to_npnde").numpy()
+                bond_types[bond_types == 5] = 0
+                bond_types[bond_types == 4] = 9 # NOTE: generic aromatic bond is 9 in biotite
+                
+                bond_mask = (bond_types != 0) & upper_edge_mask
+                bond_types = bond_types[bond_mask]
+                bond_src_idxs = bond_src_idxs[bond_mask]
+                bond_dst_idxs = bond_dst_idxs[bond_mask]
+                
+                bond_array = np.stack([bond_src_idxs, bond_dst_idxs, bond_types], axis=1).astype(int)
+                
+                atom_array.coord = coords
+                atom_array.set_annotation("atom_name", atom_names)
+                atom_array.set_annotation("element", elements)
+                atom_array.set_annotation("res_id", res_ids)
+                atom_array.set_annotation("res_name", res_names)
+                atom_array.set_annotation("chain_id", chain_ids)
+                atom_array.set_annotation("charge", charges)
+                atom_array.set_annotation("hetero", hetero)
+                atom_array.bonds = struc.BondList(len(atom_array), bond_array)
 
-        atom_array.set_annotation("atom_name", atom_names)
-        atom_array.set_annotation("element", elements)
-        atom_array.set_annotation("res_id", res_ids)
-        atom_array.set_annotation("res_name", res_names)
-        atom_array.set_annotation("chain_id", chain_ids)
+            atom_arrays.append(atom_array)
+            system_arr = struc.concatenate(atom_arrays)
 
-        return atom_array
+        return system_arr
 
-    def get_rdkit_ligand(self):
+    def get_rdkit_ligand(self) -> Union[None, Chem.Mol]:
         (
             positions,
             atom_types,
@@ -308,11 +376,12 @@ class SampledSystem:
 
         # get bond types and atom indicies for every edge, convert types from simplex to integer
         bond_types = lig_g.edata["e_1"]
-        bond_types[bond_types == 4] = 0  # set masked bonds to 0
+        bond_types[bond_types == 5] = 0  # set masked bonds to 0
         bond_src_idxs, bond_dst_idxs = lig_g.edges()
 
         # get just the upper triangle of the adjacency matrix
-        upper_edge_mask = get_upper_edge_mask(self.g, etype="lig_to_lig")
+        # TODO: need to use lig_g not self.g for upper edge mask
+        upper_edge_mask = get_upper_edge_mask(lig_g, etype=None)
         bond_types = bond_types[upper_edge_mask]
         bond_src_idxs = bond_src_idxs[upper_edge_mask]
         bond_dst_idxs = bond_dst_idxs[upper_edge_mask]
@@ -349,7 +418,7 @@ class SampledSystem:
             if charge != 0:
                 a.SetFormalCharge(int(charge))
             mol.AddAtom(a)
-
+                            
         # add bonds to rdkit molecule
         for bond_type, src_idx, dst_idx in zip(
             bond_types, bond_src_idxs, bond_dst_idxs
@@ -372,3 +441,16 @@ class SampledSystem:
         mol.AddConformer(conf)
 
         return mol
+    
+    def compute_valencies(self):
+        """Compute the valencies of every atom in the molecule. Returns a tensor of shape (num_atoms,)."""
+        n_atoms = self.get_n_lig_atoms()
+        _, _, _, bond_types, bond_src_idxs, bond_dst_idxs = self.extract_ligdata_from_graph()
+        adj = torch.zeros((n_atoms, n_atoms))
+        adjusted_bond_types = bond_types.clone()
+        adjusted_bond_types[adjusted_bond_types == 4] = 1.5
+        adjusted_bond_types = adjusted_bond_types.float()
+        adj[bond_src_idxs, bond_dst_idxs] = adjusted_bond_types
+        adj[bond_dst_idxs, bond_src_idxs] = adjusted_bond_types
+        valencies = torch.sum(adj, dim=-1).long()
+        return valencies

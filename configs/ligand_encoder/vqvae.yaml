@@ -1,0 +1,14 @@
+_target_: omtra.models.ligand_encoder.vq.LigandVQVAE
+
+vector_size: 12
+num_gvp_layers: 3
+mlp_hidden_size: 128
+embedding_dim: 8
+num_embeddings: 100
+num_decoder_hiddens: 128
+num_decoder_layers: 3
+num_bond_decod_hiddens: 64
+num_bond_decod_layers: 2
+commitment_cost: 0.25
+rbf_dim: 32
+rbf_dmax: 10

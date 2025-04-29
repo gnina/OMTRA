@@ -104,7 +104,7 @@ def sample_n_lig_atoms_plinder(n_prot_atoms: torch.Tensor = None, n_pharms: torc
     if not any(n_nodes_supplied) and n_samples is None:
         raise ValueError("If n_prot_atoms and n_pharms are not provided, n_samples must be provided.")
     
-    if n_samples is not None and not any(n_nodes_supplied):
+    if n_samples is not None and any(n_nodes_supplied):
         raise ValueError("If n_samples is provided, n_prot_atoms and n_pharms must be None.")
     
     # n_prot_atoms is a tensor of shape (n_samples,)
