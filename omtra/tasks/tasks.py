@@ -47,7 +47,7 @@ class Task:
     def plinder_link_version(self) -> str:
         prot_atom_prior = self.priors.get('prot_atom_x', None)
         if prot_atom_prior is None:
-            return None
+            return 'no_links'
         if prot_atom_prior['type'] == 'apo_exp':
             return 'exp'
         elif prot_atom_prior['type'] == 'apo_pred':
