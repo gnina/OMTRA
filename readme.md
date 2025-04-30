@@ -38,6 +38,7 @@ chmod +x build_env.sh
 - [ ] protein-ligand interaction metric? pose check! any others?
 - [ ] add posebusters
 - [ ] don't need flowmol validity stuff for conformer generation / docking
+- [ ] alternative time sampling methods for training (semlaflow, foldflow2)
 
 
 # How to train?
