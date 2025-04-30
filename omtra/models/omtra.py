@@ -201,7 +201,15 @@ class OMTRA(pl.LightningModule):
             total_loss = total_loss + 1.0 * loss_val
 
         # train_log_dict["train_total_loss"] = total_loss
+        train_log_dict = add_task_prefix(train_log_dict, task_name)
         self.log_dict(train_log_dict, sync_dist=True)
+        self.log(
+            f"{task_name}/train_total_loss",
+            total_loss,
+            prog_bar=True,
+            sync_dist=True,
+            on_step=True,
+        )
         self.log(
             "train_total_loss",
             total_loss,

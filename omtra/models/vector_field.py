@@ -830,7 +830,7 @@ class VectorField(nn.Module):
             node_batch_idx=node_batch_idxs,
             upper_edge_mask=upper_edge_mask,
             apply_softmax=True,
-            remove_com=True,  # TODO: is this ...should this be set to True?
+            remove_com=False,  # TODO: is this ...should this be set to True?
             prev_dst_dict=prev_dst_dict,
         )
 
