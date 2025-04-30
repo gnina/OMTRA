@@ -39,6 +39,7 @@ chmod +x build_env.sh
 - [ ] add posebusters
 - [ ] don't need flowmol validity stuff for conformer generation / docking
 - [ ] alternative time sampling methods for training (semlaflow, foldflow2)
+- [ ] verify apo-holo alignment
 
 
 # How to train?
