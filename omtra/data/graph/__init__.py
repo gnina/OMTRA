@@ -3,6 +3,10 @@ import dgl
 from typing import Dict
 import itertools
 from omegaconf import DictConfig
+import functools
+from omtra.utils import omtra_root
+from pathlib import Path
+
 
 node_types = ['lig', 'prot_atom', 'prot_res', 'pharm', 'npnde']
 covalent_etypes = ["prot_atom_covalent_lig", "prot_atom_covalent_npnde", "prot_res_covalent_lig", "prot_res_covalent_npnde"]
@@ -110,10 +114,24 @@ def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[st
         k = graph_config.edges[etype].params.k
         n_edges = src_n * k
     elif graph_type == 'radius':
-        print('radius graph approximation is really bad please fix me!!!!!!!!!')
+        rad_edge_approximators = get_edge_approximators()
         r = graph_config.edges[etype].params.r
-        n_edges = src_n*r*2
+        src_n = torch.from_numpy(src_n).float()
+        dst_n = torch.from_numpy(dst_n).float()
+        r = torch.full_like(src_n, r)
+        e_input = torch.stack([r, src_n, dst_n,], dim=1)
+        n_edges_per_src_node = rad_edge_approximators[etype](e_input).squeeze(-1)
+        zero_mask = (src_n == 0) | (dst_n == 0)
+        n_edges_per_src_node[zero_mask] = 0
+        n_edges = n_edges_per_src_node*src_n
+        n_edges = n_edges.long()
     else:
         raise ValueError(f"Graph type {graph_type} not recognized.")
     
     return n_edges
+
+@functools.lru_cache()
+def get_edge_approximators() -> Dict[str, torch.nn.Module]:
+    dict_path = Path(omtra_root()) / 'omtra/constants/radius_edge_approximators/edge_pred_mlps.pt'
+    edge_pred_mlps = torch.load(dict_path)
+    return edge_pred_mlps
