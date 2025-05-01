@@ -9,6 +9,7 @@ wandb/
 wandb_symlinks/
 *.tar
 omtra/constants/radius_edge_approximators/*.png
+slurm_output/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

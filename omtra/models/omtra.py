@@ -12,6 +12,7 @@ from functools import partial
 import time
 from pathlib import Path
 import hydra
+import os
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
@@ -151,9 +152,12 @@ class OMTRA(pl.LightningModule):
     #             print(f"Rank {rank}, param {name}, shape {param.shape}, checksum {checksum:.4f}")
 
     def manual_checkpoint(self, batch_idx: int):
-        if self.global_rank == 0 and batch_idx % self.checkpoint_interval == 0 and batch_idx != 0:
-            log_dir = self.trainer.log_dir
+
+        if batch_idx % self.checkpoint_interval == 0 and batch_idx != 0:
+            hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
+            log_dir = hydra_cfg['runtime']['output_dir']
             checkpoint_dir = Path(log_dir) / "checkpoints"
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
             current_checkpoints = list(checkpoint_dir.glob("*.ckpt"))
             current_checkpoints.sort(key=lambda x: x.stem.split("_")[-1])
@@ -163,7 +167,9 @@ class OMTRA(pl.LightningModule):
                 oldest_checkpoint.unlink()
 
             checkpoint_path = checkpoint_dir / f'batch_{batch_idx}.ckpt'
-            self.save_checkpoint(str(checkpoint_path))
+            print('saving checkpoint to ', checkpoint_path, flush=True)
+            self.trainer.save_checkpoint(str(checkpoint_path))
+            print(f'Saved checkpoint to {checkpoint_path}')
                 
     
     def configure_loss_fns(self):
@@ -194,6 +200,7 @@ class OMTRA(pl.LightningModule):
     def training_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
 
+        # print(f"training step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
         self.manual_checkpoint(batch_idx)
 
         # get the total batch size across all devices
@@ -247,6 +254,8 @@ class OMTRA(pl.LightningModule):
 
     def validation_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
+
+        # print(f"validation step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
 
         task = task_name_to_class(task_name)
         if set(task.groups_present) == set(task.groups_generated):
