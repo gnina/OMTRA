@@ -6,6 +6,10 @@ from rdkit import Chem
 from typing import List, Dict, Any, Optional, Tuple
 import peppr
 from biotite import structure as struc
+import functools
+from pathlib import Path
+from omtra.utils import omtra_root
+import yaml
 
 allowed_bonds = {
     "H": {0: 1, 1: 0, -1: 0},
@@ -125,6 +129,12 @@ def compute_stability(sampled_systems: List[SampledSystem]):
     }
     return metrics
 
+@functools.lru_cache()
+def get_valid_valency_table() -> dict:
+    valency_file = Path(omtra_root()) / "omtra_pipelines/pharmit_dataset/train_valency_table.yml"
+    valency_table = yaml.safe_load(valency_file.read_text())
+    return valency_table
+
 
 def check_stability(sys: SampledSystem) -> Tuple[int, bool, int]:
     if sys.exclude_charges:
@@ -142,6 +152,8 @@ def check_stability(sys: SampledSystem) -> Tuple[int, bool, int]:
     valencies = sys.compute_valencies()
     charges = atom_charges
 
+    valency_table: dict = get_valid_valency_table()
+
     n_stable_atoms = 0
     n_fake_atoms = 0
     mol_stable = True
@@ -154,25 +166,14 @@ def check_stability(sys: SampledSystem) -> Tuple[int, bool, int]:
 
         valency = int(valency)
         charge = int(charge)
-        possible_bonds = allowed_bonds[atom_type]
-        if type(possible_bonds) == int:
-            is_stable = possible_bonds == valency
-        elif type(possible_bonds) == dict:
-            expected_bonds = (
-                possible_bonds[charge]
-                if charge in possible_bonds.keys()
-                else possible_bonds[0]
-            )
-            is_stable = (
-                expected_bonds == valency
-                if type(expected_bonds) == int
-                else valency in expected_bonds
-            )
-        else:
-            is_stable = valency in possible_bonds
-        if not is_stable:
-            mol_stable = False
-        n_stable_atoms += int(is_stable)
+        charge_to_valid_valencies = valency_table[atom_type]
+
+        if charge not in charge_to_valid_valencies:
+            continue
+
+        valid_valencies = charge_to_valid_valencies[charge]
+        if valency in valid_valencies:
+            n_stable_atoms += 1
 
     return n_stable_atoms, mol_stable, n_fake_atoms
 

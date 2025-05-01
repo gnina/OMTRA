@@ -447,7 +447,7 @@ class SampledSystem:
         n_atoms = self.get_n_lig_atoms()
         _, _, _, bond_types, bond_src_idxs, bond_dst_idxs = self.extract_ligdata_from_graph()
         adj = torch.zeros((n_atoms, n_atoms))
-        adjusted_bond_types = bond_types.clone()
+        adjusted_bond_types = bond_types.clone().float()
         adjusted_bond_types[adjusted_bond_types == 4] = 1.5
         adjusted_bond_types = adjusted_bond_types.float()
         adj[bond_src_idxs, bond_dst_idxs] = adjusted_bond_types
