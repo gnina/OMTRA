@@ -206,7 +206,7 @@ class OMTRA(pl.LightningModule):
         # get the total batch size across all devices
         local_batch_size = torch.tensor([g.batch_size], device=g.device)
         all_batch_counts = self.all_gather(local_batch_size)
-        total_batch_count = all_batch_counts.sum().item()
+        total_batch_count = all_batch_counts.sum().item() / 1000.0
 
         # log the total sample count
         if self.global_rank == 0:
