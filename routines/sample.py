@@ -17,6 +17,9 @@ OmegaConf.register_new_resolver("omtra_root", omtra_root, replace=True)
 default_config_path = Path(omtra_root()) / 'configs'
 default_config_path = str(default_config_path)
 
+
+from rdkit import Chem
+
 @hydra.main(config_path=default_config_path, config_name="sample")
 def main(cfg):
     # 1) resolve checkpoint path
@@ -26,7 +29,7 @@ def main(cfg):
     
     # 2) load the exact train‐time config
     train_cfg_path = ckpt_path.parent.parent / '.hydra' / 'config.yaml'
-    train_cfg = OmegaConf.load(train_cfg_path)
+    train_cfg = quick_load.load_trained_model_cfg(train_cfg_path)
     
     # override anything in the training config file with anything passed in (sample.yaml by default)
     # or anything passed in via the command line, i.e., if you need to override the pharmit or plinder paths
@@ -36,7 +39,7 @@ def main(cfg):
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
     # 4) instantiate datamodule & model
-    dm  = quick_load.datamodule_from_config(cfg)
+    dm  = quick_load.datamodule_from_config(merged_cfg)
     multitask_dataset = dm.load_dataset('val')
     model = quick_load.omtra_from_checkpoint(ckpt_path).to(device)
     
@@ -59,21 +62,25 @@ def main(cfg):
         n_replicates = cfg.n_samples
     else:
         dataset_idxs = range(cfg.dataset_start_idx, cfg.dataset_start_idx + cfg.n_samples)
-        dataset_entires = [ dataset[(task_name, i)] for i in dataset_idxs ]
-        g_list, _, _ = zip(*dataset_entires)
-        g_list = list(g_list)
-        g_list = [ g.to(device) for g in g_list ] # move to device
+        g_list = [ dataset[(task_name, i)].to(device) for i in dataset_idxs ]
         n_replicates = cfg.n_replicates
 
-    model.sample(
+    sampled_systems = model.sample(
         g_list=g_list,
         n_replicates=n_replicates,
         task_name=task_name,
-        dataset_name=cfg.dataset,
         unconditional_n_atoms_dist=cfg.dataset,
         device=device,
         n_timesteps=cfg.n_timesteps,
     )
+
+    rdkit_mols = [ s.get_rdkit_ligand() for s in sampled_systems ]
+    sdwriter = Chem.SDWriter('/home/ian/projects/mol_diffusion/OMTRA/samples.sdf')
+    sdwriter.SetKekulize(False)
+    for mol in rdkit_mols:
+        if mol is not None:
+            sdwriter.write(mol)
+    sdwriter.close()
         
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
-
-
+checkpoint: null # must provide checkpoint
+num_workers: 0
 task: denovo_ligand # task to sample for
 dataset: pharmit # dataset that we will sample from
 n_samples: 100 # number of samples to draw

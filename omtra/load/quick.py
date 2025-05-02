@@ -47,6 +47,12 @@ def load_cfg(config_dir: str = None, config_name: str = "config.yaml", pharmit_p
 
     return cfg
 
+def load_trained_model_cfg(cfg_path: str):
+
+    cfg = OmegaConf.load(cfg_path)
+    cfg = merge_task_spec(cfg)
+    return cfg
+
 
 def datamodule_from_config(cfg: DictConfig) -> MultiTaskDataModule:
 

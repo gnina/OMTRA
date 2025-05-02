@@ -57,3 +57,16 @@ that does a variety of tasks that do not involve protein structures. The genreal
 2. `datset_task_coupling`; this is a dictionary where each key is a task and the value is a list specifying the dataset we will use for that task, along with the probability of using the dataset for that task. In other words, the dataset task coupling is directly specifying the probability distribution p(dataset|task).
 
 Now, what are the tasks and datasets supported? We have defined registers of supported tasks and datasets. The registers are located in `omtra.tasks` and `omtra.datasets` respectively. Every task and datset is associated with a unique string; if your config file specifies a task/dataset not in the register, the training script will tell you so. There are utility functions for printing out the tasks/dataset names supported. I don't know where they are off the top of my head but I'll add them here eventually. 
+
+# How to sample?
+
+The sampling script is `routines/sample.py` loads a config file `configs/sample.yaml` and overrides its contents with anything at the command line. One of these arguments, either in `sample.py` or the from the command line, must be the path to a model checkpoint, where that checkpoint is assumed to be in a output directory from a training run. `sample.py` will load the training-time hydra config, and override its contents with the contents of the sample config; that's how, if we specify `+plinder_path=[stuff]` at the command line, the plinder path used to load the datamodule/dataset will be overriden from what was used at training time.
+
+This is a bit clunky because if you want to override a training setting but that setting is not already include in `configs/sample.yaml`, you either have to use a "+" in front of the argument at the command line or you have to add it to `configs/sample.yaml`. In the example below, num_workers is an argument used a train time that we want to override, it is in `configs/sample.yaml`, so we can just set it at the command line without a "+". The `+plinder_path` argument is not in `configs/sample.yaml`, so we have to use a "+" in front of it at the command line in order to properly override the training time value.
+
+Below is a command I used to sample a conformer for 5 molecules in the pharmit dataset.  
+
+
+```console
+python routines/sample.py checkpoint=/home/ian/projects/mol_diffusion/OMTRA/local/runs_from_cluster/real_boi_2025-05-01_20-26-995947/checkpoints/batch_40000.ckpt num_workers=0 n_samples=10 +plinder_path=${omtra_root:}/data/plinder task=ligand_conformer
+```

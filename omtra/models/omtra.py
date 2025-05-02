@@ -457,7 +457,7 @@ class OMTRA(pl.LightningModule):
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
-        if task.unconditional and g_list is None:
+        if not task.unconditional and g_list is None:
             raise ValueError(
                 f"Task {task_name} requires a user-provided graphs with conditional information, but none was provided."
             )

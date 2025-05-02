@@ -3,6 +3,7 @@ import torch
 from omtra.utils import omtra_root
 from omtra.data.distributions.utils import smooth_joint_distribution
 import functools
+from pathlib import Path
 
 def pharmit_n_nodes_dist_raw(dists_file: str = None):
     if dists_file is None:
@@ -76,7 +77,7 @@ def sample_n_lig_atoms_pharmit(n_pharms: torch.Tensor = None, n_samples: int = N
         p = p_joint[:, n_pharms_idxs]
         p = p.permute(1, 0) # has shape (n_samples, n_ligand_atoms_support)
     else:
-        p = p.sum(dim=-1)
+        p = p_joint.sum(dim=-1)
         p = p.expand(n_samples, -1) 
 
     n_lig_atoms_idxs = torch.multinomial(p, num_samples=1).flatten()
