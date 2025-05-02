@@ -256,7 +256,7 @@ class OMTRA(pl.LightningModule):
         g, task_name, dataset_name = batch_data
 
         # print(f"validation step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
-
+        device = g.device
         task = task_name_to_class(task_name)
         if set(task.groups_present) == set(task.groups_generated):
             # if the task is purely unconditional, g_list is None
@@ -266,7 +266,7 @@ class OMTRA(pl.LightningModule):
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=20)
+        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=20, device=device)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         # TODO: compute evals and log them / do we want to log them separately for each task?
