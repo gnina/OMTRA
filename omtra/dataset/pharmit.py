@@ -131,7 +131,13 @@ class PharmitDataset(ZarrDataset):
                 'v_1_true': pharm_v
             }
 
-        g = build_complex_graph(node_data=g_node_data, edge_idxs=g_edge_idxs, edge_data=g_edge_data)
+        g = build_complex_graph(
+            node_data=g_node_data, 
+            edge_idxs=g_edge_idxs, 
+            edge_data=g_edge_data,
+            task=task_class,
+            graph_config=self.graph_config,
+            )
 
         # sample priors
         priors_fns = get_prior(task_class, self.prior_config, training=True)

@@ -2,7 +2,7 @@ import torch_cluster as tc
 import dgl
 from omtra.data.graph.utils import get_batch_idxs
 from omtra.tasks.utils import get_edges_for_task
-from omtra.data.graph import edge_types as all_edge_types
+from omtra.data.graph import all_edge_types as all_edge_types
 from omtra.data.graph import to_canonical_etype
 from omtra.data.graph.utils import get_edges_per_batch
 import torch
