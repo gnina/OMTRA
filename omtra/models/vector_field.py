@@ -54,7 +54,6 @@ class VectorField(nn.Module):
         n_expansion_gvps: int = 3,
         separate_mol_updaters: bool = True,
         message_norm: Union[float, str] = 100,
-        update_edge_w_distance: bool = True,
         rbf_dmax=18,
         rbf_dim=32,
         time_embedding_dim: int = 64,
@@ -68,16 +67,6 @@ class VectorField(nn.Module):
         self_conditioning: bool = False,
         use_dst_feats: bool = False,
         dst_feat_msg_reduction_factor: float = 4,
-        stochasticity: float = 0.0,
-        high_confidence_threshold: float = 0.0,
-        cat_temperature_schedule: Union[str, Callable, float] = 0.05,
-        cat_temp_decay_max: float = 0.8,
-        cat_temp_decay_a: float = 2,
-        # if we are using CTMC, input categorical features will have mask tokens,
-        # this means their one-hot representations will have an extra dimension,
-        # and the neural network instantiated by this method need to account for this
-        # it is definitely anti-pattern to have a parameter in parent class that is only needed for one sub-class (CTMCVectorField)
-        # however, this is the fastest way to get CTMCVectorField working right now, so we will be anti-pattern for the sake of time
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -101,17 +90,7 @@ class VectorField(nn.Module):
         self.rbf_dmax = rbf_dmax
         self.rbf_dim = rbf_dim
 
-        self.eta = stochasticity
-        self.hc_thres = high_confidence_threshold
-
-        self.cat_temperature_schedule = cat_temperature_schedule
-        self.cat_temp_decay_max = cat_temp_decay_max
-        self.cat_temp_decay_a = cat_temp_decay_a
-        self.cat_temp_func = self.build_cat_temp_schedule(
-            cat_temperature_schedule=cat_temperature_schedule,
-            cat_temp_decay_max=cat_temp_decay_max,
-            cat_temp_decay_a=cat_temp_decay_a,
-        )
+        self.cat_temp_func = lambda t: 0.05
 
         assert n_vec_channels >= 3, "n_vec_channels must be >= 3"
         assert n_vec_channels >= 2 * n_pharmvec_channels, (
@@ -297,7 +276,6 @@ class VectorField(nn.Module):
                     EdgeUpdate(
                         n_hidden_scalars,
                         n_hidden_edge_feats,
-                        update_edge_w_distance=update_edge_w_distance,
                         rbf_dim=rbf_dim,
                     )
                 )
@@ -1055,16 +1033,11 @@ class EdgeUpdate(nn.Module):
         self,
         n_node_scalars,
         n_edge_feats,
-        update_edge_w_distance=False,
         rbf_dim=16,
     ):
         super().__init__()
 
-        self.update_edge_w_distance = update_edge_w_distance
-
-        input_dim = n_node_scalars * 2 + n_edge_feats
-        if update_edge_w_distance:
-            input_dim += rbf_dim
+        input_dim = n_node_scalars * 2 + n_edge_feats + rbf_dim
 
         self.edge_update_fn = nn.Sequential(
             nn.Linear(input_dim, n_edge_feats),
@@ -1083,10 +1056,8 @@ class EdgeUpdate(nn.Module):
             node_scalars[src_ntype][src_idxs],
             node_scalars[dst_ntype][dst_idxs],
             edge_feats,
+            d
         ]
-
-        if self.update_edge_w_distance and d is not None:
-            mlp_inputs.append(d)
 
         edge_feats = self.edge_norm(
             edge_feats + self.edge_update_fn(torch.cat(mlp_inputs, dim=-1))

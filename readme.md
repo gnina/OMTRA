@@ -66,5 +66,6 @@ Below is a command I used to sample a conformer for 5 molecules in the pharmit d
 
 
 ```console
-python routines/sample.py checkpoint=/home/ian/projects/mol_diffusion/OMTRA/local/runs_from_cluster/real_boi_2025-05-01_20-26-995947/checkpoints/batch_40000.ckpt n_samples=10 +plinder_path=${omtra_root:}/data/plinder task=ligand_conformer
+python routines/sample.py checkpoint=/home/ian/projects/mol_diffusion/OMTRA/local/runs_from_cluster/real_boi_2025-05-02_14-45-583867/checkpoints/batch_15000.ckpt n_samples=10 +plinder_path=\$\{
+omtra_root:\}/data/plinder task=ligand_conformer
 ```
