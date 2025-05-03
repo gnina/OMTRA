@@ -40,7 +40,9 @@ edge_types += [get_inv_edge_type(etype) for etype in covalent_etypes]
 # perhaps fully-connected at the residue level and then knn or radius at the atom level with preference for inter-residue edges
 # so for now, initial graph construction, edges only created for ligand and pharmacophore nodes
 
+from line_profiler import LineProfiler
 
+@profile
 def build_complex_graph(
     node_data: Dict[str, Dict[str, torch.Tensor]],
     edge_idxs: Dict[str, torch.Tensor],

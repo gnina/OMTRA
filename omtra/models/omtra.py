@@ -234,7 +234,7 @@ class OMTRA(pl.LightningModule):
 
         # train_log_dict["train_total_loss"] = total_loss
         train_log_dict = add_task_prefix(train_log_dict, task_name)
-        self.log_dict(train_log_dict, sync_dist=False)
+        self.log_dict(train_log_dict, sync_dist=False, on_step=True)
         self.log(
             f"{task_name}/train_total_loss",
             total_loss,
@@ -254,8 +254,6 @@ class OMTRA(pl.LightningModule):
 
     def validation_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
-
-        print(f'running validation on task {task_name}', flush=True)
 
         # print(f"validation step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
         device = g.device
@@ -277,7 +275,7 @@ class OMTRA(pl.LightningModule):
         
         if metrics:
             metrics = add_task_prefix(metrics, task_name)
-            self.log_dict(metrics, sync_dist=True, batch_size=1)
+            self.log_dict(metrics, sync_dist=True, batch_size=1, on_step=True)
         self.train()
         
         return 0.0

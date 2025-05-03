@@ -6,7 +6,7 @@ defaults:
   - task_group: protein
   - graph: default
   - prior: default
-  - callbacks: default
+  - callbacks: no_checkpoint
   - wandb_conf: default
 
 mode: omtra # mode for training, can be omtra (train omtra) or ligand_encoder (train just the ligand encoder)

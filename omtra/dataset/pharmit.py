@@ -18,6 +18,8 @@ from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
 from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
 
+from line_profiler import LineProfiler
+
 class PharmitDataset(ZarrDataset):
     def __init__(self, 
                  split: str,
@@ -56,6 +58,7 @@ class PharmitDataset(ZarrDataset):
     def __len__(self):
         return self.root['lig/node/graph_lookup'].shape[0]
 
+    @profile
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
         task_class: Task = task_name_to_class(task_name)
