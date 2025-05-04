@@ -20,6 +20,17 @@ default_config_path = str(default_config_path)
 
 from rdkit import Chem
 
+def write_mols_to_sdf(mols, filename):
+    """
+    Write a list of RDKit molecules to an SDF file.
+    """
+    writer = Chem.SDWriter(str(filename))
+    writer.SetKekulize(False)
+    for mol in mols:
+        if mol is not None:
+            writer.write(mol)
+    writer.close()
+
 @hydra.main(config_path=default_config_path, config_name="sample")
 def main(cfg):
     # 1) resolve checkpoint path
@@ -72,15 +83,29 @@ def main(cfg):
         unconditional_n_atoms_dist=cfg.dataset,
         device=device,
         n_timesteps=cfg.n_timesteps,
+        visualize=cfg.visualize,
     )
 
-    rdkit_mols = [ s.get_rdkit_ligand() for s in sampled_systems ]
-    sdwriter = Chem.SDWriter('/home/ian/projects/mol_diffusion/OMTRA/samples.sdf')
-    sdwriter.SetKekulize(False)
-    for mol in rdkit_mols:
-        if mol is not None:
-            sdwriter.write(mol)
-    sdwriter.close()
+    if cfg.output_dir is None:
+        output_dir = ckpt_path.parent.parent / 'samples'
+    else:
+        output_dir = Path(cfg.output_dir)
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Saving samples to {output_dir}")
+
+    if cfg.visualize:
+        for i, sys in enumerate(sampled_systems):
+            xt_traj_mols = sys.build_traj(ep_traj=False, lig=True)
+            xhat_traj_mols = sys.build_traj(ep_traj=True, lig=True)
+            xt_file = output_dir / f"{task_name}_xt_traj_{i}.sdf"
+            xhat_file = output_dir / f"{task_name}_xhat_traj_{i}.sdf"
+            write_mols_to_sdf(xt_traj_mols['lig'], xt_file)
+            write_mols_to_sdf(xhat_traj_mols['lig'], xhat_file)
+    else:
+        rdkit_mols = [ s.get_rdkit_ligand() for s in sampled_systems ]
+        output_file = output_dir / f"{task_name}_samples.sdf"
+        write_mols_to_sdf(rdkit_mols, output_file)
         
 
 if __name__ == "__main__":

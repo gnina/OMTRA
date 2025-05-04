@@ -6,3 +6,9 @@ n_samples: 100 # number of samples to draw
 n_replicates: 1 # in the case of conditional sampling, we will draw n_samples system from the dataset, and sample n_replicates from the model
 dataset_start_idx: 0 # index to start sampling from
 n_timesteps: 200 # number of integration steps to take when sampling
+visualize: false # whether to visualize the sampling process
+output_dir: null
+
+hydra:
+  run:
+    dir: samples/

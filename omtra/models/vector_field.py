@@ -719,7 +719,32 @@ class VectorField(nn.Module):
         alpha_t_prime, beta_t_prime = self.interpolant_scheduler.weight_derivative(t, task)
 
         if visualize:
-            raise NotImplementedError("visualization not implemented yet")
+            traj = defaultdict(list)
+            def add_frame(g, traj=traj, task=task, first_frame=False):
+                m_fixed = task.modalities_fixed
+                for m in task.modalities_present:
+                    if m.is_node:
+                        data_src = g.nodes[m.entity_name]
+                    else:
+                        data_src = g.edges[m.entity_name]
+                    xt = data_src.data[f"{m.data_key}_t"]
+                    
+                    try:
+                        xpred = data_src.data[f"{m.data_key}_1_pred"]
+                    except KeyError:
+                        if m in m_fixed and not first_frame:
+                            # if this modality is fixed, we use its value at t as the "predicted value"
+                            # this just ensures fixed modalities still "appear" in endpoint trajectories
+                            xpred = data_src.data[f"{m.data_key}_t"]
+                        else:
+                            xpred = None
+
+                    traj[m.name].append(xt.detach().clone().cpu())
+
+                    if xpred is not None:
+                        traj[f'{m.name}_pred'].append(xpred.detach().clone().cpu())
+
+            add_frame(g, first_frame=True)
 
         node_batch_idxs, edge_batch_idxs = get_batch_idxs(g)
 
@@ -763,6 +788,9 @@ class VectorField(nn.Module):
                 **kwargs,
             )
 
+            if visualize:
+                add_frame(g)
+
         # set x_1 = x_t
         for modality in task.node_modalities_present:
             ntype = modality.entity_name
@@ -778,7 +806,26 @@ class VectorField(nn.Module):
                 continue
             g.edges[etype].data[f"{dk}_1"] = g.edges[etype].data[f"{dk}_t"]
 
-        return g
+        
+        if not visualize:
+            return g
+        
+        # if visualizing, generate trajectory dict for each example
+        per_system_traj = [ {} for _ in range(g.batch_size) ]
+        for m in task.modalities_present:
+            batch_traj = torch.stack(traj[m.name], dim=0) # tensor of shape (n_timesteps, n_nodes/n_edges, *)
+            batch_pred_traj = torch.stack(traj[f'{m.name}_pred'], dim=0) 
+            if m.is_node:
+                split_locs = g.batch_num_nodes(ntype=m.entity_name).tolist()
+            else:
+                split_locs = g.batch_num_edges(etype=m.entity_name).tolist()
+            per_graph_mtrajs = torch.split(batch_traj, split_locs, dim=1) # list of tensors of shape (n_timesteps, n_nodes/n_edges, *)
+            per_graph_pred_mtrajs = torch.split(batch_pred_traj, split_locs, dim=1)
+            for i in range(len(per_graph_mtrajs)):
+                per_system_traj[i][m.name] = per_graph_mtrajs[i]
+                per_system_traj[i][f'{m.name}_pred'] = per_graph_pred_mtrajs[i]
+
+        return g, per_system_traj
 
     def step(
         self,

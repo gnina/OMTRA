@@ -440,6 +440,7 @@ class OMTRA(pl.LightningModule):
         unconditional_n_atoms_dist: str = "plinder",  # distribution to use for sampling number of atoms in unconditional tasks
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
+        visualize=False,
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -629,7 +630,7 @@ class OMTRA(pl.LightningModule):
         # the only reason i'm allowing it to be none by default and manually adding it in
         # is that i don't want to define a default number of timesteps in more than one palce
         # it is already defined as default arg to VectorField.integrate
-        itg_kwargs = {}
+        itg_kwargs = dict(visualize=visualize)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
 
@@ -641,15 +642,26 @@ class OMTRA(pl.LightningModule):
             **itg_kwargs
         )
 
+        if visualize:
+            g, per_graph_traj = itg_result
+        else:
+            g = itg_result
+
         # integrate returns just a DGL graph for now
         # in the future, when we implement trajectory visualization, it will be a graph + some data structure for trajectory frames
         
         # unbatch DGL graphs and convert to SampledSystem object
-        unbatched_graphs = dgl.unbatch(itg_result)
+        g = g.to('cpu')
+        unbatched_graphs = dgl.unbatch(g)
         sampled_systems = []
-        for g_i in unbatched_graphs:
+        for i, g_i in enumerate(unbatched_graphs):
+            if visualize:
+                ss_kwargs = dict(traj=per_graph_traj[i])
+            else:
+                ss_kwargs = dict()
             sampled_system = SampledSystem(
                 g=g_i,
+                **ss_kwargs,
             )
             sampled_systems.append(sampled_system)
         return sampled_systems

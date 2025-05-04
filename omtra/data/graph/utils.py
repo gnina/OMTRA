@@ -1,6 +1,6 @@
 import dgl
 import torch
-from typing import Tuple, List, Union
+from typing import Tuple, List, Union, Dict
 from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
@@ -15,6 +15,8 @@ from rdkit.Geometry import Point3D
 import numpy as np
 import biotite.structure as struc
 from copy import deepcopy
+from omtra.tasks.modalities import name_to_modality
+from collections import defaultdict
 
 '''
 def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
@@ -153,6 +155,7 @@ class SampledSystem:
     def __init__(
         self,
         g: dgl.DGLHeteroGraph,
+        traj: Dict[str, torch.Tensor] = None,
         fake_atoms: bool = False,  # whether the molecule contains fake atoms,
         ctmc_mol: bool = True,
         exclude_charges: bool = False, # TODO: remove  this option and all its effects
@@ -165,6 +168,7 @@ class SampledSystem:
         protein_element_map: List[str] = protein_element_map,
     ):
         self.g = g
+        self.traj = traj
         self.fake_atoms = fake_atoms
         self.ctmc_mol = ctmc_mol
         self.exclude_charges = exclude_charges
@@ -186,6 +190,11 @@ class SampledSystem:
     
     def to(self, device: str):
         self.g = self.g.to(device)
+
+        if self.traj:
+            for k in self.traj:
+                self.traj[k] = self.traj[k].to(device)
+
         return self
     
     def get_n_lig_atoms(self) -> int:
@@ -331,31 +340,21 @@ class SampledSystem:
         return system_arr
 
     def get_rdkit_ligand(self) -> Union[None, Chem.Mol]:
-        (
-            positions,
-            atom_types,
-            atom_charges,
-            bond_types,
-            bond_src_idxs,
-            bond_dst_idxs,
-        ) = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol)
-        rdkit_mol = self.build_molecule(
-            positions,
-            atom_types,
-            atom_charges,
-            bond_src_idxs,
-            bond_dst_idxs,
-            bond_types,
-        )
+        ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol)
+        rdkit_mol = self.build_molecule(*ligdata)
         return rdkit_mol
 
     def extract_ligdata_from_graph(
         self,
+        g = None,
         ctmc_mol: bool = False,
         show_fake_atoms: bool = False,
     ):
+        if g is None:
+            g = self.g
+
         atom_type_map = list(self.ligand_atom_type_map)
-        lig_g = dgl.node_type_subgraph(self.g, ntypes=["lig"])
+        lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
 
         lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
         lig_edata_feats = list(lig_g.edges["lig_to_lig"].data.keys())
@@ -426,9 +425,9 @@ class SampledSystem:
         positions,
         atom_types,
         atom_charges,
+        bond_types,
         bond_src_idxs,
         bond_dst_idxs,
-        bond_types,
     ):
         """Builds a rdkit molecule from the given atom and bond information."""
         # create a rdkit molecule and add atoms to it
@@ -462,6 +461,60 @@ class SampledSystem:
 
         return mol
     
+    def build_traj(self, ep_traj=False, lig=True, prot=False, pharm=False):
+        if self.traj is None:
+            raise ValueError("No trajectory data available.")
+        
+        if prot or pharm:
+            raise NotImplementedError("Protein and pharmacophore trajectory building not implemented yet.")
+        
+        if not any([lig, prot, pharm]):
+            raise ValueError("at least one of lig, prot, or pharm must be True.")
+        
+        g_dummy = copy_graph(self.g, n_copies=1)[0]
+
+        traj_keys = list(self.traj.keys())
+        if ep_traj:
+            for k in traj_keys:
+                if 'pred' in k:
+                    test_key = k
+                    break
+        else:
+            test_key = traj_keys[0]
+
+        n_frames = self.traj[test_key].shape[0]
+        if lig:
+            lig_x_final = self.traj['lig_x'][-1]
+
+        traj_mols = defaultdict(list)
+        for frame_idx in range(n_frames):
+
+            # place the current traj frame on the dummy graph as the t=1 values
+            for m_name in self.traj.keys():
+                if 'pred' in m_name:
+                    continue
+
+                m = name_to_modality(m_name)
+
+                if m.is_node:
+                    data_src = g_dummy.nodes[m.entity_name].data
+                else:
+                    data_src = g_dummy.edges[m.entity_name].data
+
+                if ep_traj:
+                    traj_key = f"{m.name}_pred"
+                else:
+                    traj_key = m.name
+
+                data_src[f"{m.data_key}_1"] = self.traj[traj_key][frame_idx]
+
+            if lig:
+                ligdata = self.extract_ligdata_from_graph(g=g_dummy, ctmc_mol=self.ctmc_mol, show_fake_atoms=True)
+                rdkit_mol = self.build_molecule(*ligdata)
+                traj_mols['lig'].append(rdkit_mol)
+        
+        return traj_mols
+
     def compute_valencies(self):
         """Compute the valencies of every atom in the molecule. Returns a tensor of shape (num_atoms,)."""
         n_atoms = self.get_n_lig_atoms()
