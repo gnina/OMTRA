@@ -724,8 +724,12 @@ class VectorField(nn.Module):
                 m_fixed = task.modalities_fixed
                 for m in task.modalities_present:
                     if m.is_node:
+                        if g.num_nodes(m.entity_name) == 0:
+                            continue
                         data_src = g.nodes[m.entity_name]
                     else:
+                        if g.num_edges(m.entity_name) == 0:
+                            continue
                         data_src = g.edges[m.entity_name]
                     xt = data_src.data[f"{m.data_key}_t"]
                     
