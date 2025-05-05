@@ -1,8 +1,7 @@
 import torch
 from abc import ABC, abstractmethod
 from omtra.tasks.tasks import Task
-from omtra.tasks.utils import get_edges_for_task
-from omtra.data.graph import approx_n_edges
+from omtra.data.graph import approx_n_edges, get_edges_for_task
 import functools
 
 class OMTRADataset(ABC, torch.utils.data.Dataset):

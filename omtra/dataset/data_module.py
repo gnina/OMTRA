@@ -3,6 +3,8 @@ from torch.utils.data import DataLoader
 from typing import List, Dict
 import dgl
 from omegaconf import DictConfig
+from copy import deepcopy
+import torch
 
 from omtra.dataset.multitask import MultitaskDataSet
 from omtra.dataset.samplers import MultiTaskSampler
@@ -53,18 +55,27 @@ class MultiTaskDataModule(pl.LightningDataModule):
                 max_steps=self.max_steps,
             )
 
+            # create a validation t-d coupling that is uniform over the tasks being trained on
+            val_td_coupling = deepcopy(self.td_coupling)
+            p = val_td_coupling.p_dataset_task.sum(dim=0)
+            mask = p != 0
+            p_uniform = mask.float() / mask.sum()
+            p_dataset_task = torch.zeros_like(val_td_coupling.p_dataset_task)
+            p_dataset_task = p_dataset_task + p_uniform.unsqueeze(0)
+            val_td_coupling.p_dataset_task = p_dataset_task
+
+
             # TODO: how exactly do we want to sample data for validation? we don't actually
             # need to follow the td_coupling for validation, right?
             self.val_sampler = MultiTaskSampler(
                 self.val_dataset, 
-                self.td_coupling,
+                val_td_coupling,
                 self.edges_per_batch, 
                 distributed=self.distributed,
                 max_steps=self.max_steps,
             )
 
     def load_dataset(self, split: str):
-        # TODO: tasks should just be absored into multitask_dataset_config
         return MultitaskDataSet(split, 
                              td_coupling=self.td_coupling,
                              graph_config=self.graph_config,

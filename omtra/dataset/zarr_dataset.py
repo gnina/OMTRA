@@ -9,6 +9,7 @@ from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.dataset.dataset import OMTRADataset
 from omtra.tasks.tasks import Task
 from collections import OrderedDict
+# from line_profiler import LineProfiler
 
 class ZarrDataset(OMTRADataset):
 
@@ -26,6 +27,10 @@ class ZarrDataset(OMTRADataset):
         self.root = zarr.open(store=self.store, mode='r')
         self.n_chunks_cache = n_chunks_cache
         self.build_cached_chunk_fetchers()
+
+        self.rows_per_chunk = {}
+        for array_name in self.array_keys:
+            self.rows_per_chunk[array_name] = self.root[array_name].chunks[0]
         
 
     @abstractmethod
@@ -41,6 +46,7 @@ class ZarrDataset(OMTRADataset):
         for array_name in self.array_keys:
             self.chunk_fetchers[array_name] = ChunkFetcher(self.root, array_name, cache_size=self.n_chunks_cache)
 
+    # @profile
     def slice_array(self, array_name, start_idx, end_idx=None):
         """Slice data from a zarr array but utilize chunk caching to minimize disk access."""
 
@@ -52,7 +58,7 @@ class ZarrDataset(OMTRADataset):
             single_idx = True
             end_idx = start_idx+1
 
-        chunk_size = self.root[array_name].chunks[0] # the number of rows in each chunk (we only chunk and slice along the first dimension)
+        chunk_size = self.rows_per_chunk[array_name] # the number of rows in each chunk (we only chunk and slice along the first dimension)
 
         # get the chunk id, as well as the index of our slice relative to the chunk, for the start and end of the slice
         start_chunk_id, start_chunk_idx = divmod(start_idx, chunk_size)
@@ -83,8 +89,10 @@ class ChunkFetcher:
     def __init__(self, root, array_name, cache_size):
         self.root = root
         self.array_name = array_name
+        self.array = self.root[self.array_name]
         self.cache_size = cache_size
         self.cache = OrderedDict()  # Ordered dictionary to maintain LRU order
+        self.chunk_size = self.array.chunks[0]
 
         # self.chunks_touched = 0
 
@@ -103,8 +111,7 @@ class ChunkFetcher:
                 # Remove the least recently used chunk
                 self.cache.popitem(last=False)
             # Fetch the chunk and add it to the cache
-            chunk_size = self.root[self.array_name].chunks[0]
-            chunk_start_idx = chunk_id * chunk_size
-            chunk_end_idx = chunk_start_idx + chunk_size
-            self.cache[chunk_id] = self.root[self.array_name][chunk_start_idx:chunk_end_idx]
+            chunk_start_idx = chunk_id * self.chunk_size
+            chunk_end_idx = chunk_start_idx + self.chunk_size
+            self.cache[chunk_id] = self.array[chunk_start_idx:chunk_end_idx]
         return self.cache[chunk_id]

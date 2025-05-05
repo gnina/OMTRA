@@ -56,7 +56,7 @@ def train(cfg: DictConfig):
         raise ValueError(f"mode {mode} not recognized, must be 'omtra' or 'ligand_encoder'")
     
     # figure out if we are resuming a previous run
-    resume = cfg.get("ckpt_path") is not None
+    resume = cfg.get("checkpoint") is not None
 
     wandb_config = cfg.wandb_conf
     if resume:
@@ -94,6 +94,7 @@ def train(cfg: DictConfig):
         resume_info = {}
         resume_info["run_id"] = run_id
         resume_info["name"] = wandb_logger.experiment.name
+        resume_info["url"] = wandb_logger.experiment.url
 
         # write resume info as yaml file to run directory
         resume_info_file = run_dir / "resume_info.yaml"
@@ -121,15 +122,15 @@ def train(cfg: DictConfig):
     )
     
     torch.cuda.empty_cache()
-    trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
+    trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("checkpoint"))
 
-
-    # datamodule.setup(stage='fit')
-    # dataloader = datamodule.train_dataloader()
-    # dataloader_iter = iter(dataloader)
-    # n_batches = 5
-    # for _ in range(n_batches):
-    #     g, task_name, dataset_name = next(dataloader_iter)
+    # right after training ends:
+    if trainer.is_global_zero:
+        hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
+        log_dir = hydra_cfg['runtime']['output_dir']
+        checkpoint_dir = Path(log_dir) / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        trainer.save_checkpoint(str(checkpoint_dir / "last.ckpt"))
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="config")
@@ -139,7 +140,7 @@ def main(cfg: DictConfig):
     cfg is a DictConfig configuration composed by Hydra.
     """
 
-    resume = cfg.get('ckpt_path') is not None
+    resume = cfg.get('checkpoint') is not None
     if resume:
         ckpt_path = Path(cfg.ckpt_path)
         run_dir = ckpt_path.parent.parent
@@ -149,10 +150,6 @@ def main(cfg: DictConfig):
         cfg.og_run_dir = str(run_dir)
     else:
         cfg = merge_task_spec(cfg)
-
-
-    print("\n=== Training Config ===")
-    print(OmegaConf.to_yaml(cfg))
 
     # train the model
     _ = train(cfg)
