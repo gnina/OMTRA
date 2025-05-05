@@ -268,7 +268,7 @@ class OMTRA(pl.LightningModule):
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=100, device=device)
+        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=200, device=device)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         # TODO: compute evals and log them / do we want to log them separately for each task?
