@@ -175,6 +175,12 @@ def check_stability(sys: SampledSystem) -> Tuple[int, bool, int]:
         if valency in valid_valencies:
             n_stable_atoms += 1
 
+    n_real_atoms = len(atom_types) - n_fake_atoms
+    if n_stable_atoms == n_real_atoms:
+        mol_stable = True
+    else:
+        mol_stable = False
+
     return n_stable_atoms, mol_stable, n_fake_atoms
 
 
