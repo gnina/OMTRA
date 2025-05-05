@@ -60,12 +60,8 @@ Now, what are the tasks and datasets supported? We have defined registers of sup
 
 # How to sample?
 
-The sampling script is `routines/sample.py` loads a config file `configs/sample.yaml` and overrides its contents with anything at the command line. One of these arguments, either in `sample.py` or the from the command line, must be the path to a model checkpoint, where that checkpoint is assumed to be in a output directory from a training run. `sample.py` will load the training-time hydra config, and override its contents with the contents of the sample config; that's how, if we specify `+plinder_path=[stuff]` at the command line, the plinder path used to load the datamodule/dataset will be overriden from what was used at training time.
-
-Below is a command I used to sample a conformer for 5 molecules in the pharmit dataset.  
-
+The sampling script is `routines/sample.py` takes a checkpoint and a task as input. There are a few other arguments to controls its behavior: `--visualize` will write out trajectories, `--output_dir` will specify where to write the output, `--n_samples` will specify how many samples to generate, `--metrics` is a true/false flag indicating whether to compute metrics on the samples. Look at the script or run `python routines/sample.py --help` for more details. Below is an example command:
 
 ```console
-python routines/sample.py checkpoint=/home/ian/projects/mol_diffusion/OMTRA/local/runs_from_cluster/real_boi_2025-05-02_14-45-583867/checkpoints/batch_15000.ckpt n_samples=10 +plinder_path=\$\{
-omtra_root:\}/data/plinder task=ligand_conformer
+python routines/sample.py local/runs_from_cluster/denovo_multiupdate_2025-05-04_20-44-972429/checkpoints/batch_45000.ckpt --task=denovo_ligand --n_samples=100 --metrics --output_dir=local/dev_samples
 ```

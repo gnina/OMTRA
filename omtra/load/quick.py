@@ -54,13 +54,14 @@ def load_trained_model_cfg(cfg_path: str):
     return cfg
 
 
-def datamodule_from_config(cfg: DictConfig) -> MultiTaskDataModule:
+def datamodule_from_config(cfg: DictConfig, **kwargs) -> MultiTaskDataModule:
 
     print(f"⚛ Instantiating datamodule <{cfg.task_group.datamodule._target_}>")
 
     # load data module
     datamodule: MultiTaskDataModule = hydra.utils.instantiate(
         cfg.task_group.datamodule, 
+        **kwargs,
     )
 
     return datamodule

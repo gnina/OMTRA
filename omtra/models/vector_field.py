@@ -693,7 +693,7 @@ class VectorField(nn.Module):
         task: Task,
         upper_edge_mask: Dict[str, torch.Tensor],
         n_timesteps: int = 250,
-        stochasticity: float = 8.0,
+        stochasticity: float = 30.0,
         cat_temp_func: Optional[Callable] = None,
         tspan=None,
         visualize=False,
@@ -928,7 +928,7 @@ class VectorField(nn.Module):
                 beta_t_prime=beta_t_prime_i[m.name],
                 dt=dt,
                 batch_size=g.batch_size,
-                batch_num_nodes=g.batch_num_edges(m.entity_name) // 2
+                batch_num_nodes=g.batch_num_edges(m.entity_name)
                 if not m.is_node
                 else g.batch_num_nodes(m.entity_name),
                 mask_index=m.n_categories,

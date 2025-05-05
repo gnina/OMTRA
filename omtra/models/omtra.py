@@ -261,8 +261,10 @@ class OMTRA(pl.LightningModule):
         if task.unconditional:
             # if the task is purely unconditional, g_list is None
             g_list = None
+            n_replicates = 2*g.batch_size
         else:
             g_list = dgl.unbatch(g)
+            n_replicates = 2
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
