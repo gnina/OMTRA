@@ -43,7 +43,7 @@ import warnings
 warnings.filterwarnings(
     "ignore",
     message="The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.*",
-    module="zarr.codecs.vlen_utf8"
+    module="zarr.codecs.vlen_utf8",
 )
 
 
@@ -79,18 +79,17 @@ class PlinderDataset(ZarrDataset):
     @classproperty
     def name(cls):
         return "plinder"
-    
+
     @property
     def n_zarr_chunks(self):
         coords_arr = self.root["pocket/coords"]
         n_atoms = coords_arr.shape[0]
         n_chunks = math.ceil(n_atoms / coords_arr.chunks[0])
         return n_chunks
-    
+
     @property
     def graphs_per_chunk(self):
         return len(self) // self.n_zarr_chunks
-
 
     def __len__(self):
         return self.system_lookup.shape[0]
@@ -142,7 +141,9 @@ class PlinderDataset(ZarrDataset):
             )
         return npndes
 
-    def get_system(self, index: int, include_pharmacophore: bool) -> SystemData:
+    def get_system(
+        self, index: int, include_pharmacophore: bool, include_protein: bool
+    ) -> SystemData:
         system_info = self.system_lookup[
             self.system_lookup["system_idx"] == index
         ].iloc[0]
@@ -182,34 +183,115 @@ class PlinderDataset(ZarrDataset):
                 int(system_info["link_bb_end"]),
             )
 
-        backbone = BackboneData(
-            coords=self.slice_array(
-                "receptor/backbone_coords", backbone_start, backbone_end
-            ),
-            res_ids=self.slice_array(
-                "receptor/backbone_res_ids", backbone_start, backbone_end
-            ),
-            res_names=self.slice_array(
-                "receptor/backbone_res_names", backbone_start, backbone_end
-            ),
-            chain_ids=self.slice_array(
-                "receptor/backbone_chain_ids", backbone_start, backbone_end
-            ),
-        )
+        if include_protein:
+            backbone = BackboneData(
+                coords=self.slice_array(
+                    "receptor/backbone_coords", backbone_start, backbone_end
+                ),
+                res_ids=self.slice_array(
+                    "receptor/backbone_res_ids", backbone_start, backbone_end
+                ),
+                res_names=self.slice_array(
+                    "receptor/backbone_res_names", backbone_start, backbone_end
+                ),
+                chain_ids=self.slice_array(
+                    "receptor/backbone_chain_ids", backbone_start, backbone_end
+                ),
+            )
 
-        receptor = StructureData(
-            coords=self.slice_array("receptor/coords", rec_start, rec_end),
-            atom_names=self.slice_array("receptor/atom_names", rec_start, rec_end),
-            elements=self.slice_array("receptor/elements", rec_start, rec_end),
-            res_ids=self.slice_array("receptor/res_ids", rec_start, rec_end),
-            res_names=self.slice_array("receptor/res_names", rec_start, rec_end),
-            chain_ids=self.slice_array("receptor/chain_ids", rec_start, rec_end),
-            backbone_mask=self.slice_array(
-                "receptor/backbone_mask", rec_start, rec_end
-            ),
-            backbone=backbone,
-            cif=system_info["rec_cif"],
-        )
+            receptor = StructureData(
+                coords=self.slice_array("receptor/coords", rec_start, rec_end),
+                atom_names=self.slice_array("receptor/atom_names", rec_start, rec_end),
+                elements=self.slice_array("receptor/elements", rec_start, rec_end),
+                res_ids=self.slice_array("receptor/res_ids", rec_start, rec_end),
+                res_names=self.slice_array("receptor/res_names", rec_start, rec_end),
+                chain_ids=self.slice_array("receptor/chain_ids", rec_start, rec_end),
+                backbone_mask=self.slice_array(
+                    "receptor/backbone_mask", rec_start, rec_end
+                ),
+                backbone=backbone,
+                cif=system_info["rec_cif"],
+            )
+
+            pocket_backbone = BackboneData(
+                coords=self.slice_array(
+                    "pocket/backbone_coords", pocket_bb_start, pocket_bb_end
+                ),
+                res_ids=self.slice_array(
+                    "pocket/backbone_res_ids", pocket_bb_start, pocket_bb_end
+                ),
+                res_names=self.slice_array(
+                    "pocket/backbone_res_names", pocket_bb_start, pocket_bb_end
+                ),
+                chain_ids=self.slice_array(
+                    "pocket/backbone_chain_ids", pocket_bb_start, pocket_bb_end
+                ),
+            )
+
+            pocket = StructureData(
+                coords=self.slice_array("pocket/coords", pocket_start, pocket_end),
+                atom_names=self.slice_array(
+                    "pocket/atom_names", pocket_start, pocket_end
+                ),
+                elements=self.slice_array("pocket/elements", pocket_start, pocket_end),
+                res_ids=self.slice_array("pocket/res_ids", pocket_start, pocket_end),
+                res_names=self.slice_array(
+                    "pocket/res_names", pocket_start, pocket_end
+                ),
+                chain_ids=self.slice_array(
+                    "pocket/chain_ids", pocket_start, pocket_end
+                ),
+                backbone_mask=self.slice_array(
+                    "pocket/backbone_mask", pocket_start, pocket_end
+                ),
+                backbone=pocket_backbone,
+            )
+            npndes = None
+            if system_info["npnde_idxs"]:
+                npndes = self.get_npndes(system_info["npnde_idxs"])
+
+            apo = None
+            pred = None
+            if link_type == "apo":
+                apo_backbone = BackboneData(
+                    coords=self.slice_array(
+                        "apo/backbone_coords", link_bb_start, link_bb_end
+                    ),
+                    res_ids=None,
+                    res_names=None,
+                    chain_ids=None,
+                )
+                apo = StructureData(
+                    coords=self.slice_array("apo/coords", link_start, link_end),
+                    atom_names=None,
+                    elements=None,
+                    res_ids=None,
+                    res_names=None,
+                    chain_ids=None,
+                    cif=system_info["link_cif"],
+                    backbone_mask=None,
+                    backbone=apo_backbone,
+                )
+            elif link_type == "pred":
+                pred_backbone = BackboneData(
+                    coords=self.slice_array(
+                        "pred/backbone_coords", link_bb_start, link_bb_end
+                    ),
+                    res_ids=None,
+                    res_names=None,
+                    chain_ids=None,
+                )
+                pred = StructureData(
+                    coords=self.slice_array("pred/coords", link_start, link_end),
+                    atom_names=None,
+                    elements=None,
+                    res_ids=None,
+                    res_names=None,
+                    chain_ids=None,
+                    cif=system_info["link_cif"],
+                    backbone_mask=None,
+                    backbone=pred_backbone,
+                )
 
         is_covalent = False
         if system_info["linkages"]:
@@ -251,96 +333,14 @@ class PlinderDataset(ZarrDataset):
                 ),
             )
 
-        pocket_backbone = BackboneData(
-            coords=self.slice_array(
-                "pocket/backbone_coords", pocket_bb_start, pocket_bb_end
-            ),
-            res_ids=self.slice_array(
-                "pocket/backbone_res_ids", pocket_bb_start, pocket_bb_end
-            ),
-            res_names=self.slice_array(
-                "pocket/backbone_res_names", pocket_bb_start, pocket_bb_end
-            ),
-            chain_ids=self.slice_array(
-                "pocket/backbone_chain_ids", pocket_bb_start, pocket_bb_end
-            ),
-        )
-
-        pocket = StructureData(
-            coords=self.slice_array("pocket/coords", pocket_start, pocket_end),
-            atom_names=self.slice_array("pocket/atom_names", pocket_start, pocket_end),
-            elements=self.slice_array("pocket/elements", pocket_start, pocket_end),
-            res_ids=self.slice_array("pocket/res_ids", pocket_start, pocket_end),
-            res_names=self.slice_array("pocket/res_names", pocket_start, pocket_end),
-            chain_ids=self.slice_array("pocket/chain_ids", pocket_start, pocket_end),
-            backbone_mask=self.slice_array(
-                "pocket/backbone_mask", pocket_start, pocket_end
-            ),
-            backbone=pocket_backbone,
-        )
-
-        npndes = None
-        if system_info["npnde_idxs"]:
-            npndes = self.get_npndes(system_info["npnde_idxs"])
-
-        apo = None
-        pred = None
-        if link_type == "apo":
-            apo_backbone = BackboneData(
-                coords=self.slice_array(
-                    "apo/backbone_coords", link_bb_start, link_bb_end
-                ),
-                res_ids=None,
-                res_names=None,
-                chain_ids=None,
-            )
-            apo = StructureData(
-                coords=self.slice_array("apo/coords", link_start, link_end),
-                atom_names=None,
-                elements=None,
-                res_ids=None,
-                res_names=None,
-                chain_ids=None,
-                cif=system_info["link_cif"],
-                backbone_mask=None,
-                backbone=apo_backbone,
-            )
-        elif link_type == "pred":
-            pred_backbone = BackboneData(
-                coords=self.slice_array(
-                    "pred/backbone_coords", link_bb_start, link_bb_end
-                ),
-                res_ids=None,
-                res_names=None,
-                chain_ids=None,
-            )
-            pred = StructureData(
-                coords=self.slice_array("pred/coords", link_start, link_end),
-                atom_names=None,
-                elements=None,
-                res_ids=None,
-                res_names=None,
-                chain_ids=None,
-                cif=system_info["link_cif"],
-                backbone_mask=None,
-                backbone=pred_backbone,
-            )
-
         system = SystemData(
             system_id=system_info["system_id"],
             ligand_id=system_info["ligand_id"],
-            receptor=receptor,
+            receptor=receptor if include_protein else None,
             ligand=ligand,
-            pharmacophore=pharmacophore
-            if include_pharmacophore
-            else PharmacophoreData(
-                coords=np.zeros((0, 3), dtype=np.float32),
-                types=np.zeros((0,), dtype=np.int32),
-                vectors=np.zeros((0, 3), dtype=np.float32),
-                interactions=np.zeros((0,), dtype=bool),
-            ),
-            pocket=pocket,
-            npndes=npndes,
+            pharmacophore=pharmacophore if include_pharmacophore else None,
+            pocket=pocket if include_protein else None,
+            npndes=npndes if include_protein else None,
             link_type=link_type,
             link_id=system_info["link_id"] if link_type else None,
             link=apo if apo else pred,
@@ -419,10 +419,12 @@ class PlinderDataset(ZarrDataset):
         prot_backbone_mask = torch.from_numpy(holo.backbone_mask).bool()
 
         # TODO: figure out how to store chain ids
-        
+
         unique_chains = sorted(set(holo.chain_ids))
         chain_to_idx = {chain: idx for idx, chain in enumerate(unique_chains)}
-        prot_chain_ids = torch.tensor([chain_to_idx[chain_id] for chain_id in holo.chain_ids], dtype=torch.long)
+        prot_chain_ids = torch.tensor(
+            [chain_to_idx[chain_id] for chain_id in holo.chain_ids], dtype=torch.long
+        )
 
         pocket_res_identifiers = set()
         for i in range(len(pocket.res_ids)):
@@ -491,10 +493,10 @@ class PlinderDataset(ZarrDataset):
         ligand: LigandData,
         pocket: StructureData,
         atom_type_map: List[str],
-        )   -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         ligand_arr = ligand.to_atom_array(atom_type_map)
         pocket_arr = pocket.to_atom_array()
-        
+
         prot_atom_covalent_lig = []
         prot_res_covalent_lig = []
         dists = struc.distance(
@@ -514,32 +516,34 @@ class PlinderDataset(ZarrDataset):
                     prot_atom_covalent_lig.append([j, i])
                     res_id = pocket_arr.get_annotation("res_id")[j]
                     chain_id = pocket_arr.get_annotation("chain_id")[j]
-                    
+
                     res_ids = pocket.backbone.res_ids
                     chain_ids = pocket.backbone.chain_ids
-                    
-                    res_id_mask = (res_ids == res_id)
-                    chain_id_mask = (chain_ids == chain_id)
+
+                    res_id_mask = res_ids == res_id
+                    chain_id_mask = chain_ids == chain_id
                     combined_mask = res_id_mask & chain_id_mask
-                    
+
                     res_idx = np.where(combined_mask)[0]
                     if len(res_idx > 0):
                         prot_res_covalent_lig.append([res_idx[0], i])
-                        
-                   
+
         if prot_atom_covalent_lig:
-            prot_atom_covalent_lig = torch.tensor(prot_atom_covalent_lig, dtype=torch.long).t()
+            prot_atom_covalent_lig = torch.tensor(
+                prot_atom_covalent_lig, dtype=torch.long
+            ).t()
         else:
             prot_atom_covalent_lig = torch.zeros((2, 0), dtype=torch.long)
-        
+
         if prot_res_covalent_lig:
-            prot_res_covalent_lig = torch.tensor(prot_res_covalent_lig, dtype=torch.long).t()
+            prot_res_covalent_lig = torch.tensor(
+                prot_res_covalent_lig, dtype=torch.long
+            ).t()
         else:
             prot_res_covalent_lig = torch.zeros((2, 0), dtype=torch.long)
-                
+
         return prot_atom_covalent_lig, prot_res_covalent_lig
-        
-        
+
     def convert_ligand(
         self,
         ligand: LigandData,
@@ -645,14 +649,17 @@ class PlinderDataset(ZarrDataset):
             all_atom_charges.append(atom_charges)
 
             # check if the npnde has bonds
-            has_bonds = ligand_data.bond_types is not None and ligand_data.bond_indices is not None
+            has_bonds = (
+                ligand_data.bond_types is not None
+                and ligand_data.bond_indices is not None
+            )
             if has_bonds and ligand_data.bond_types.shape[0] == 0:
                 has_bonds = False
 
             if has_bonds:
                 bond_types = torch.from_numpy(ligand_data.bond_types).long()
                 bond_indices = torch.from_numpy(ligand_data.bond_indices).long()
-                
+
                 adjusted_indices = bond_indices.clone()
                 adjusted_indices[:, 0] += node_offset
                 adjusted_indices[:, 1] += node_offset
@@ -661,8 +668,8 @@ class PlinderDataset(ZarrDataset):
                 all_bond_indices.append(adjusted_indices)
 
             if ligand_data.is_covalent and ligand_data.linkages and pocket is not None:
-                prot_atom_to_npnde_tensor, prot_res_to_npnde_tensor = self.infer_covalent_bonds(
-                    ligand_data, pocket, npnde_atom_type_map
+                prot_atom_to_npnde_tensor, prot_res_to_npnde_tensor = (
+                    self.infer_covalent_bonds(ligand_data, pocket, npnde_atom_type_map)
                 )
                 if prot_atom_to_npnde_tensor.shape[1] > 0:
                     prot_atom_to_npnde_tensor[1, :] += node_offset
@@ -694,15 +701,13 @@ class PlinderDataset(ZarrDataset):
             combined_bond_indices = torch.cat(all_bond_indices, dim=0)
 
             k = self.graph_config["edges"]["npnde_to_npnde"]["params"]["k"]
-            npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = (
-                add_k_hop_edges(
-                    combined_coords,
-                    combined_atom_types,
-                    combined_atom_charges,
-                    combined_bond_types,
-                    combined_bond_indices,
-                    k=k
-                )
+            npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = add_k_hop_edges(
+                combined_coords,
+                combined_atom_types,
+                combined_atom_charges,
+                combined_bond_types,
+                combined_bond_indices,
+                k=k,
             )
             npnde_c = self.encode_charges(npnde_c)
 
@@ -730,9 +735,7 @@ class PlinderDataset(ZarrDataset):
             edge_idxs["npnde_covalent_prot_atom"] = npnde_to_prot_atom_tensor
 
         if all_prot_res_to_npnde_idxs:
-            prot_res_to_npnde_tensor = torch.cat(
-                all_prot_res_to_npnde_idxs, dim=1
-            )
+            prot_res_to_npnde_tensor = torch.cat(all_prot_res_to_npnde_idxs, dim=1)
             edge_idxs["prot_res_covalent_npnde"] = prot_res_to_npnde_tensor
             npnde_to_prot_res_tensor = prot_res_to_npnde_tensor[[1, 0]]
             edge_idxs["npnde_covalent_prot_res"] = npnde_to_prot_res_tensor
@@ -765,9 +768,7 @@ class PlinderDataset(ZarrDataset):
         return node_data, edge_idxs, edge_data
 
     def convert_system(
-        self,
-        system: SystemData,
-        include_pharmacophore: bool,
+        self, system: SystemData, include_pharmacophore: bool, include_protein: bool
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -780,12 +781,25 @@ class PlinderDataset(ZarrDataset):
         edge_data = {}
 
         # read protein data
-        prot_node_data, prot_edge_idxs, prot_edge_data, pocket_mask, bb_pocket_mask = (
-            self.convert_protein(system.receptor, system.pocket)
-        )
-        node_data.update(prot_node_data)
-        edge_idxs.update(prot_edge_idxs)
-        edge_data.update(prot_edge_data)
+        if include_protein:
+            (
+                prot_node_data,
+                prot_edge_idxs,
+                prot_edge_data,
+                pocket_mask,
+                bb_pocket_mask,
+            ) = self.convert_protein(system.receptor, system.pocket)
+            node_data.update(prot_node_data)
+            edge_idxs.update(prot_edge_idxs)
+            edge_data.update(prot_edge_data)
+
+            # read npnde data
+            npnde_node_data, npnde_edge_idxs, npnde_edge_data = self.convert_npndes(
+                system.npndes if system.npndes is not None else {}, system.pocket
+            )
+            node_data.update(npnde_node_data)
+            edge_idxs.update(npnde_edge_idxs)
+            edge_data.update(npnde_edge_data)
 
         # read ligand data
         lig_node_data, lig_edge_idxs, lig_edge_data = self.convert_ligand(
@@ -794,14 +808,6 @@ class PlinderDataset(ZarrDataset):
         node_data.update(lig_node_data)
         edge_idxs.update(lig_edge_idxs)
         edge_data.update(lig_edge_data)
-
-        # read npnde data
-        npnde_node_data, npnde_edge_idxs, npnde_edge_data = self.convert_npndes(
-            system.npndes if system.npndes is not None else {}, system.pocket
-        )
-        node_data.update(npnde_node_data)
-        edge_idxs.update(npnde_edge_idxs)
-        edge_data.update(npnde_edge_data)
 
         if include_pharmacophore:
             pharm_node_data, pharm_edge_idxs, pharm_edge_data = (
@@ -817,17 +823,30 @@ class PlinderDataset(ZarrDataset):
         task_name, idx = index
         task_class: Task = task_name_to_class(task_name)
 
-        include_pharmacophore = 'pharmacophore' in task_class.groups_present
+        include_pharmacophore = "pharmacophore" in task_class.groups_present
 
-        system = self.get_system(idx, include_pharmacophore=include_pharmacophore)
+        include_protein = (
+            "protein_identity" in task_class.groups_present
+            or "protein_structure" in task_class.groups_present
+        )
+
+        system = self.get_system(
+            idx,
+            include_pharmacophore=include_pharmacophore,
+            include_protein=include_protein,
+        )
 
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
-            self.convert_system(system, include_pharmacophore=include_pharmacophore)
+            self.convert_system(
+                system,
+                include_pharmacophore=include_pharmacophore,
+                include_protein=include_protein,
+            )
         )
 
         g = build_complex_graph(
-            node_data, 
-            edge_idxs, 
+            node_data,
+            edge_idxs,
             edge_data,
             task=task_class,
             graph_config=self.graph_config,
@@ -839,23 +858,18 @@ class PlinderDataset(ZarrDataset):
         # first, if the task requires a linked structure for the prior,
         # manually add this to the graph
 
-        if 'apo' in prior_fns.get("prot_atom_x", ("", None))[0]:
-
+        if "apo" in prior_fns.get("prot_atom_x", ("", None))[0]:
             if system.link is None:
-                raise ValueError("system.link is None, cannot retrieve link coordinates.")
+                raise ValueError(
+                    "system.link is None, cannot retrieve link coordinates."
+                )
 
-            g.nodes['prot_atom'].data['x_0'] = self.get_link_coords(
-                system.link, 
-                pocket_mask, 
-                bb_pocket_mask, 
-                'prot_atom_x'
+            g.nodes["prot_atom"].data["x_0"] = self.get_link_coords(
+                system.link, pocket_mask, bb_pocket_mask, "prot_atom_x"
             )
-            
+
         # sample priors
-        g = sample_priors(g, 
-                          task_class=task_class,
-                          prior_fns=prior_fns, 
-                          training=True)
+        g = sample_priors(g, task_class=task_class, prior_fns=prior_fns, training=True)
 
         return g
 
@@ -954,5 +968,3 @@ class PlinderDataset(ZarrDataset):
         node_counts = np.stack(node_counts, axis=0).sum(axis=0)
         node_counts = torch.from_numpy(node_counts)
         return node_counts
-
-
