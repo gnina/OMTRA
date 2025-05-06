@@ -365,25 +365,30 @@ class SampledSystem:
         Get the system data represented as Biotite AtomArray
         :return: Biotite AtomArray
         """
+        arrs = []
         prot = self.get_protein_array(g=g)
+        arrs.append(prot)
         
         ligdata = self.extract_ligdata_from_graph(g=g, ctmc_mol=self.ctmc_mol, show_fake_atoms=True)
         ligdata = self.convert_ligdata_to_biotite(*ligdata)
         lig = self.build_atom_array(*ligdata)
+        arrs.append(lig)
         
         npndedata = self.extract_ligdata_from_graph(g=g, ctmc_mol=self.ctmc_mol, show_fake_atoms=True, npnde=True)
-        npndedata = self.convert_ligdata_to_biotite(*npndedata, npnde=True)
-        npnde = self.build_atom_array(*npndedata)
-        
-        system_arr = struc.concatenate([prot, lig, npnde])
+        if npndedata:
+            npndedata = self.convert_ligdata_to_biotite(*npndedata, npnde=True)
+            npnde = self.build_atom_array(*npndedata)
+            arrs.append(npnde)
+            
+        system_arr = struc.concatenate(arrs)
         return system_arr
 
-    def build_bond_list(self, bond_src_idxs, bond_dst_idxs, bond_types):
+    def build_bond_list(self, bond_src_idxs, bond_dst_idxs, bond_types, n_atoms):
         bond_types[bond_types == 4] = 9  # NOTE: generic aromatic bond is 9 in biotite
         bond_array = np.stack(
             [bond_src_idxs, bond_dst_idxs, bond_types], axis=1
         ).astype(int)
-        bond_list = struc.BondList(len(bond_array), bond_array)
+        bond_list = struc.BondList(n_atoms, bond_array)
         return bond_list
 
     def build_atom_array(
@@ -402,6 +407,9 @@ class SampledSystem:
     ):
         n_nodes = len(atom_name)
         atom_array = struc.AtomArray(n_nodes)
+        
+        if isinstance(coords, torch.Tensor):
+            coords = coords.numpy()
         atom_array.coord = coords
         atom_array.set_annotation("atom_name", atom_name)
         atom_array.set_annotation("element", element)
@@ -410,16 +418,19 @@ class SampledSystem:
         atom_array.set_annotation("chain_id", chain_id)
         atom_array.set_annotation("hetero", hetero)
         if charge is not None:
+            # TODO: why is this a generator object ?
             atom_array.set_annotation("charge", charge)
         if (
             bond_src_idxs is not None
             and bond_dst_idxs is not None
             and bond_types is not None
         ):
-            bond_list = self.build_bond_list(bond_src_idxs, bond_dst_idxs, bond_types)
+            bond_list = self.build_bond_list(bond_src_idxs, bond_dst_idxs, bond_types, atom_array.array_length())
             atom_array.bonds = bond_list
         else:
             atom_array.bonds = struc.connect_via_distances(atom_array)
+            
+        return atom_array
 
     def get_protein_array(self, g=None, reference: bool = False):
         coords, atom_names, elements, res_ids, res_names, chain_ids, hetero = (
@@ -496,6 +507,8 @@ class SampledSystem:
             lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             lig_edata_feats = list(lig_g.edges["lig_to_lig"].data.keys())
         else:
+            if g.num_nodes(ntype="npnde") == 0:
+                return None
             atom_type_map = list(self.npnde_atom_type_map)
             lig_g = dgl.node_type_subgraph(g, ntypes=["npnde"])
             lig_ndata_feats = list(lig_g.nodes["npnde"].data.keys())
@@ -530,7 +543,7 @@ class SampledSystem:
                 neutral_index = self.charge_map.index(0)
                 charge_data[masked_charge] = neutral_index
 
-            atom_charges = (self.charge_map[int(charge)] for charge in charge_data)
+            atom_charges = [self.charge_map[int(charge)] for charge in charge_data]
 
         # get bond types and atom indicies for every edge, convert types from simplex to integer
         bond_types = lig_g.edata["e_1"].clone()
@@ -571,16 +584,16 @@ class SampledSystem:
 
         coords = self.g.nodes["prot_atom"].data[f"x_{feat_suffix}"].numpy()
         atypes = self.g.nodes["prot_atom"].data[f"a_1_true"].numpy()
-        atom_type_map_array = np.array(self.protein_atom_type_map, dtype=object)
+        atom_type_map_array = np.array(self.protein_atom_type_map, dtype="U3")
         atom_names = atom_type_map_array[atypes]
 
         eltypes = self.g.nodes["prot_atom"].data[f"e_1_true"].numpy()
-        element_type_map_array = np.array(self.protein_element_map, dtype=object)
+        element_type_map_array = np.array(self.protein_element_map, dtype="U2")
         elements = element_type_map_array[eltypes]
 
         res_ids = self.g.nodes["prot_atom"].data["res_id"].numpy()
         res_types = self.g.nodes["prot_atom"].data["res_names"].numpy()
-        res_type_map_array = np.array(self.residue_map, dtype=object)
+        res_type_map_array = np.array(self.residue_map, dtype="U3")
         res_names = res_type_map_array[res_types]
 
         chain_ids = self.g.nodes["prot_atom"].data["chain_id"].numpy()
@@ -686,7 +699,7 @@ class SampledSystem:
                 traj_mols["lig"].append(rdkit_mol)
                 
             if prot:
-                bt_arr = self.construct_system_array(g=g_dummy)
+                bt_arr = self.get_protein_array(g=g_dummy)
                 traj_mols["prot"].append(bt_arr)
                 
         return traj_mols

@@ -817,6 +817,8 @@ class VectorField(nn.Module):
         # if visualizing, generate trajectory dict for each example
         per_system_traj = [ {} for _ in range(g.batch_size) ]
         for m in task.modalities_present:
+            if m.name not in traj or len(traj[m.name]) == 0:
+                continue
             batch_traj = torch.stack(traj[m.name], dim=0) # tensor of shape (n_timesteps, n_nodes/n_edges, *)
             batch_pred_traj = torch.stack(traj[f'{m.name}_pred'], dim=0) 
             if m.is_node:

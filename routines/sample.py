@@ -118,8 +118,6 @@ def write_arrays_to_pdb(arrays, filename):
     struc.io.pdbx.set_structure(cif_file, arr_stack)
     cif_file.write(filename)
 
-# /net/galaxy/home/koes/icd3/moldiff/OMTRA/outputs/2025-05-04/denovo_multiupdate_2025-05-04_20-44-972429
-# /net/galaxy/home/koes/tjkatz/OMTRA/outputs/2025-05-04/denovo_multiupdate_2025-05-04_20-44-972429
 def main(args):
     # 1) resolve checkpoint path
     ckpt_path = args.checkpoint
