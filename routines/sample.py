@@ -112,7 +112,7 @@ def write_mols_to_sdf(mols, filename):
             writer.write(mol)
     writer.close()
 
-def write_arrays_to_pdb(arrays, filename):
+def write_arrays_to_cif(arrays, filename):
     cif_file = CIFFile()
     arr_stack = struc.stack(arrays)
     struc.io.pdbx.set_structure(cif_file, arr_stack)
