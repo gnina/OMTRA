@@ -350,16 +350,23 @@ class PlinderDataset(ZarrDataset):
         return system
 
     def encode_atom_names(
-        self, atom_names: np.ndarray, elements: np.ndarray, res_names: np.ndarray
+        self,
+        atom_names: np.ndarray,
+        elements: np.ndarray,      # (unused here)
+        res_names: np.ndarray      # (unused here)
     ) -> np.ndarray:
-        encoded_atom_names = []
-        for i, atom_name in enumerate(atom_names):
-            if atom_name in self.encode_atom:
-                atom_code = self.encode_atom[atom_name]
-            else:
-                atom_code = self.encode_atom["UNK"]
-            encoded_atom_names.append(atom_code)
-        return np.array(encoded_atom_names)
+        # 1) find all the unique atom_names and the mapping back
+        unique_names, inverse = np.unique(atom_names, return_inverse=True)
+
+        # 2) do one dict-lookup per unique name
+        unk_code = self.encode_atom["UNK"]
+        unique_codes = np.array([
+            self.encode_atom.get(name, unk_code)
+            for name in unique_names
+        ], dtype=np.int64)
+
+        # 3) expand back out to the original shape
+        return unique_codes[inverse]
 
     def encode_elements(self, elements: np.ndarray) -> np.ndarray:
         encoded_elements = []
@@ -369,15 +376,19 @@ class PlinderDataset(ZarrDataset):
         return np.array(encoded_elements)
 
     def encode_res_names(self, res_names: np.ndarray) -> np.ndarray:
-        encoded_residues = []
-        for res in res_names:
-            if res not in self.encode_residue:
-                sub = aa_substitutions.get(res, "UNK")
-                code = self.encode_residue[sub]
-            else:
-                code = self.encode_residue[res]
-            encoded_residues.append(code)
-        return np.array(encoded_residues)
+        # Vectorized mapping of residue names to integer codes
+        # 1. Extract uniques and inverse indices
+        unique_names, inverse = np.unique(res_names, return_inverse=True)
+        # 2. Map each unique name to its code (with substitutions for unknowns)
+        unk_code = self.encode_residue["UNK"]
+        unique_codes = np.array([
+            self.encode_residue[name]
+            if name in self.encode_residue
+            else self.encode_residue.get(aa_substitutions.get(name, "UNK"), unk_code)
+            for name in unique_names
+        ], dtype=np.int64)
+        # 3. Reconstruct full array via inverse mapping
+        return unique_codes[inverse]
 
     def get_link_coords(
         self,
