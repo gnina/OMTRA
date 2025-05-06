@@ -433,12 +433,25 @@ class PlinderDataset(ZarrDataset):
             res_id = pocket.res_ids[i]
             pocket_res_identifiers.add((chain_id, res_id))
 
-        pocket_mask = torch.zeros_like(prot_res_ids, dtype=torch.bool)
-        for i in range(len(prot_res_ids)):
-            chain_id = holo.chain_ids[i]
-            res_id = prot_res_ids[i].item()
-            if (chain_id, res_id) in pocket_res_identifiers:
-                pocket_mask[i] = True
+        # 1. turn your pocket set into a small (M×2) int tensor
+        pocket_pairs = [(chain_to_idx[c], r) for c, r in pocket_res_identifiers]
+        pocket_pairs_tensor = torch.tensor(pocket_pairs, device=prot_res_ids.device, dtype=torch.long)  # (M,2)
+
+        # 2. stack your per‐node (chain, res) into an (N×2) tensor
+        prot_pairs = torch.stack((prot_chain_ids, prot_res_ids), dim=1)  # (N,2)
+
+        # 3. compare all pairs at once, then reduce
+        #    -> (N,1,2) == (1,M,2)  →  (N,M,2) boolean
+        eq = prot_pairs.unsqueeze(1) == pocket_pairs_tensor.unsqueeze(0)
+        #    want rows where *both* entries match, then any match across M
+        pocket_mask = eq.all(dim=2).any(dim=1)   # (N,)
+
+        # pocket_mask = torch.zeros_like(prot_res_ids, dtype=torch.bool)
+        # for i in range(len(prot_res_ids)):
+        #     chain_id = holo.chain_ids[i]
+        #     res_id = prot_res_ids[i].item()
+        #     if (chain_id, res_id) in pocket_res_identifiers:
+        #         pocket_mask[i] = True
 
         node_data["prot_atom"] = {
             "x_1_true": prot_coords[pocket_mask],
