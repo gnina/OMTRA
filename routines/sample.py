@@ -11,6 +11,8 @@ from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.eval.register import get_eval
 import json
+from biotite.structure.io.pdbx import CIFFile
+import biotite.structure as struc
 
 from omtra.utils import omtra_root
 from pathlib import Path
@@ -110,6 +112,12 @@ def write_mols_to_sdf(mols, filename):
             writer.write(mol)
     writer.close()
 
+def write_arrays_to_pdb(arrays, filename):
+    cif_file = CIFFile()
+    arr_stack = struc.stack(arrays)
+    struc.io.pdbx.set_structure(cif_file, arr_stack)
+    cif_file.write(filename)
+
 def main(args):
     # 1) resolve checkpoint path
     ckpt_path = args.checkpoint
@@ -177,12 +185,15 @@ def main(args):
 
     if args.visualize:
         for i, sys in enumerate(sampled_systems):
-            xt_traj_mols = sys.build_traj(ep_traj=False, lig=True)
-            xhat_traj_mols = sys.build_traj(ep_traj=True, lig=True)
+            xt_traj_mols = sys.build_traj(ep_traj=False, lig=True, prot=True)
+            xhat_traj_mols = sys.build_traj(ep_traj=True, lig=True, prot=True)
             xt_file = output_dir / f"{task_name}_xt_traj_{i}.sdf"
             xhat_file = output_dir / f"{task_name}_xhat_traj_{i}.sdf"
             write_mols_to_sdf(xt_traj_mols['lig'], xt_file)
             write_mols_to_sdf(xhat_traj_mols['lig'], xhat_file)
+            
+            write_arrays_to_pdb(xt_traj_mols['prot'], xt_file.with_suffix('.cif'))
+            write_arrays_to_pdb(xhat_traj_mols['prot'], xhat_file.with_suffix('.cif'))
     else:
         rdkit_mols = [ s.get_rdkit_ligand() for s in sampled_systems ]
         output_file = output_dir / f"{task_name}_samples.sdf"
