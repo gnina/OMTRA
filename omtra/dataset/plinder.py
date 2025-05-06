@@ -369,11 +369,13 @@ class PlinderDataset(ZarrDataset):
         return unique_codes[inverse]
 
     def encode_elements(self, elements: np.ndarray) -> np.ndarray:
-        encoded_elements = []
-        for element in elements:
-            code = self.encode_element[element]
-            encoded_elements.append(code)
-        return np.array(encoded_elements)
+        # Vectorized mapping of element symbols to integer codes
+        unique_elems, inverse = np.unique(elements, return_inverse=True)
+        unique_codes = np.array(
+            [self.encode_element[elem] for elem in unique_elems],
+            dtype=np.int64
+        )
+        return unique_codes[inverse]
 
     def encode_res_names(self, res_names: np.ndarray) -> np.ndarray:
         # Vectorized mapping of residue names to integer codes
