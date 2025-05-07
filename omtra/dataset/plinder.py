@@ -34,8 +34,9 @@ from typing import List, Dict, Tuple, Any, Optional
 import pandas as pd
 import numpy as np
 import biotite.structure as struc
-from omtra.constants import _DEFAULT_DISTANCE_RANGE
+from omtra.constants import DEFAULT_DISTANCE_RANGE
 import functools
+from scipy.spatial.distance import cdist
 
 import warnings
 
@@ -45,8 +46,6 @@ warnings.filterwarnings(
     message="The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.*",
     module="zarr.codecs.vlen_utf8"
 )
-
-from line_profiler import LineProfiler
 
 
 class PlinderDataset(ZarrDataset):
@@ -409,7 +408,6 @@ class PlinderDataset(ZarrDataset):
             )
         return x_0
 
-    @profile
     def convert_protein(
         self,
         holo: StructureData,
@@ -508,61 +506,85 @@ class PlinderDataset(ZarrDataset):
             else:
                 encoded_charges.append(charge_type_map[charge])
         return torch.Tensor(encoded_charges).long()
-
+    
     def infer_covalent_bonds(
         self,
         ligand: LigandData,
         pocket: StructureData,
         atom_type_map: List[str],
         )   -> Tuple[torch.Tensor, torch.Tensor]:
-        ligand_arr = ligand.to_atom_array(atom_type_map)
-        pocket_arr = pocket.to_atom_array()
-        
-        prot_atom_covalent_lig = []
-        prot_res_covalent_lig = []
-        dists = struc.distance(
-            ligand_arr.coord[:, np.newaxis, :], pocket_arr.coord[np.newaxis, :, :]
+        # 1) pull out arrays
+        lig = ligand.to_atom_array(atom_type_map)
+        rec = pocket.to_atom_array()
+
+        # element labels
+        lig_elems = np.array([a.element for a in lig])        # shape (L,)
+        rec_elems = np.array([a.element for a in rec])        # shape (R,)
+
+        # 2) compute full distance matrix once
+        dists = cdist(
+            lig.coord,    # (L,1,3)
+            rec.coord     # (1,R,3)
+        )                              # → (L,R)
+
+        # 3) build a mask of “allowed bonds” by iterating only DEFAULT_DISTANCE_RANGE
+        masks = []
+        for (e1, e2), (d_min, d_max) in DEFAULT_DISTANCE_RANGE.items():
+            # ligand‐side eq e1, rec‐side eq e2
+            m_l1 = (lig_elems == e1)    # (L,)
+            m_r2 = (rec_elems == e2)    # (R,)
+            # ligand‐side eq e2, rec‐side eq e1  (the “reverse” case)
+            m_l2 = (lig_elems == e2)
+            m_r1 = (rec_elems == e1)
+
+            # skip if neither direction can possibly match
+            if not ((m_l1.any() and m_r2.any()) or (m_l2.any() and m_r1.any())):
+                continue
+
+            # ligand e1 ↔ rec e2
+            mask12 = m_l1[:, None] & m_r2[None, :]
+            # ligand e2 ↔ rec e1
+            mask21 = m_l2[:, None] & m_r1[None, :]
+
+            # apply the same distance thresholds to both
+            mask12 = mask12 & (dists >= d_min) & (dists <= d_max)
+            mask21 = mask21 & (dists >= d_min) & (dists <= d_max)
+
+            masks.append(mask12 | mask21)
+
+        if not masks:
+            # no possible bonds
+            empty = torch.zeros((2,0), dtype=torch.long)
+            return empty, empty
+
+        # 4) combine all masks into one
+        mask_all = np.logical_or.reduce(masks)  # shape (L,R)
+
+        # 5) extract the i,j indices of True entries
+        lig_idx, rec_idx = np.nonzero(mask_all)  # arrays of equal length N
+
+        # 6) build atom-level edges
+        prot_atom = torch.tensor(
+            np.vstack([rec_idx, lig_idx]), dtype=torch.long
         )
-        for i, lig_atom in enumerate(ligand_arr):
-            for j, rec_atom in enumerate(pocket_arr):
-                dist_range = _DEFAULT_DISTANCE_RANGE.get(
-                    (lig_atom.element, rec_atom.element)
-                ) or _DEFAULT_DISTANCE_RANGE.get((rec_atom.element, lig_atom.element))
-                if dist_range is None:
-                    continue
-                else:
-                    min_dist, max_dist = dist_range
-                dist = dists[i, j]
-                if dist >= min_dist and dist <= max_dist:
-                    prot_atom_covalent_lig.append([j, i])
-                    res_id = pocket_arr.get_annotation("res_id")[j]
-                    chain_id = pocket_arr.get_annotation("chain_id")[j]
-                    
-                    res_ids = pocket.backbone.res_ids
-                    chain_ids = pocket.backbone.chain_ids
-                    
-                    res_id_mask = (res_ids == res_id)
-                    chain_id_mask = (chain_ids == chain_id)
-                    combined_mask = res_id_mask & chain_id_mask
-                    
-                    res_idx = np.where(combined_mask)[0]
-                    if len(res_idx > 0):
-                        prot_res_covalent_lig.append([res_idx[0], i])
-                        
-                   
-        if prot_atom_covalent_lig:
-            prot_atom_covalent_lig = torch.tensor(prot_atom_covalent_lig, dtype=torch.long).t()
-        else:
-            prot_atom_covalent_lig = torch.zeros((2, 0), dtype=torch.long)
+
+        backbone = pocket.backbone
+        res_index = {
+            (rid, cid): idx
+            for idx, (rid, cid) in enumerate(zip(backbone.res_ids, backbone.chain_ids))
+        }
+
+        # 7) map each rec_idx → residue index via our dict
+        rec_res_ids   = rec.get_annotation("res_id")[rec_idx]
+        rec_chain_ids = rec.get_annotation("chain_id")[rec_idx]
+        res_idx = [res_index[(rid, cid)] for rid, cid in zip(rec_res_ids, rec_chain_ids)]
+
+        prot_res = torch.tensor(
+            np.vstack([res_idx, lig_idx]), dtype=torch.long
+        )
+
+        return prot_atom, prot_res
         
-        if prot_res_covalent_lig:
-            prot_res_covalent_lig = torch.tensor(prot_res_covalent_lig, dtype=torch.long).t()
-        else:
-            prot_res_covalent_lig = torch.zeros((2, 0), dtype=torch.long)
-                
-        return prot_atom_covalent_lig, prot_res_covalent_lig
-        
-    @profile
     def convert_ligand(
         self,
         ligand: LigandData,
@@ -787,7 +809,6 @@ class PlinderDataset(ZarrDataset):
 
         return node_data, edge_idxs, edge_data
 
-    @profile
     def convert_system(
         self,
         system: SystemData,
@@ -837,7 +858,6 @@ class PlinderDataset(ZarrDataset):
 
         return node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask
 
-    @profile
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
         task_class: Task = task_name_to_class(task_name)

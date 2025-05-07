@@ -404,3 +404,6 @@ _DEFAULT_DISTANCE_RANGE = {
     ("SE", "SE"): (2.340 - 2 * 0.024, 2.340 + 2 * 0.024),
     ("SI", "SE"): (2.359 - 2 * 0.012, 2.359 + 2 * 0.012),
 }
+
+DEFAULT_DISTANCE_RANGE = dict(_DEFAULT_DISTANCE_RANGE)
+DEFAULT_DISTANCE_RANGE.update({(b,a):rng for (a,b), rng in _DEFAULT_DISTANCE_RANGE.items()})
