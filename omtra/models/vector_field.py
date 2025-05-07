@@ -34,7 +34,7 @@ from omtra.constants import (
 
 from omtra.data.graph.utils import get_batch_idxs
 
-# from line_profiler import LineProfiler
+# from line_profiler import LineProfiler, profile
 
 class VectorField(nn.Module):
     def __init__(
@@ -342,7 +342,6 @@ class VectorField(nn.Module):
                 rbf_dmax=rbf_dmax,
             )
 
-    # @profile
     def forward(
         self,
         g: dgl.DGLGraph,
@@ -537,6 +536,7 @@ class VectorField(nn.Module):
 
             return dst_dict
 
+    # @profile
     def denoise_graph(
         self,
         g: dgl.DGLHeteroGraph,

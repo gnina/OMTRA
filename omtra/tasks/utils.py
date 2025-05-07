@@ -10,6 +10,9 @@ from omtra.data.graph.utils import get_batch_info, get_edges_per_batch
 from omtra.data.graph import get_edges_for_task
 from omtra.data.graph import to_canonical_etype
 
+# from line_profiler import LineProfiler, profile
+
+# @profile
 def build_edges(g: dgl.DGLHeteroGraph, 
                 task: Task, 
                 node_batch_idx: Dict[str, torch.Tensor], 

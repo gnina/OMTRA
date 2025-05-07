@@ -12,6 +12,7 @@ from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 
 # most taken from flowmol gvp (moreflowmol branch)
 # heteroconv adapted from GVPConv in flowmol gvp
+# from line_profiler import LineProfiler, profile
 
 
 # helper functions
@@ -107,6 +108,10 @@ class GVP(nn.Module):
         )
         self.Wu = nn.Parameter(self.Wu)
 
+        if isinstance(vectors_activation, nn.Sigmoid):
+            self.fuse_activation = True
+        else:
+            self.fuse_activation = False
         self.vectors_activation = vectors_activation
 
         self.to_feats_out = nn.Sequential(
@@ -125,6 +130,7 @@ class GVP(nn.Module):
 
         # self.scalar_to_vector_gates = nn.Linear(dim_feats_out, dim_vectors_out) if vector_gating else None
 
+    # @profile
     def forward(self, data):
         feats, vectors = data
         b, n, _, v, c = *feats.shape, *vectors.shape
@@ -135,16 +141,29 @@ class GVP(nn.Module):
         assert c == 3 and v == self.dim_vectors_in, "vectors have wrong dimensions"
         assert n == self.dim_feats_in, "scalar features have wrong dimensions"
 
-        Vh = einsum(
-            "b v c, v h -> b h c", vectors, self.Wh
-        )  # has shape (batch_size, dim_h, 3)
+        # Vh = einsum(
+        #     "b v c, v h -> b h c", vectors, self.Wh
+        # )  # has shape (batch_size, dim_h, 3)
+        # 1) move channel dim to front
+        v = vectors.transpose(1, 2)            # [B, C, V]
+        # 2) batched matmul
+        Vh_mat = torch.matmul(v, self.Wh)      # [B, C, H]
+        # 3) restore to [B, H, C]
+        Vh = Vh_mat.transpose(1, 2)      # [B, H, C]
 
         # if we are including cross-product features, compute them here
         if self.n_cp_feats > 0:
             # convert dim_vectors_in vectors to n_cp_feats*2 vectors
-            Vcp = einsum(
-                "b v c, v p -> b p c", vectors, self.Wcp
-            )  # has shape (batch_size, n_cp_feats*2, 3)
+            # Vcp = einsum(
+            #     "b v c, v p -> b p c", vectors, self.Wcp
+            # )  # has shape (batch_size, n_cp_feats*2, 3)
+
+            # compute Vcp via matmul instead of einsum
+            v_ = vectors.transpose(1, 2)               # [B, C, V]
+            Vcp_mat = torch.matmul(v_, self.Wcp)       # [B, C, P]
+            Vcp = Vcp_mat.transpose(1, 2)              # [B, P, C]
+
+
             # split the n_cp_feats*2 vectors into two sets of n_cp_feats vectors
             cp_src, cp_dst = torch.split(
                 Vcp, self.n_cp_feats, dim=1
@@ -159,9 +178,13 @@ class GVP(nn.Module):
                 (Vh, cp), dim=1
             )  # has shape (batch_size, dim_h + n_cp_feats, 3)
 
-        Vu = einsum(
-            "b h c, h u -> b u c", Vh, self.Wu
-        )  # has shape (batch_size, dim_vectors_out, 3)
+        # Vu = einsum(
+        #     "b h c, h u -> b u c", Vh, self.Wu
+        # )  # has shape (batch_size, dim_vectors_out, 3)
+        # compute Vu via matmul instead of einsum
+        vh_ = Vh.transpose(1, 2)                   # [B, C, H]
+        Vu_mat = torch.matmul(vh_, self.Wu)        # [B, C, U]
+        Vu = Vu_mat.transpose(1, 2)                # [B, U, C]
 
         sh = _norm_no_nan(Vh)
 
@@ -530,6 +553,7 @@ class HeteroGVPConv(nn.Module):
             for ntype in self.node_types:
                 self.message_expansion[ntype] = nn.Identity()
 
+    # @profile
     def forward(
         self,
         g: dgl.DGLGraph,
