@@ -10,6 +10,7 @@ import functools
 from pathlib import Path
 from omtra.utils import omtra_root
 import yaml
+from collections import defaultdict
 
 allowed_bonds = {
     "H": {0: 1, 1: 0, -1: 0},
@@ -42,12 +43,13 @@ def compute_validity(
     sampled_systems: List[SampledSystem], return_counts: bool = False
 ) -> Dict[str, Any]:
     n_valid = 0
+    n_connected = 0
     num_components = []
     frag_fracs = []
-    error_message = Counter()
+    error_messages = defaultdict(int)
     for sys in sampled_systems:
         if sys.get_n_lig_atoms() == 0:
-            error_message[4] += 1
+            error_messages['empty'] += 1
             continue
         rdmol = sys.get_rdkit_ligand()
         if rdmol is not None:
@@ -57,29 +59,33 @@ def compute_validity(
                 )
                 num_components.append(len(mol_frags))
                 if len(mol_frags) > 1:
-                    error_message[4] += 1
+                    error_messages['disconnected'] += 1
                 largest_mol = max(
                     mol_frags, default=rdmol, key=lambda m: m.GetNumAtoms()
                 )
                 largest_mol_n_atoms = largest_mol.GetNumAtoms()
                 largest_frag_frac = largest_mol_n_atoms / sys.get_n_lig_atoms()
                 frag_fracs.append(largest_frag_frac)
-                Chem.SanitizeMol(largest_mol)
+                n_connected += int(len(mol_frags) == 1)
+                # Chem.SanitizeMol(largest_mol)
+                Chem.SanitizeMol(rdmol)
                 # smiles = Chem.MolToSmiles(largest_mol)
                 n_valid += 1
-                error_message[-1] += 1
+                error_messages['no error'] += 1
             except Chem.rdchem.AtomValenceException:
-                error_message[1] += 1
+                error_messages['AtomValence'] += 1
                 # print("Valence error in GetmolFrags")
             except Chem.rdchem.KekulizeException:
-                error_message[2] += 1
+                error_messages['Kekulize'] += 1
                 # print("Can't kekulize molecule")
             except Chem.rdchem.AtomKekulizeException or ValueError:
-                error_message[3] += 1
-    print(
-        f"Error messages: AtomValence {error_message[1]}, Kekulize {error_message[2]}, other {error_message[3]}, "
-        f" -- No error {error_message[-1]}"
-    )
+                error_messages['other'] += 1
+    
+    error_messages['total'] = len(sampled_systems)
+    keys = sorted(error_messages.keys())
+    error_str_components = [ f'{k}: {error_messages[k]}' for k in keys ]
+    error_str = ', '.join(error_str_components)
+    print(error_str)
 
     frac_valid_mols = n_valid / len(sampled_systems)
     avg_frag_frac = sum(frag_fracs) / len(frag_fracs)
@@ -101,6 +107,7 @@ def compute_validity(
             "frac_valid_mols": frac_valid_mols,
             "avg_frag_frac": avg_frag_frac,
             "avg_num_components": avg_num_components,
+            "frac_connected": n_connected / len(sampled_systems),
         }
     return metrics
 
@@ -174,6 +181,12 @@ def check_stability(sys: SampledSystem) -> Tuple[int, bool, int]:
         valid_valencies = charge_to_valid_valencies[charge]
         if valency in valid_valencies:
             n_stable_atoms += 1
+
+    n_real_atoms = len(atom_types) - n_fake_atoms
+    if n_stable_atoms == n_real_atoms:
+        mol_stable = True
+    else:
+        mol_stable = False
 
     return n_stable_atoms, mol_stable, n_fake_atoms
 

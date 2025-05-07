@@ -34,8 +34,9 @@ from typing import List, Dict, Tuple, Any, Optional
 import pandas as pd
 import numpy as np
 import biotite.structure as struc
-from omtra.constants import _DEFAULT_DISTANCE_RANGE
+from omtra.constants import DEFAULT_DISTANCE_RANGE
 import functools
+from scipy.spatial.distance import cdist
 
 import warnings
 
@@ -348,34 +349,47 @@ class PlinderDataset(ZarrDataset):
         return system
 
     def encode_atom_names(
-        self, atom_names: np.ndarray, elements: np.ndarray, res_names: np.ndarray
+        self,
+        atom_names: np.ndarray,
+        elements: np.ndarray,      # (unused here)
+        res_names: np.ndarray      # (unused here)
     ) -> np.ndarray:
-        encoded_atom_names = []
-        for i, atom_name in enumerate(atom_names):
-            if atom_name in self.encode_atom:
-                atom_code = self.encode_atom[atom_name]
-            else:
-                atom_code = self.encode_atom["UNK"]
-            encoded_atom_names.append(atom_code)
-        return np.array(encoded_atom_names)
+        # 1) find all the unique atom_names and the mapping back
+        unique_names, inverse = np.unique(atom_names, return_inverse=True)
+
+        # 2) do one dict-lookup per unique name
+        unk_code = self.encode_atom["UNK"]
+        unique_codes = np.array([
+            self.encode_atom.get(name, unk_code)
+            for name in unique_names
+        ], dtype=np.int64)
+
+        # 3) expand back out to the original shape
+        return unique_codes[inverse]
 
     def encode_elements(self, elements: np.ndarray) -> np.ndarray:
-        encoded_elements = []
-        for element in elements:
-            code = self.encode_element[element]
-            encoded_elements.append(code)
-        return np.array(encoded_elements)
+        # Vectorized mapping of element symbols to integer codes
+        unique_elems, inverse = np.unique(elements, return_inverse=True)
+        unique_codes = np.array(
+            [self.encode_element[elem] for elem in unique_elems],
+            dtype=np.int64
+        )
+        return unique_codes[inverse]
 
     def encode_res_names(self, res_names: np.ndarray) -> np.ndarray:
-        encoded_residues = []
-        for res in res_names:
-            if res not in self.encode_residue:
-                sub = aa_substitutions.get(res, "UNK")
-                code = self.encode_residue[sub]
-            else:
-                code = self.encode_residue[res]
-            encoded_residues.append(code)
-        return np.array(encoded_residues)
+        # Vectorized mapping of residue names to integer codes
+        # 1. Extract uniques and inverse indices
+        unique_names, inverse = np.unique(res_names, return_inverse=True)
+        # 2. Map each unique name to its code (with substitutions for unknowns)
+        unk_code = self.encode_residue["UNK"]
+        unique_codes = np.array([
+            self.encode_residue[name]
+            if name in self.encode_residue
+            else self.encode_residue.get(aa_substitutions.get(name, "UNK"), unk_code)
+            for name in unique_names
+        ], dtype=np.int64)
+        # 3. Reconstruct full array via inverse mapping
+        return unique_codes[inverse]
 
     def get_link_coords(
         self,
@@ -432,12 +446,18 @@ class PlinderDataset(ZarrDataset):
             res_id = pocket.res_ids[i]
             pocket_res_identifiers.add((chain_id, res_id))
 
-        pocket_mask = torch.zeros_like(prot_res_ids, dtype=torch.bool)
-        for i in range(len(prot_res_ids)):
-            chain_id = holo.chain_ids[i]
-            res_id = prot_res_ids[i].item()
-            if (chain_id, res_id) in pocket_res_identifiers:
-                pocket_mask[i] = True
+        # 1. turn your pocket set into a small (M×2) int tensor
+        pocket_pairs = [(chain_to_idx[c], r) for c, r in pocket_res_identifiers]
+        pocket_pairs_tensor = torch.tensor(pocket_pairs, device=prot_res_ids.device, dtype=torch.long)  # (M,2)
+
+        # 2. stack your per‐node (chain, res) into an (N×2) tensor
+        prot_pairs = torch.stack((prot_chain_ids, prot_res_ids), dim=1)  # (N,2)
+
+        # 3. compare all pairs at once, then reduce
+        #    -> (N,1,2) == (1,M,2)  →  (N,M,2) boolean
+        eq = prot_pairs.unsqueeze(1) == pocket_pairs_tensor.unsqueeze(0)
+        #    want rows where *both* entries match, then any match across M
+        pocket_mask = eq.all(dim=2).any(dim=1)   # (N,)
 
         node_data["prot_atom"] = {
             "x_1_true": prot_coords[pocket_mask],
@@ -461,12 +481,13 @@ class PlinderDataset(ZarrDataset):
             dtype=torch.long,
         )
 
-        backbone_pocket_mask = torch.zeros_like(backbone_res_ids, dtype=torch.bool)
-        for i in range(len(backbone_res_ids)):
-            chain_id = holo.backbone.chain_ids[i]
-            res_id = backbone_res_ids[i].item()
-            if (chain_id, res_id) in pocket_res_identifiers:
-                backbone_pocket_mask[i] = True
+        # Vectorized construction of backbone_pocket_mask
+        # 1. Stack backbone (chain_idx, res_id) pairs into a (N_bb, 2) tensor
+        backbone_pairs = torch.stack((backbone_chain_ids, backbone_res_ids), dim=1)
+        # 2. Compare each backbone pair against all pocket pairs (broadcasted)
+        eq_bb = backbone_pairs.unsqueeze(1) == pocket_pairs_tensor.unsqueeze(0)
+        # 3. Mask true where both chain and residue match any pocket pair
+        backbone_pocket_mask = eq_bb.all(dim=2).any(dim=1)
 
         node_data["prot_res"] = {
             "x_1_true": backbone_coords[backbone_pocket_mask],
@@ -487,63 +508,85 @@ class PlinderDataset(ZarrDataset):
             else:
                 encoded_charges.append(charge_type_map[charge])
         return torch.Tensor(encoded_charges).long()
-
+    
     def infer_covalent_bonds(
         self,
         ligand: LigandData,
         pocket: StructureData,
         atom_type_map: List[str],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        ligand_arr = ligand.to_atom_array(atom_type_map)
-        pocket_arr = pocket.to_atom_array()
+        )   -> Tuple[torch.Tensor, torch.Tensor]:
+        # 1) pull out arrays
+        lig = ligand.to_atom_array(atom_type_map)
+        rec = pocket.to_atom_array()
 
-        prot_atom_covalent_lig = []
-        prot_res_covalent_lig = []
-        dists = struc.distance(
-            ligand_arr.coord[:, np.newaxis, :], pocket_arr.coord[np.newaxis, :, :]
+        # element labels
+        lig_elems = np.array([a.element for a in lig])        # shape (L,)
+        rec_elems = np.array([a.element for a in rec])        # shape (R,)
+
+        # 2) compute full distance matrix once
+        dists = cdist(
+            lig.coord,    # (L,1,3)
+            rec.coord     # (1,R,3)
+        )                              # → (L,R)
+
+        # 3) build a mask of “allowed bonds” by iterating only DEFAULT_DISTANCE_RANGE
+        masks = []
+        for (e1, e2), (d_min, d_max) in DEFAULT_DISTANCE_RANGE.items():
+            # ligand‐side eq e1, rec‐side eq e2
+            m_l1 = (lig_elems == e1)    # (L,)
+            m_r2 = (rec_elems == e2)    # (R,)
+            # ligand‐side eq e2, rec‐side eq e1  (the “reverse” case)
+            m_l2 = (lig_elems == e2)
+            m_r1 = (rec_elems == e1)
+
+            # skip if neither direction can possibly match
+            if not ((m_l1.any() and m_r2.any()) or (m_l2.any() and m_r1.any())):
+                continue
+
+            # ligand e1 ↔ rec e2
+            mask12 = m_l1[:, None] & m_r2[None, :]
+            # ligand e2 ↔ rec e1
+            mask21 = m_l2[:, None] & m_r1[None, :]
+
+            # apply the same distance thresholds to both
+            mask12 = mask12 & (dists >= d_min) & (dists <= d_max)
+            mask21 = mask21 & (dists >= d_min) & (dists <= d_max)
+
+            masks.append(mask12 | mask21)
+
+        if not masks:
+            # no possible bonds
+            empty = torch.zeros((2,0), dtype=torch.long)
+            return empty, empty
+
+        # 4) combine all masks into one
+        mask_all = np.logical_or.reduce(masks)  # shape (L,R)
+
+        # 5) extract the i,j indices of True entries
+        lig_idx, rec_idx = np.nonzero(mask_all)  # arrays of equal length N
+
+        # 6) build atom-level edges
+        prot_atom = torch.tensor(
+            np.vstack([rec_idx, lig_idx]), dtype=torch.long
         )
-        for i, lig_atom in enumerate(ligand_arr):
-            for j, rec_atom in enumerate(pocket_arr):
-                dist_range = _DEFAULT_DISTANCE_RANGE.get(
-                    (lig_atom.element, rec_atom.element)
-                ) or _DEFAULT_DISTANCE_RANGE.get((rec_atom.element, lig_atom.element))
-                if dist_range is None:
-                    continue
-                else:
-                    min_dist, max_dist = dist_range
-                dist = dists[i, j]
-                if dist >= min_dist and dist <= max_dist:
-                    prot_atom_covalent_lig.append([j, i])
-                    res_id = pocket_arr.get_annotation("res_id")[j]
-                    chain_id = pocket_arr.get_annotation("chain_id")[j]
 
-                    res_ids = pocket.backbone.res_ids
-                    chain_ids = pocket.backbone.chain_ids
+        backbone = pocket.backbone
+        res_index = {
+            (rid, cid): idx
+            for idx, (rid, cid) in enumerate(zip(backbone.res_ids, backbone.chain_ids))
+        }
 
-                    res_id_mask = res_ids == res_id
-                    chain_id_mask = chain_ids == chain_id
-                    combined_mask = res_id_mask & chain_id_mask
+        # 7) map each rec_idx → residue index via our dict
+        rec_res_ids   = rec.get_annotation("res_id")[rec_idx]
+        rec_chain_ids = rec.get_annotation("chain_id")[rec_idx]
+        res_idx = [res_index[(rid, cid)] for rid, cid in zip(rec_res_ids, rec_chain_ids)]
 
-                    res_idx = np.where(combined_mask)[0]
-                    if len(res_idx > 0):
-                        prot_res_covalent_lig.append([res_idx[0], i])
+        prot_res = torch.tensor(
+            np.vstack([res_idx, lig_idx]), dtype=torch.long
+        )
 
-        if prot_atom_covalent_lig:
-            prot_atom_covalent_lig = torch.tensor(
-                prot_atom_covalent_lig, dtype=torch.long
-            ).t()
-        else:
-            prot_atom_covalent_lig = torch.zeros((2, 0), dtype=torch.long)
-
-        if prot_res_covalent_lig:
-            prot_res_covalent_lig = torch.tensor(
-                prot_res_covalent_lig, dtype=torch.long
-            ).t()
-        else:
-            prot_res_covalent_lig = torch.zeros((2, 0), dtype=torch.long)
-
-        return prot_atom_covalent_lig, prot_res_covalent_lig
-
+        return prot_atom, prot_res
+        
     def convert_ligand(
         self,
         ligand: LigandData,

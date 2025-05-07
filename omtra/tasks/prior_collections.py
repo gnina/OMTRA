@@ -15,7 +15,7 @@ for modality in 'ace':
 ligand_conformer = {
     'lig_x': {
         'type': 'gaussian',
-        'params': {'ot': True}
+        'params': {'ot': True, 'permutation': False}
     }
 }
 

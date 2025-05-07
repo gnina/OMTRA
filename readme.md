@@ -23,18 +23,16 @@ chmod +x build_env.sh
 - [ ] what to do with pharm interaction feature
 - [ ] pharmit dataset chemical space conditoning + predictor?
 - [ ] when training omtra with ligand encoder, inject encoder config from encoder checkpoint
-- [ ] sample counts are really large when training?
-- [ ] task-specific losses
-- [ ] wandb metric groups? how does that work?
-- [ ] need to isolate/replicate dataloader breaking with num_workers > 2
 - [ ] methods for evaluating conformer quality?
-- [ ] smooth task distribution for validation set
-- [ ] fix molecular stability metric
 - [ ] protein-ligand interaction metric? pose check! any others?
 - [ ] add posebusters
-- [ ] don't need flowmol validity stuff for conformer generation / docking
 - [ ] alternative time sampling methods for training (semlaflow, foldflow2)
 - [ ] verify apo-holo alignment
+- [ ] fake atoms
+- [ ] experiment what standard deviation of priors
+- [ ] profile plinder dataset code
+- [ ] profile vector field edge creation/deletion code
+- [ ] turn off self-conditioning and see what happens
 
 
 # How to train?
