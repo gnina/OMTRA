@@ -14,7 +14,9 @@ def build_edges(g: dgl.DGLHeteroGraph,
                 task: Task, 
                 node_batch_idx: Dict[str, torch.Tensor], 
                 graph_config,
-                etype_subset: List[str] = None) -> dgl.DGLHeteroGraph:
+                etype_subset: List[str] = None,
+                lig_only: bool = False,
+                ) -> dgl.DGLHeteroGraph:
     batch_num_nodes, batch_num_edges = get_batch_info(g)
     batch_size = g.batch_size
     
@@ -27,6 +29,10 @@ def build_edges(g: dgl.DGLHeteroGraph,
     for etype in etypes:
         if etype in predetermined_edges or "covalent" in etype:
             continue
+        
+        if lig_only and "lig" not in etype:
+            continue
+        
         src_ntype, _, dst_ntype = to_canonical_etype(etype)
 
         # if we don't have any of the nodes for this edge type, skip it
@@ -49,7 +55,7 @@ def build_edges(g: dgl.DGLHeteroGraph,
     
     return g
 
-def remove_edges(g: dgl.DGLHeteroGraph) -> dgl.DGLHeteroGraph:
+def remove_edges(g: dgl.DGLHeteroGraph, lig_only: bool = False) -> dgl.DGLHeteroGraph:
     batch_num_nodes, batch_num_edges = get_batch_info(g)
     batch_size = g.batch_size
     
@@ -58,6 +64,9 @@ def remove_edges(g: dgl.DGLHeteroGraph) -> dgl.DGLHeteroGraph:
     
     for etype in etypes:
         if etype in predetermined_edges or "covalent" in etype:
+            continue
+        
+        if lig_only and "lig" not in etype:
             continue
         
         if g.num_edges(etype) == 0:

@@ -585,10 +585,11 @@ class VectorField(nn.Module):
                                 g.nodes[ntype].data["x_t"] = node_positions[ntype]
                                 
                         if modality.graph_entity == "edge":
-                            x_diff, d = self.precompute_distances(
-                                g, node_positions
-                            )  # NOTE: consider adding etype arg to precompute dists to avoid recomputing for all etypes
                             etype = modality.entity_name
+                            x_diff, d = self.precompute_distances(
+                                g, node_positions, etype
+                            )  # NOTE: consider adding etype arg to precompute dists to avoid recomputing for all etypes
+                
                             edge_features[etype] = self.edge_updaters[etype][
                                 updater_idx
                             ](
@@ -599,8 +600,8 @@ class VectorField(nn.Module):
                                 etype=etype,
                             )
                     if self.rebuild_edges:
-                        g = remove_edges(g)
-                        g = build_edges(g, task_class, node_batch_idx, self.graph_config)
+                        g = remove_edges(g, lig_only=True)
+                        g = build_edges(g, task_class, node_batch_idx, self.graph_config, lig_only=True)
                         x_diff, d = self.precompute_distances(g)
 
         logits = {}
@@ -671,10 +672,15 @@ class VectorField(nn.Module):
 
         return dst_dict
 
-    def precompute_distances(self, g: dgl.DGLGraph, node_positions=None):
+    def precompute_distances(self, g: dgl.DGLGraph, node_positions=None, etype=None):
         """Precompute the pairwise distances between all nodes in the graph."""
         x_diff = {}
         d = {}
+        if not etype:
+            etypes = self.edge_types
+        else:
+            etypes = [etype]
+            
         with g.local_scope():
             for ntype in self.node_types:
                 if g.num_nodes(ntype) == 0:
@@ -684,7 +690,7 @@ class VectorField(nn.Module):
                 else:
                     g.nodes[ntype].data["x_d"] = node_positions[ntype]
 
-            for etype in self.edge_types:
+            for etype in etypes:
                 if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
                 g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
