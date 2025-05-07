@@ -10,7 +10,9 @@ import itertools
 import numpy as np
 from functools import partial
 import time
+from pathlib import Path
 import hydra
+import os
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
@@ -58,8 +60,14 @@ class OMTRA(pl.LightningModule):
         ligand_encoder: DictConfig = DictConfig({}),
         ligand_encoder_checkpoint: Optional[str] = None,
         prior_config: Optional[DictConfig] = None,
+        k_checkpoints: int = 20,
+        checkpoint_interval: int = 1000,
     ):
         super().__init__()
+
+
+        self.k_checkpoints: int = k_checkpoints
+        self.checkpoint_interval: int = checkpoint_interval
 
         self.dists_file = dists_file
         self.graph_config = graph_config
@@ -143,6 +151,27 @@ class OMTRA(pl.LightningModule):
     #             checksum = torch.sum(param).item()
     #             print(f"Rank {rank}, param {name}, shape {param.shape}, checksum {checksum:.4f}")
 
+    def manual_checkpoint(self, batch_idx: int):
+
+        if batch_idx % self.checkpoint_interval == 0 and batch_idx != 0:
+            hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
+            log_dir = hydra_cfg['runtime']['output_dir']
+            checkpoint_dir = Path(log_dir) / "checkpoints"
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+            current_checkpoints = list(checkpoint_dir.glob("*.ckpt"))
+            current_checkpoints.sort(key=lambda x: x.stem.split("_")[-1])
+            if len(current_checkpoints) >= self.k_checkpoints:
+                # remove the oldest checkpoint
+                oldest_checkpoint = current_checkpoints[0]
+                oldest_checkpoint.unlink()
+
+            checkpoint_path = checkpoint_dir / f'batch_{batch_idx}.ckpt'
+            print('saving checkpoint to ', checkpoint_path, flush=True)
+            self.trainer.save_checkpoint(str(checkpoint_path))
+            print(f'Saved checkpoint to {checkpoint_path}')
+                
+    
     def configure_loss_fns(self):
         if self.time_scaled_loss:
             reduction = "none"
@@ -171,10 +200,13 @@ class OMTRA(pl.LightningModule):
     def training_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
 
+        # print(f"training step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
+        self.manual_checkpoint(batch_idx)
+
         # get the total batch size across all devices
         local_batch_size = torch.tensor([g.batch_size], device=g.device)
         all_batch_counts = self.all_gather(local_batch_size)
-        total_batch_count = all_batch_counts.sum().item()
+        total_batch_count = all_batch_counts.sum().item() / 1000.0
 
         # log the total sample count
         if self.global_rank == 0:
@@ -201,12 +233,20 @@ class OMTRA(pl.LightningModule):
             total_loss = total_loss + 1.0 * loss_val
 
         # train_log_dict["train_total_loss"] = total_loss
-        self.log_dict(train_log_dict, sync_dist=True)
+        train_log_dict = add_task_prefix(train_log_dict, task_name)
+        self.log_dict(train_log_dict, sync_dist=False, on_step=True)
+        self.log(
+            f"{task_name}/train_total_loss",
+            total_loss,
+            prog_bar=False,
+            sync_dist=False,
+            on_step=True,
+        )
         self.log(
             "train_total_loss",
             total_loss,
             prog_bar=True,
-            sync_dist=True,
+            sync_dist=False,
             on_step=True,
         )
 
@@ -215,16 +255,20 @@ class OMTRA(pl.LightningModule):
     def validation_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
 
+        # print(f"validation step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
+        device = g.device
         task = task_name_to_class(task_name)
-        if set(task.groups_present) == set(task.groups_generated):
+        if task.unconditional:
             # if the task is purely unconditional, g_list is None
             g_list = None
+            n_replicates = 2*g.batch_size
         else:
             g_list = dgl.unbatch(g)
+            n_replicates = 2
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=20)
+        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=200, device=device)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         # TODO: compute evals and log them / do we want to log them separately for each task?
@@ -233,7 +277,7 @@ class OMTRA(pl.LightningModule):
         
         if metrics:
             metrics = add_task_prefix(metrics, task_name)
-            self.log_dict(metrics, sync_dist=True, batch_size=1)
+            self.log_dict(metrics, sync_dist=True, batch_size=1, on_step=True)
         self.train()
         
         return 0.0
@@ -330,8 +374,7 @@ class OMTRA(pl.LightningModule):
     ):
         # TODO: support arbitrary alpha and beta functions, independently for each modality
         modalities_generated = task_class.modalities_generated
-        alpha_t = {modality.name: t for modality in modalities_generated}
-        beta_t = {modality.name: 1 - t for modality in modalities_generated}
+        alpha_t, beta_t = self.interpolant_scheduler.weights(t, task_class)
 
         # for all modalities being generated, sample the conditional path
         conditonal_path_fns = get_conditional_path_fns(
@@ -399,6 +442,7 @@ class OMTRA(pl.LightningModule):
         unconditional_n_atoms_dist: str = "plinder",  # distribution to use for sampling number of atoms in unconditional tasks
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
+        visualize=False,
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -415,7 +459,7 @@ class OMTRA(pl.LightningModule):
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
-        if set(groups_generated) != set(groups_present) and g_list is None:
+        if not task.unconditional and g_list is None:
             raise ValueError(
                 f"Task {task_name} requires a user-provided graphs with conditional information, but none was provided."
             )
@@ -588,7 +632,7 @@ class OMTRA(pl.LightningModule):
         # the only reason i'm allowing it to be none by default and manually adding it in
         # is that i don't want to define a default number of timesteps in more than one palce
         # it is already defined as default arg to VectorField.integrate
-        itg_kwargs = {}
+        itg_kwargs = dict(visualize=visualize)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
 
@@ -600,15 +644,26 @@ class OMTRA(pl.LightningModule):
             **itg_kwargs
         )
 
+        if visualize:
+            g, per_graph_traj = itg_result
+        else:
+            g = itg_result
+
         # integrate returns just a DGL graph for now
         # in the future, when we implement trajectory visualization, it will be a graph + some data structure for trajectory frames
         
         # unbatch DGL graphs and convert to SampledSystem object
-        unbatched_graphs = dgl.unbatch(itg_result)
+        g = g.to('cpu')
+        unbatched_graphs = dgl.unbatch(g)
         sampled_systems = []
-        for g_i in unbatched_graphs:
+        for i, g_i in enumerate(unbatched_graphs):
+            if visualize:
+                ss_kwargs = dict(traj=per_graph_traj[i])
+            else:
+                ss_kwargs = dict()
             sampled_system = SampledSystem(
                 g=g_i,
+                **ss_kwargs,
             )
             sampled_systems.append(sampled_system)
         return sampled_systems

@@ -19,15 +19,22 @@ chmod +x build_env.sh
 - [ ] need to apply masking on node vec feature loss
 - [ ] need to consider permutation invariance for vector feature prediction?
 - [ ] CCD code frequency weighting in plinder dataset
-- [ ] sampling code
-- [ ] sampled system object, ligand builder object
-- [ ] need to remove edges in vector field forward pass
-- [ ] radius graph n edges approximation
-- [ ] don't do fully connected NPNDE... or...do?
 - [ ] there is massive utiltiy in an on-the-fly (batched) addition of radius edges overlaid on top of edges that contain bond order as an edge feature
 - [ ] what to do with pharm interaction feature
 - [ ] pharmit dataset chemical space conditoning + predictor?
 - [ ] when training omtra with ligand encoder, inject encoder config from encoder checkpoint
+- [ ] sample counts are really large when training?
+- [ ] task-specific losses
+- [ ] wandb metric groups? how does that work?
+- [ ] need to isolate/replicate dataloader breaking with num_workers > 2
+- [ ] methods for evaluating conformer quality?
+- [ ] smooth task distribution for validation set
+- [ ] fix molecular stability metric
+- [ ] protein-ligand interaction metric? pose check! any others?
+- [ ] add posebusters
+- [ ] don't need flowmol validity stuff for conformer generation / docking
+- [ ] alternative time sampling methods for training (semlaflow, foldflow2)
+- [ ] verify apo-holo alignment
 
 
 # How to train?
@@ -50,3 +57,11 @@ that does a variety of tasks that do not involve protein structures. The genreal
 2. `datset_task_coupling`; this is a dictionary where each key is a task and the value is a list specifying the dataset we will use for that task, along with the probability of using the dataset for that task. In other words, the dataset task coupling is directly specifying the probability distribution p(dataset|task).
 
 Now, what are the tasks and datasets supported? We have defined registers of supported tasks and datasets. The registers are located in `omtra.tasks` and `omtra.datasets` respectively. Every task and datset is associated with a unique string; if your config file specifies a task/dataset not in the register, the training script will tell you so. There are utility functions for printing out the tasks/dataset names supported. I don't know where they are off the top of my head but I'll add them here eventually. 
+
+# How to sample?
+
+The sampling script is `routines/sample.py` takes a checkpoint and a task as input. There are a few other arguments to controls its behavior: `--visualize` will write out trajectories, `--output_dir` will specify where to write the output, `--n_samples` will specify how many samples to generate, `--metrics` is a true/false flag indicating whether to compute metrics on the samples. Look at the script or run `python routines/sample.py --help` for more details. Below is an example command:
+
+```console
+python routines/sample.py local/runs_from_cluster/denovo_multiupdate_2025-05-04_20-44-972429/checkpoints/batch_45000.ckpt --task=denovo_ligand --n_samples=100 --metrics --output_dir=local/dev_samples
+```

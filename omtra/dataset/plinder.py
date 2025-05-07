@@ -825,7 +825,13 @@ class PlinderDataset(ZarrDataset):
             self.convert_system(system, include_pharmacophore=include_pharmacophore)
         )
 
-        g = build_complex_graph(node_data, edge_idxs, edge_data)
+        g = build_complex_graph(
+            node_data, 
+            edge_idxs, 
+            edge_data,
+            task=task_class,
+            graph_config=self.graph_config,
+        )
 
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)

@@ -23,9 +23,11 @@ def denovo_ligand(sampled_systems: List[SampledSystem]):
 
 @register_eval("ligand_conformer")
 def ligand_conformer(sampled_systems: List[SampledSystem]):
-    metrics = compute_validity(sampled_systems)
-    metrics.update(compute_stability(sampled_systems))
-    metrics.update(reos_and_rings(sampled_systems))
+    # metrics = compute_validity(sampled_systems)
+    # metrics.update(compute_stability(sampled_systems))
+    # metrics.update(reos_and_rings(sampled_systems))
+    # TODO: metrics for ligand conformer? just clashes? strain energy?
+    metrics = {}
     return metrics
 
 

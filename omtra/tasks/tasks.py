@@ -64,6 +64,11 @@ class Task:
     def edge_modalities_present(self) -> List[Modality]:
         """Returns the edge modalities for this task. This is a subset of the modalities present in the task."""
         return [ m for m in self.modalities_present if not m.is_node ]
+    
+    @classproperty
+    def unconditional(self) -> bool:
+        """Returns True if the task is fully unconditional, i.e., all groups are generated and none are fixed."""
+        return set(self.groups_generated) == set(self.groups_present)
 
 ##
 # tasks with ligand only

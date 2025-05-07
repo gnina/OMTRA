@@ -54,7 +54,6 @@ class VectorField(nn.Module):
         n_expansion_gvps: int = 3,
         separate_mol_updaters: bool = True,
         message_norm: Union[float, str] = 100,
-        update_edge_w_distance: bool = True,
         rbf_dmax=18,
         rbf_dim=32,
         time_embedding_dim: int = 64,
@@ -68,16 +67,6 @@ class VectorField(nn.Module):
         self_conditioning: bool = False,
         use_dst_feats: bool = False,
         dst_feat_msg_reduction_factor: float = 4,
-        stochasticity: float = 0.0,
-        high_confidence_threshold: float = 0.0,
-        cat_temperature_schedule: Union[str, Callable, float] = 0.05,
-        cat_temp_decay_max: float = 0.8,
-        cat_temp_decay_a: float = 2,
-        # if we are using CTMC, input categorical features will have mask tokens,
-        # this means their one-hot representations will have an extra dimension,
-        # and the neural network instantiated by this method need to account for this
-        # it is definitely anti-pattern to have a parameter in parent class that is only needed for one sub-class (CTMCVectorField)
-        # however, this is the fastest way to get CTMCVectorField working right now, so we will be anti-pattern for the sake of time
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -101,17 +90,7 @@ class VectorField(nn.Module):
         self.rbf_dmax = rbf_dmax
         self.rbf_dim = rbf_dim
 
-        self.eta = stochasticity
-        self.hc_thres = high_confidence_threshold
-
-        self.cat_temperature_schedule = cat_temperature_schedule
-        self.cat_temp_decay_max = cat_temp_decay_max
-        self.cat_temp_decay_a = cat_temp_decay_a
-        self.cat_temp_func = self.build_cat_temp_schedule(
-            cat_temperature_schedule=cat_temperature_schedule,
-            cat_temp_decay_max=cat_temp_decay_max,
-            cat_temp_decay_a=cat_temp_decay_a,
-        )
+        self.cat_temp_func = lambda t: 0.05
 
         assert n_vec_channels >= 3, "n_vec_channels must be >= 3"
         assert n_vec_channels >= 2 * n_pharmvec_channels, (
@@ -297,7 +276,6 @@ class VectorField(nn.Module):
                     EdgeUpdate(
                         n_hidden_scalars,
                         n_hidden_edge_feats,
-                        update_edge_w_distance=update_edge_w_distance,
                         rbf_dim=rbf_dim,
                     )
                 )
@@ -715,7 +693,7 @@ class VectorField(nn.Module):
         task: Task,
         upper_edge_mask: Dict[str, torch.Tensor],
         n_timesteps: int = 250,
-        stochasticity: float = 8.0,
+        stochasticity: float = 30.0,
         cat_temp_func: Optional[Callable] = None,
         tspan=None,
         visualize=False,
@@ -737,13 +715,36 @@ class VectorField(nn.Module):
         # TODO: in FlowMol, we assumed there was an inteprolant alpha_t as the weight on the data distribution and that the weight on the prior was 1 - alpha_t
         # i want to make this more general, assume we have alpha_t (weight on data) and beta_t (weight on prior)...conditional path functions were already written
         # under this assumption, but i might have flipped alpha and beta from how i described them above
-        alpha_t = self.interpolant_scheduler.alpha_t(
-            t, task
-        )  # has shape (n_timepoints, )
-        alpha_t_prime = self.interpolant_scheduler.alpha_t_prime(t, task)
+        alpha_t, beta_t = self.interpolant_scheduler.weights(t, task)
+        alpha_t_prime, beta_t_prime = self.interpolant_scheduler.weight_derivative(t, task)
 
         if visualize:
-            raise NotImplementedError("visualization not implemented yet")
+            traj = defaultdict(list)
+            def add_frame(g, traj=traj, task=task, first_frame=False):
+                m_fixed = task.modalities_fixed
+                for m in task.modalities_present:
+                    if m.is_node:
+                        data_src = g.nodes[m.entity_name]
+                    else:
+                        data_src = g.edges[m.entity_name]
+                    xt = data_src.data[f"{m.data_key}_t"]
+                    
+                    try:
+                        xpred = data_src.data[f"{m.data_key}_1_pred"]
+                    except KeyError:
+                        if m in m_fixed and not first_frame:
+                            # if this modality is fixed, we use its value at t as the "predicted value"
+                            # this just ensures fixed modalities still "appear" in endpoint trajectories
+                            xpred = data_src.data[f"{m.data_key}_t"]
+                        else:
+                            xpred = None
+
+                    traj[m.name].append(xt.detach().clone().cpu())
+
+                    if xpred is not None:
+                        traj[f'{m.name}_pred'].append(xpred.detach().clone().cpu())
+
+            add_frame(g, first_frame=True)
 
         node_batch_idxs, edge_batch_idxs = get_batch_idxs(g)
 
@@ -752,9 +753,12 @@ class VectorField(nn.Module):
             # get the next timepoint (s) and the current timepoint (t)
             s_i = t[s_idx]
             t_i = t[s_idx - 1]
-            alpha_t_i = alpha_t[s_idx - 1]
-            alpha_s_i = alpha_t[s_idx]
-            alpha_t_prime_i = alpha_t_prime[s_idx - 1]
+            alpha_t_i = { k: alpha_t[k][s_idx - 1] for k in alpha_t }
+            alpha_s_i = { k: alpha_t[k][s_idx] for k in alpha_t }
+            alpha_t_prime_i = { k: alpha_t_prime[k][s_idx - 1] for k in alpha_t }
+            beta_t_i = { k: beta_t[k][s_idx - 1] for k in beta_t }
+            beta_s_i = { k: beta_t[k][s_idx] for k in beta_t }
+            beta_t_prime_i = { k: beta_t_prime[k][s_idx - 1] for k in beta_t }
 
             # determine if this is the last integration step
             if s_idx == t.shape[0] - 1:
@@ -771,6 +775,9 @@ class VectorField(nn.Module):
                 alpha_t_i=alpha_t_i,
                 alpha_s_i=alpha_s_i,
                 alpha_t_prime_i=alpha_t_prime_i,
+                beta_t_i=beta_t_i,
+                beta_s_i=beta_s_i,
+                beta_t_prime_i=beta_t_prime_i,
                 node_batch_idxs=node_batch_idxs,
                 edge_batch_idxs=edge_batch_idxs,
                 upper_edge_mask=upper_edge_mask,
@@ -780,6 +787,9 @@ class VectorField(nn.Module):
                 prev_dst_dict=dst_dict,
                 **kwargs,
             )
+
+            if visualize:
+                add_frame(g)
 
         # set x_1 = x_t
         for modality in task.node_modalities_present:
@@ -796,7 +806,26 @@ class VectorField(nn.Module):
                 continue
             g.edges[etype].data[f"{dk}_1"] = g.edges[etype].data[f"{dk}_t"]
 
-        return g
+        
+        if not visualize:
+            return g
+        
+        # if visualizing, generate trajectory dict for each example
+        per_system_traj = [ {} for _ in range(g.batch_size) ]
+        for m in task.modalities_present:
+            batch_traj = torch.stack(traj[m.name], dim=0) # tensor of shape (n_timesteps, n_nodes/n_edges, *)
+            batch_pred_traj = torch.stack(traj[f'{m.name}_pred'], dim=0) 
+            if m.is_node:
+                split_locs = g.batch_num_nodes(ntype=m.entity_name).tolist()
+            else:
+                split_locs = g.batch_num_edges(etype=m.entity_name).tolist()
+            per_graph_mtrajs = torch.split(batch_traj, split_locs, dim=1) # list of tensors of shape (n_timesteps, n_nodes/n_edges, *)
+            per_graph_pred_mtrajs = torch.split(batch_pred_traj, split_locs, dim=1)
+            for i in range(len(per_graph_mtrajs)):
+                per_system_traj[i][m.name] = per_graph_mtrajs[i]
+                per_system_traj[i][f'{m.name}_pred'] = per_graph_pred_mtrajs[i]
+
+        return g, per_system_traj
 
     def step(
         self,
@@ -807,6 +836,9 @@ class VectorField(nn.Module):
         alpha_t_i: Dict[str, torch.Tensor],
         alpha_s_i: Dict[str, torch.Tensor],
         alpha_t_prime_i: Dict[str, torch.Tensor],
+        beta_t_i: Dict[str, torch.Tensor],
+        beta_s_i: Dict[str, torch.Tensor],
+        beta_t_prime_i: Dict[str, torch.Tensor],
         node_batch_idxs: Dict[str, torch.Tensor],
         edge_batch_idxs: Dict[str, torch.Tensor],
         upper_edge_mask: Dict[str, torch.Tensor],
@@ -830,7 +862,7 @@ class VectorField(nn.Module):
             node_batch_idx=node_batch_idxs,
             upper_edge_mask=upper_edge_mask,
             apply_softmax=True,
-            remove_com=True,  # TODO: is this ...should this be set to True?
+            remove_com=False,  # TODO: is this ...should this be set to True?
             prev_dst_dict=prev_dst_dict,
         )
 
@@ -858,7 +890,7 @@ class VectorField(nn.Module):
 
             x_1 = dst_dict[m.name]
             x_t = data_src[m.entity_name].data[f"{m.data_key}_t"]
-            vf = self.vector_field(x_t, x_1, alpha_t_i[m.name], alpha_t_prime_i[m.name])
+            vf = self.vector_field(x_t, x_1, alpha_t_i[m.name], alpha_t_prime_i[m.name], beta_t_i[m.name], beta_t_prime_i[m.name])
             data_src[m.entity_name].data[f"{m.data_key}_t"] = x_t + dt * vf
             data_src[m.entity_name].data[f"{m.data_key}_1_pred"] = x_1.detach().clone()
 
@@ -885,24 +917,25 @@ class VectorField(nn.Module):
 
             # TODO: other discrete sampling methods?
             # TODO: path planning, probably in place of purity sampling
+            # TODO: campbell step assumes alpha_t = 1 - beta_t; need to change behavior if this is ever not the case
             xt, x_1_sampled = self.campbell_step(
                 g=g,
                 m=m,
                 p_1_given_t=p_s_1,
                 xt=xt,
                 stochasticity=eta,
-                alpha_t=alpha_t_i[m.name],
-                alpha_t_prime=alpha_t_prime_i[m.name],
+                beta_t=beta_t_i[m.name],
+                beta_t_prime=beta_t_prime_i[m.name],
                 dt=dt,
                 batch_size=g.batch_size,
-                batch_num_nodes=g.batch_num_edges(m.entity_name) // 2
+                batch_num_nodes=g.batch_num_edges(m.entity_name)
                 if not m.is_node
                 else g.batch_num_nodes(m.entity_name),
                 mask_index=m.n_categories,
                 last_step=last_step,
-                batch_idx=edge_batch_idxs[m.entity_name]
-                if not m.is_node
-                else node_batch_idxs[m.entity_name],
+                # batch_idx=edge_batch_idxs[m.entity_name]
+                # if not m.is_node
+                # else node_batch_idxs[m.entity_name],
                 upper_edge_mask=upper_edge_mask[m.entity_name]
                 if not m.is_node
                 else None,
@@ -932,20 +965,18 @@ class VectorField(nn.Module):
         p_1_given_t: torch.Tensor,
         xt: torch.Tensor,
         stochasticity: float,
-        alpha_t: torch.Tensor,
-        alpha_t_prime: torch.Tensor,
+        beta_t: torch.Tensor,
+        beta_t_prime: torch.Tensor,
         dt,
         batch_size: int,
         batch_num_nodes: torch.Tensor,
         mask_index: int,
         last_step: bool,
-        batch_idx: torch.Tensor,
         upper_edge_mask: Optional[torch.Tensor],
-        use_conflict_remasking: bool = False,
     ):
         x1 = Categorical(p_1_given_t).sample()  # has shape (num_nodes,)
 
-        unmask_prob = dt * (alpha_t_prime + stochasticity * alpha_t) / (1 - alpha_t)
+        unmask_prob = dt * (beta_t_prime + stochasticity * beta_t) / (1 - beta_t)
         mask_prob = dt * stochasticity
 
         unmask_prob = torch.clamp(unmask_prob, min=0, max=1)
@@ -987,8 +1018,10 @@ class VectorField(nn.Module):
 
         return xt, x1
 
-    def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime):
-        vf = alpha_t_prime / (1 - alpha_t) * (x_1 - x_t)
+    def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime, beta_t, beta_t_prime):
+        term_1 = alpha_t_prime/alpha_t*x_t
+        term_2 = (alpha_t*beta_t_prime - beta_t*alpha_t_prime)/alpha_t*x_1
+        vf = term_1 + term_2
         return vf
 
     def build_cat_temp_schedule(
@@ -1047,16 +1080,11 @@ class EdgeUpdate(nn.Module):
         self,
         n_node_scalars,
         n_edge_feats,
-        update_edge_w_distance=False,
         rbf_dim=16,
     ):
         super().__init__()
 
-        self.update_edge_w_distance = update_edge_w_distance
-
-        input_dim = n_node_scalars * 2 + n_edge_feats
-        if update_edge_w_distance:
-            input_dim += rbf_dim
+        input_dim = n_node_scalars * 2 + n_edge_feats + rbf_dim
 
         self.edge_update_fn = nn.Sequential(
             nn.Linear(input_dim, n_edge_feats),
@@ -1075,10 +1103,8 @@ class EdgeUpdate(nn.Module):
             node_scalars[src_ntype][src_idxs],
             node_scalars[dst_ntype][dst_idxs],
             edge_feats,
+            d
         ]
-
-        if self.update_edge_w_distance and d is not None:
-            mlp_inputs.append(d)
 
         edge_feats = self.edge_norm(
             edge_feats + self.edge_update_fn(torch.cat(mlp_inputs, dim=-1))

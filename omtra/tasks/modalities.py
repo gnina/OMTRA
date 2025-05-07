@@ -9,6 +9,7 @@ from omtra.constants import (
     residue_map,
     protein_element_map,
     protein_atom_map,
+    bond_type_map
 )
 
 
@@ -77,7 +78,7 @@ Modality.register(MODALITY_REGISTER,
     graph_entity='edge',
     entity_name='lig_to_lig',
     data_key='e',
-    n_categories=4, # TODO: consider adding ligand_bond_types to constants.py and use that
+    n_categories=len(bond_type_map),
 )
 
 Modality.register(MODALITY_REGISTER,
@@ -163,7 +164,7 @@ Modality.register(MODALITY_REGISTER,
     graph_entity='edge',
     entity_name='npnde_to_npnde',
     data_key='e',
-    n_categories=4, # TODO: either use edge types from constants or dont use edge types at all for npndes
+    n_categories=len(bond_type_map), # TODO: either use edge types from constants or dont use edge types at all for npndes
 )
 
 MODALITY_ORDER = [modality.name for modality in MODALITY_REGISTER.values()]

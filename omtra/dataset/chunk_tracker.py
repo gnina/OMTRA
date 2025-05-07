@@ -64,26 +64,21 @@ class GraphChunkTracker:
 
 def adaptive_batch_loader(nodes_per_graph: torch.Tensor, max_nodes: int) -> torch.Tensor:
     """
-    Selects graphs to include in a batch such that the total number of nodes
-    does not exceed a user-specified maximum.
-    
-    Args:
-        nodes_per_graph (torch.Tensor): A tensor of shape (N,) containing the number of nodes in each graph.
-        max_nodes (int): The maximum number of nodes allowed in a batch.
-        
-    Returns:
-        torch.Tensor: Indices of the graphs selected for the batch.
+    Selects a *prefix* of a random permutation of graph-indices whose cumulative
+    node count stays ≤ max_nodes. Fully vectorized, no Python loops or .item().
     """
-    num_graphs = nodes_per_graph.size(0)
-    indices = torch.randperm(num_graphs)  # Randomly shuffle the indices
-    selected_indices = [0]
-    total_nodes = 0
-    
-    for idx in indices[1:]:
-        graph_nodes = nodes_per_graph[idx].item()
-        if total_nodes + graph_nodes > max_nodes:
-            break
-        selected_indices.append(idx)
-        total_nodes += graph_nodes
-
-    return torch.tensor(selected_indices)
+    # 1) shuffle once
+    perm = torch.randperm(nodes_per_graph.size(0), device=nodes_per_graph.device)
+    # 2) grab node counts in that order
+    nodes_shuf = nodes_per_graph[perm]
+    # 3) cumulative sum
+    cumsum = nodes_shuf.cumsum(dim=0)
+    # 4) mask: which positions still fit
+    mask = cumsum <= max_nodes
+    # 5) get the valid prefix positions
+    valid_positions = torch.nonzero(mask, as_tuple=False).squeeze(1)
+    # 6) ensure at least one graph
+    if valid_positions.numel() == 0:
+        return perm[:1]
+    # 7) return the corresponding original indices
+    return perm[valid_positions]

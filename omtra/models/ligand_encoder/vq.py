@@ -9,6 +9,8 @@ from omtra.models.gvp import HeteroGVPConv, _rbf, _norm_no_nan
 from omtra.constants import lig_atom_type_map, charge_map, bond_type_map
 from omtra.data.graph.utils import get_upper_edge_mask
 import pytorch_lightning as pl
+import hydra
+from pathlib import Path
     
 
 
@@ -306,6 +308,9 @@ class LigandVQVAE(pl.LightningModule):
                  
         super().__init__()
 
+        self.k_checkpoints: int = k_checkpoints
+        self.checkpoint_interval: int = checkpoint_interval
+
         self.mask_prob = mask_prob
         self.n_mask_feats = int(mask_prob > 0)  # Number of masked features (atom types and charges)
 
@@ -350,6 +355,26 @@ class LigandVQVAE(pl.LightningModule):
         self.save_hyperparameters()
         self.configure_loss_fns()
 
+    def manual_checkpoint(self, batch_idx: int):
+
+        if batch_idx % self.checkpoint_interval == 0 and batch_idx != 0:
+            hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
+            log_dir = hydra_cfg['runtime']['output_dir']
+            checkpoint_dir = Path(log_dir) / "checkpoints"
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+            current_checkpoints = list(checkpoint_dir.glob("*.ckpt"))
+            current_checkpoints.sort(key=lambda x: x.stem.split("_")[-1])
+            if len(current_checkpoints) >= self.k_checkpoints:
+                # remove the oldest checkpoint
+                oldest_checkpoint = current_checkpoints[0]
+                oldest_checkpoint.unlink()
+
+            checkpoint_path = checkpoint_dir / f'batch_{batch_idx}.ckpt'
+            print('saving checkpoint to ', checkpoint_path, flush=True)
+            self.trainer.save_checkpoint(str(checkpoint_path))
+            print(f'Saved checkpoint to {checkpoint_path}')
+
 
     def configure_loss_fns(self):
         """ Define loss functions used in training """
@@ -390,6 +415,8 @@ class LigandVQVAE(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         g, task_name, dataset_name = batch
+
+        self.manual_checkpoint(batch_idx)
         
         losses, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = self.forward(g)
 

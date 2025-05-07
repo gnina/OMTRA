@@ -47,14 +47,21 @@ def load_cfg(config_dir: str = None, config_name: str = "config.yaml", pharmit_p
 
     return cfg
 
+def load_trained_model_cfg(cfg_path: str):
 
-def datamodule_from_config(cfg: DictConfig) -> MultiTaskDataModule:
+    cfg = OmegaConf.load(cfg_path)
+    cfg = merge_task_spec(cfg)
+    return cfg
+
+
+def datamodule_from_config(cfg: DictConfig, **kwargs) -> MultiTaskDataModule:
 
     print(f"⚛ Instantiating datamodule <{cfg.task_group.datamodule._target_}>")
 
     # load data module
     datamodule: MultiTaskDataModule = hydra.utils.instantiate(
         cfg.task_group.datamodule, 
+        **kwargs,
     )
 
     return datamodule
@@ -79,6 +86,22 @@ def omtra_from_config(cfg: DictConfig) -> OMTRA:
         _recursive_=False,
         prior_config=cfg.prior,
     )
+
+    return model
+
+def omtra_from_checkpoint(ckpt_path: str) -> OMTRA:
+    """
+    Load the OMTRA model from a checkpoint.
+    
+    Args:
+        ckpt_path (str): Path to the checkpoint file.
+    
+    Returns:
+        model: The loaded OMTRA model.
+    """
+
+    # load model
+    model = OMTRA.load_from_checkpoint(ckpt_path)
 
     return model
 

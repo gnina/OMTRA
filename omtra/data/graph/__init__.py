@@ -3,13 +3,18 @@ import dgl
 from typing import Dict
 import itertools
 from omegaconf import DictConfig
+import functools
+from omtra.utils import omtra_root
+from pathlib import Path
+from omtra.tasks.tasks import Task
+
 
 node_types = ['lig', 'prot_atom', 'prot_res', 'pharm', 'npnde']
 covalent_etypes = ["prot_atom_covalent_lig", "prot_atom_covalent_npnde", "prot_res_covalent_lig", "prot_res_covalent_npnde"]
 # construct the full list of possible edge types
-edge_types = [f"{ntype}_to_{ntype}" for ntype in node_types]
-edge_types += [f'{src_ntype}_to_{dst_ntype}' for src_ntype, dst_ntype in itertools.permutations(node_types, 2)]
-edge_types += covalent_etypes
+all_edge_types = [f"{ntype}_to_{ntype}" for ntype in node_types]
+all_edge_types += [f'{src_ntype}_to_{dst_ntype}' for src_ntype, dst_ntype in itertools.permutations(node_types, 2)]
+all_edge_types += covalent_etypes
 
 def to_canonical_etype(etype: str):
     if 'covalent' in etype:
@@ -27,7 +32,7 @@ def get_inv_edge_type(etype: str):
         src_ntype, dst_ntype = etype.split('_to_')
         return f"{dst_ntype}_to_{src_ntype}"
 
-edge_types += [get_inv_edge_type(etype) for etype in covalent_etypes]
+all_edge_types += [get_inv_edge_type(etype) for etype in covalent_etypes]
 
 # TODO: if protein structure changes during generation, then we would need to do knn-random graph computation on the fly, which we don't know how to do yet
 # TODO: in general, protein structure edges need to be computed on the fly
@@ -36,11 +41,37 @@ edge_types += [get_inv_edge_type(etype) for etype in covalent_etypes]
 # perhaps fully-connected at the residue level and then knn or radius at the atom level with preference for inter-residue edges
 # so for now, initial graph construction, edges only created for ligand and pharmacophore nodes
 
+@functools.lru_cache()
+def get_edges_for_task(task: Task, graph_config: DictConfig) -> set:
+    ntypes = set()
+    modality_edges = set()
+    for m in task.modalities_present:
+        if m.is_node:
+            ntypes.add(m.entity_name)
+        else:
+            modality_edges.add(m.entity_name)
+
+    task_edges = set()
+    graph_config_edges = set(list(graph_config.get("edges").keys()))
+    for etype in all_edge_types:
+        src_ntype, _, dst_ntype = to_canonical_etype(etype)
+        # if the edge requires node types not supported, skip it
+        if not (src_ntype in ntypes and dst_ntype in ntypes):
+            continue
+        
+        # if the edge is not in the graph config, skip it, unless it has a modality on it or is a covalent edge
+        predetermined = etype in modality_edges or 'covalent' in etype
+        if etype not in graph_config_edges and not predetermined:
+            continue
+        task_edges.add(etype)
+    return task_edges
 
 def build_complex_graph(
     node_data: Dict[str, Dict[str, torch.Tensor]],
     edge_idxs: Dict[str, torch.Tensor],
     edge_data: Dict[str, Dict[str, torch.Tensor]],
+    task=None,
+    graph_config=None,
 ) -> dgl.DGLHeteroGraph:
     
     # check that all node types are valid
@@ -52,7 +83,7 @@ def build_complex_graph(
     etypes_in_edge_idxs = list(edge_idxs.keys())
     etypes_in_edge_data = list(edge_data.keys())
     for etype in set(etypes_in_edge_idxs + etypes_in_edge_data):
-        assert etype in edge_types, f"Edge type {etype} not recognized."
+        assert etype in all_edge_types, f"Edge type {etype} not recognized."
 
     # check that every edge type included in edge_data is also included in edge_idxs
     for etype in etypes_in_edge_data:
@@ -67,8 +98,15 @@ def build_complex_graph(
             num_nodes[ntype] = 0
 
     # get edge data for dgl graph construction
+    if task and graph_config:
+        # get edges for task
+        etypes = get_edges_for_task(task, graph_config=graph_config)
+    else:
+        etypes = all_edge_types
+
+
     edge_construction_dict = {}
-    for etype in edge_types:
+    for etype in etypes:
         canonical_etype = to_canonical_etype(etype)
         if etype in edge_idxs:
             edge_construction_dict[canonical_etype] = (edge_idxs[etype][0], edge_idxs[etype][1])
@@ -110,10 +148,24 @@ def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[st
         k = graph_config.edges[etype].params.k
         n_edges = src_n * k
     elif graph_type == 'radius':
-        print('radius graph approximation is really bad please fix me!!!!!!!!!')
+        rad_edge_approximators = get_edge_approximators()
         r = graph_config.edges[etype].params.r
-        n_edges = src_n*r*2
+        src_n = torch.from_numpy(src_n).float()
+        dst_n = torch.from_numpy(dst_n).float()
+        r = torch.full_like(src_n, r)
+        e_input = torch.stack([r, src_n, dst_n,], dim=1)
+        n_edges_per_src_node = rad_edge_approximators[etype](e_input).squeeze(-1)
+        zero_mask = (src_n == 0) | (dst_n == 0)
+        n_edges_per_src_node[zero_mask] = 0
+        n_edges = n_edges_per_src_node*src_n
+        n_edges = n_edges.long()
     else:
         raise ValueError(f"Graph type {graph_type} not recognized.")
     
     return n_edges
+
+@functools.lru_cache()
+def get_edge_approximators() -> Dict[str, torch.nn.Module]:
+    dict_path = Path(omtra_root()) / 'omtra/constants/radius_edge_approximators/edge_pred_mlps.pt'
+    edge_pred_mlps = torch.load(dict_path)
+    return edge_pred_mlps
