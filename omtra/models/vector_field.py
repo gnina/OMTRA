@@ -601,6 +601,7 @@ class VectorField(nn.Module):
                     if self.rebuild_edges:
                         g = remove_edges(g)
                         g = build_edges(g, task_class, node_batch_idx, self.graph_config)
+                        x_diff, d = self.precompute_distances(g)
 
         logits = {}
         for modality in task_class.modalities_generated:
