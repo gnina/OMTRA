@@ -2,6 +2,7 @@ import numpy as np
 import dgl
 
 import torch
+import torchmetrics
 from torch import nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -302,6 +303,8 @@ class LigandVQVAE(pl.LightningModule):
                  rbf_dim=32,
                  rbf_dmax=10,
                  mask_prob=0.10,
+                 k_checkpoints: int = 20,
+                 checkpoint_interval: int = 1000,
                  use_ema=True,
                  decay=0.99,
                  epsilon=1e-5,):
@@ -320,6 +323,10 @@ class LigandVQVAE(pl.LightningModule):
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
         self.mask_prob = mask_prob
+
+        self.atom_type_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(lig_atom_type_map))
+        self.atom_charge_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(charge_map))
+        self.bond_order_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
         
         self.encoder = Encoder(
                                scalar_size=scalar_size, 
@@ -403,14 +410,28 @@ class LigandVQVAE(pl.LightningModule):
         atom_charge_loss = self.atom_charge_loss_fn(atom_charge_logits, target_atom_charges)
         bond_order_loss = self.bond_order_loss_fn(bond_order_logits, target_bond_orders)
 
+        # Accuracy
+        pred_atom_types = torch.argmax(atom_type_logits, dim=1)
+        self.atom_type_accuracy.update(pred_atom_types, target_atom_types)  
+
+        pred_atom_charges = torch.argmax(atom_charge_logits, dim=1)
+        self.atom_charge_accuracy.update(pred_atom_charges, target_atom_charges)
+
+        pred_bond_orders = torch.argmax(bond_order_logits, dim=1)
+        self.bond_order_accuracy.update(pred_bond_orders, target_bond_orders)
+
+
         # recon_loss = atom_type_loss + atom_charge_loss + bond_order_loss
         
-        losses = {'vq+comittment': loss,
-                  'a_recon': atom_type_loss,
-                  'c_recon': atom_charge_loss,
-                  'e_recon': bond_order_loss}
+        metrics = {'vq+comittment_loss': loss,
+                  'a_recon_loss': atom_type_loss,
+                  'c_recon_loss': atom_charge_loss,
+                  'e_recon_loss': bond_order_loss,
+                  'a_accuracy': self.atom_type_accuracy.compute(),
+                  'c_accuracy': self.atom_charge_accuracy.compute(),
+                  'e_accuracy': self.bond_order_accuracy.compute()}
 
-        return losses, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity
+        return metrics, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity
     
 
     def training_step(self, batch, batch_idx):
@@ -418,15 +439,16 @@ class LigandVQVAE(pl.LightningModule):
 
         self.manual_checkpoint(batch_idx)
         
-        losses, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = self.forward(g)
+        metrics, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = self.forward(g)
 
         train_log_dict = {}
-        for key, loss in losses.items():
-            train_log_dict[f"{key}_train_loss"] = loss
+        for key, metric in metrics.items():
+            train_log_dict[f"{key}_train"] = metric
 
         total_loss = torch.zeros(1, device=g.device, requires_grad=True)
-        for loss_name, loss_val in losses.items():
-            total_loss = total_loss + 1.0 * loss_val
+        for loss_name, loss_val in metrics.items():
+            if 'loss' in loss_name:
+                total_loss = total_loss + 1.0 * loss_val
 
         self.log_dict(train_log_dict, sync_dist=True)
         self.log("train_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True)
