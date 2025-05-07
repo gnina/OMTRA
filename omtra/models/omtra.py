@@ -160,7 +160,7 @@ class OMTRA(pl.LightningModule):
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
             current_checkpoints = list(checkpoint_dir.glob("*.ckpt"))
-            current_checkpoints.sort(key=lambda x: x.stem.split("_")[-1])
+            current_checkpoints.sort(key=lambda x: int(x.stem.split("_")[-1]))
             if len(current_checkpoints) >= self.k_checkpoints:
                 # remove the oldest checkpoint
                 oldest_checkpoint = current_checkpoints[0]
@@ -268,7 +268,7 @@ class OMTRA(pl.LightningModule):
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=200, device=device)
+        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         # TODO: compute evals and log them / do we want to log them separately for each task?
