@@ -57,6 +57,7 @@ def denovo_ligand_from_pharmacophore(sampled_systems: List[SampledSystem]):
 ##
 # tasks with ligand+protein and no pharmacophore
 ##
+@register_eval("fixed_protein_ligand_denovo")
 @register_eval("pred_apo_conditioned_denovo_ligand")
 @register_eval("exp_apo_conditioned_denovo_ligand")
 @register_eval("protein_ligand_denovo")

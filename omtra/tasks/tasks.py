@@ -124,6 +124,16 @@ class ProteinLigandDeNovo(Task):
         'type': 'target_dependent_gaussian',
     }
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
+
+
+@register_task("fixed_protein_ligand_denovo")
+class FixedProteinLigandDeNovo(Task):
+    groups_fixed = ['protein_identity', 'protein_structure']
+    groups_generated = ['ligand_identity', 'ligand_structure']
+
+    priors = deepcopy(pc.denovo_ligand)
+
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein) # can probably remove protein from this
     
 
 
