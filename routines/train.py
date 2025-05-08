@@ -27,12 +27,31 @@ mp.set_start_method("spawn", force=True)
 # with ${omtra_root:} will be replaced with the root path of the omtra package
 OmegaConf.register_new_resolver("omtra_root", omtra_root, replace=True)
 
+# def configure_tensor_cores(precision: str = 'medium'):
+#     """
+#     Checks if a CUDA device with Tensor Cores (compute capability >= 8.0)
+#     is available, and if so, sets the float32 matmul precision accordingly.
+#     """
+#     if torch.cuda.is_available():
+#         props = torch.cuda.get_device_properties(torch.cuda.current_device())
+#         if props.major >= 8:
+#             torch.set_float32_matmul_precision(precision)
+#             print(f"Enabled TF32 on device (compute capability {props.major}.{props.minor})")
+#         else:
+#             print(f"TF32 not supported (compute capability {props.major}.{props.minor})")
+#     else:
+#         print("CUDA not available; skipping TF32 configuration")
+
 def train(cfg: DictConfig):
     """Trains the model.
 
     cfg is a DictConfig configuration composed by Hydra.
     """
     # set seed everywhere (pytorch, numpy, python)
+
+    # Run at start
+    # configure_tensor_cores()
+
     pl.seed_everything(cfg.seed, workers=True)
 
 

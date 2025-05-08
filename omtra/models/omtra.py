@@ -161,8 +161,8 @@ class OMTRA(pl.LightningModule):
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
             current_checkpoints = list(checkpoint_dir.glob("*.ckpt"))
-            current_checkpoints.sort(key=lambda x: int(x.stem.split("_")[-1]))
-            if len(current_checkpoints) >= self.k_checkpoints:
+            if self.global_rank == 0 and len(current_checkpoints) >= self.k_checkpoints:
+                current_checkpoints.sort(key=lambda x: int(x.stem.split("_")[-1]))
                 # remove the oldest checkpoint
                 oldest_checkpoint = current_checkpoints[0]
                 oldest_checkpoint.unlink()
