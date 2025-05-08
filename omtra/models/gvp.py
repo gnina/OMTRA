@@ -495,8 +495,10 @@ class HeteroGVPConv(nn.Module):
 
         if self.message_norm == "mean":
             self.agg_func = fn.mean
+            self.cross_reducer = "mean"
         else:
             self.agg_func = fn.sum
+            self.cross_reducer = "sum"
 
         # if message size is smaller than node embedding size, we need to project aggregated messages back to the node embedding size
         self.message_expansion = nn.ModuleDict()
@@ -644,7 +646,7 @@ class HeteroGVPConv(nn.Module):
             for etype in passing_edges:
                 if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
-
+                """
                 g.update_all(
                     fn.copy_e("scalar_msg", "m"),
                     self.agg_func("m", "scalar_msg"),
@@ -656,6 +658,8 @@ class HeteroGVPConv(nn.Module):
                     etype=etype,
                 )
                 """
+                
+                
                 scalar_agg_fns[etype] = (
                     fn.copy_e("scalar_msg", "m"),
                     self.agg_func("m", "scalar_msg"),
@@ -663,10 +667,10 @@ class HeteroGVPConv(nn.Module):
                 vector_agg_fns[etype] = (
                     fn.copy_e("vec_msg", "m"),
                     self.agg_func("m", "vec_msg"),
-                )"""
+                )
 
-            # g.multi_update_all(scalar_agg_fns, cross_reducer=self.agg_func)
-            # g.multi_update_all(vector_agg_fns, cross_reducer=self.agg_func)
+            g.multi_update_all(scalar_agg_fns, cross_reducer=self.cross_reducer)
+            g.multi_update_all(vector_agg_fns, cross_reducer=self.cross_reducer)
 
             # get aggregated scalar and vector messages
             if isinstance(self.message_norm, str):
