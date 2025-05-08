@@ -11,9 +11,13 @@ task_phases:
   - duration_batches: null
     tasks:
       - name: rigid_docking
-        probability: 1.0
+        probability: 0.5
+      - name: fixed_protein_ligand_denovo
+        probability: 0.5
 
 # define p(dataset|task) coupling (assume static for simplicity)
 dataset_task_coupling:
   rigid_docking:
+    - [plinder, 1.0]
+  fixed_protein_ligand_denovo:
     - [plinder, 1.0]
