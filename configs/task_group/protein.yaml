@@ -11,13 +11,15 @@ task_phases:
   - duration_batches: null
     tasks:
       - name: expapo_conditioned_ligand_docking
-        probability: 0.25
+        probability: 0.20
       - name: predapo_conditioned_ligand_docking
-        probability: 0.25
+        probability: 0.20
       - name: exp_apo_conditioned_denovo_ligand
-        probability: 0.25
+        probability: 0.20
       - name: pred_apo_conditioned_denovo_ligand
-        probability: 0.25
+        probability: 0.20
+      - name: rigid_docking
+        probability: 0.20
 
 # define p(dataset|task) coupling (assume static for simplicity)
 dataset_task_coupling:
@@ -28,4 +30,6 @@ dataset_task_coupling:
   exp_apo_conditioned_denovo_ligand:
     - [plinder, 1.0]
   pred_apo_conditioned_denovo_ligand:
+    - [plinder, 1.0]
+  rigid_docking:
     - [plinder, 1.0]
