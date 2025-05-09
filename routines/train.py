@@ -27,12 +27,31 @@ mp.set_start_method("spawn", force=True)
 # with ${omtra_root:} will be replaced with the root path of the omtra package
 OmegaConf.register_new_resolver("omtra_root", omtra_root, replace=True)
 
+# def configure_tensor_cores(precision: str = 'medium'):
+#     """
+#     Checks if a CUDA device with Tensor Cores (compute capability >= 8.0)
+#     is available, and if so, sets the float32 matmul precision accordingly.
+#     """
+#     if torch.cuda.is_available():
+#         props = torch.cuda.get_device_properties(torch.cuda.current_device())
+#         if props.major >= 8:
+#             torch.set_float32_matmul_precision(precision)
+#             print(f"Enabled TF32 on device (compute capability {props.major}.{props.minor})")
+#         else:
+#             print(f"TF32 not supported (compute capability {props.major}.{props.minor})")
+#     else:
+#         print("CUDA not available; skipping TF32 configuration")
+
 def train(cfg: DictConfig):
     """Trains the model.
 
     cfg is a DictConfig configuration composed by Hydra.
     """
     # set seed everywhere (pytorch, numpy, python)
+
+    # Run at start
+    # configure_tensor_cores()
+
     pl.seed_everything(cfg.seed, workers=True)
 
 
@@ -126,8 +145,7 @@ def train(cfg: DictConfig):
 
     # right after training ends:
     if trainer.is_global_zero:
-        hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
-        log_dir = hydra_cfg['runtime']['output_dir']
+        log_dir = trainer.lightning_module.og_run_dir
         checkpoint_dir = Path(log_dir) / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         trainer.save_checkpoint(str(checkpoint_dir / "last.ckpt"))
@@ -140,12 +158,16 @@ def main(cfg: DictConfig):
     cfg is a DictConfig configuration composed by Hydra.
     """
 
-    resume = cfg.get('checkpoint') is not None
+    resume = cfg.get("checkpoint") is not None
     if resume:
         ckpt_path = Path(cfg.ckpt_path)
         run_dir = ckpt_path.parent.parent
-        original_cfg_path = run_dir / 'config.yaml'
-        cfg = OmegaConf.load(original_cfg_path)
+        original_cfg_path = run_dir / "config.yaml"
+        original_cfg = OmegaConf.load(original_cfg_path)
+        # Only apply CLI overrides to the original config
+        overrides = HydraConfig.get().overrides.task
+        cli_cfg = OmegaConf.from_dotlist(overrides)
+        cfg = OmegaConf.merge(original_cfg, cli_cfg)
         cfg.ckpt_path = str(ckpt_path)
         cfg.og_run_dir = str(run_dir)
     else:
