@@ -145,8 +145,7 @@ def train(cfg: DictConfig):
 
     # right after training ends:
     if trainer.is_global_zero:
-        hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
-        log_dir = hydra_cfg['runtime']['output_dir']
+        log_dir = trainer.lightning_module.og_run_dir
         checkpoint_dir = Path(log_dir) / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         trainer.save_checkpoint(str(checkpoint_dir / "last.ckpt"))
@@ -159,12 +158,16 @@ def main(cfg: DictConfig):
     cfg is a DictConfig configuration composed by Hydra.
     """
 
-    resume = cfg.get('checkpoint') is not None
+    resume = cfg.get("checkpoint") is not None
     if resume:
         ckpt_path = Path(cfg.ckpt_path)
         run_dir = ckpt_path.parent.parent
-        original_cfg_path = run_dir / 'config.yaml'
-        cfg = OmegaConf.load(original_cfg_path)
+        original_cfg_path = run_dir / "config.yaml"
+        original_cfg = OmegaConf.load(original_cfg_path)
+        # Only apply CLI overrides to the original config
+        overrides = HydraConfig.get().overrides.task
+        cli_cfg = OmegaConf.from_dotlist(overrides)
+        cfg = OmegaConf.merge(original_cfg, cli_cfg)
         cfg.ckpt_path = str(ckpt_path)
         cfg.og_run_dir = str(run_dir)
     else:

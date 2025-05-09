@@ -63,6 +63,7 @@ class OMTRA(pl.LightningModule):
         prior_config: Optional[DictConfig] = None,
         k_checkpoints: int = 20,
         checkpoint_interval: int = 1000,
+        og_run_dir: Optional[str] = None,
     ):
         super().__init__()
 
@@ -75,6 +76,7 @@ class OMTRA(pl.LightningModule):
         self.conditional_path_config = conditional_paths
         self.optimizer_cfg = optimizer
         self.prior_config = prior_config
+        self.og_run_dir = og_run_dir
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -155,8 +157,7 @@ class OMTRA(pl.LightningModule):
     def manual_checkpoint(self, batch_idx: int):
 
         if batch_idx % self.checkpoint_interval == 0 and batch_idx != 0:
-            hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
-            log_dir = hydra_cfg['runtime']['output_dir']
+            log_dir = self.og_run_dir
             checkpoint_dir = Path(log_dir) / "checkpoints"
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
