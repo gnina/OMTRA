@@ -148,8 +148,7 @@ class MultiTaskSampler(Sampler):
     def __iter__(self):
 
         self.build_chunk_trackers()
-        step_idx = 0
-        while step_idx < len(self):
+        while self.batch_idx < len(self):
             if self.distributed:
                 task_idx, dataset_idx = self.get_td_pair_distributed()
             else:
@@ -164,10 +163,10 @@ class MultiTaskSampler(Sampler):
 
             # construct the global indices
             global_idxs = [ (task_idx, dataset_idx, idx) for idx in batch_idxs ]
+
+            self.batch_idx += 1
             
             yield global_idxs
-
-            step_idx += 1
 
     def __len__(self):
         return self.max_steps
