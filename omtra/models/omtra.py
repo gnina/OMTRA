@@ -171,6 +171,11 @@ class OMTRA(pl.LightningModule):
             checkpoint_path = checkpoint_dir / f'batch_{batch_idx}.ckpt'
             print('saving checkpoint to ', checkpoint_path, flush=True)
             self.trainer.save_checkpoint(str(checkpoint_path))
+            if self.global_rank == 0:
+                try:
+                    os.chmod(checkpoint_path, 0o644)  # Readable by others
+                except Exception as e:
+                    print(f"Error changing permissions for {checkpoint_path}: {e}")
             print(f'Saved checkpoint to {checkpoint_path}')
                 
     
