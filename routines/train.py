@@ -69,7 +69,12 @@ def train(cfg: DictConfig):
         lig_enc_ckpt_specified = cfg.model.get('ligand_encoder_checkpoint') is not None
         if not lig_encoder_empty and not lig_enc_ckpt_specified:
             raise ValueError("ligand_encoder_checkpoint must be specified if omtra is doing latent ligand generation")
-        model = quick_load.omtra_from_config(cfg)
+        
+        partial_ckpt = cfg.get('partial_ckpt')
+        if partial_ckpt:
+            model = quick_load.omtra_from_partial_checkpoint(cfg, partial_ckpt)
+        else:
+            model = quick_load.omtra_from_config(cfg)
     elif mode == 'ligand_encoder':
         model = quick_load.lig_encoder_from_config(cfg)
     else:
