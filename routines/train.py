@@ -161,15 +161,14 @@ def main(cfg: DictConfig):
 
     resume = cfg.get("checkpoint") is not None
     if resume:
-        ckpt_path = Path(cfg.ckpt_path)
+        ckpt_path = Path(cfg.checkpoint)
         run_dir = ckpt_path.parent.parent
-        original_cfg_path = run_dir / "config.yaml"
+        original_cfg_path = run_dir / ".hydra/config.yaml"
         original_cfg = OmegaConf.load(original_cfg_path)
         # Only apply CLI overrides to the original config
         overrides = HydraConfig.get().overrides.task
         cli_cfg = OmegaConf.from_dotlist(overrides)
         cfg = OmegaConf.merge(original_cfg, cli_cfg)
-        cfg.ckpt_path = str(ckpt_path)
         cfg.og_run_dir = str(run_dir)
     else:
         cfg = merge_task_spec(cfg)
