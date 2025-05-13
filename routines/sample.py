@@ -185,8 +185,9 @@ def main(args):
 
     if args.visualize:
         for i, sys in enumerate(sampled_systems):
-            xt_traj_mols = sys.build_traj(ep_traj=False, lig=True, prot=True)
-            xhat_traj_mols = sys.build_traj(ep_traj=True, lig=True, prot=True)
+            prot = 'protein_identity' in task.groups_present
+            xt_traj_mols = sys.build_traj(ep_traj=False, lig=True, prot=prot)
+            xhat_traj_mols = sys.build_traj(ep_traj=True, lig=True, prot=prot)
             xt_file = output_dir / f"{task_name}_xt_traj_{i}.sdf"
             xhat_file = output_dir / f"{task_name}_xhat_traj_{i}.sdf"
             write_mols_to_sdf(xt_traj_mols['lig'], xt_file)

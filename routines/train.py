@@ -69,7 +69,12 @@ def train(cfg: DictConfig):
         lig_enc_ckpt_specified = cfg.model.get('ligand_encoder_checkpoint') is not None
         if not lig_encoder_empty and not lig_enc_ckpt_specified:
             raise ValueError("ligand_encoder_checkpoint must be specified if omtra is doing latent ligand generation")
-        model = quick_load.omtra_from_config(cfg)
+        
+        partial_ckpt = cfg.get('partial_ckpt')
+        if partial_ckpt:
+            model = quick_load.omtra_from_partial_checkpoint(cfg, partial_ckpt)
+        else:
+            model = quick_load.omtra_from_config(cfg)
     elif mode == 'ligand_encoder':
         model = quick_load.lig_encoder_from_config(cfg)
     else:
@@ -146,8 +151,7 @@ def train(cfg: DictConfig):
 
     # right after training ends:
     if trainer.is_global_zero:
-        hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
-        log_dir = hydra_cfg['runtime']['output_dir']
+        log_dir = trainer.lightning_module.og_run_dir
         checkpoint_dir = Path(log_dir) / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         trainer.save_checkpoint(str(checkpoint_dir / "last.ckpt"))
@@ -160,13 +164,16 @@ def main(cfg: DictConfig):
     cfg is a DictConfig configuration composed by Hydra.
     """
 
-    resume = cfg.get('checkpoint') is not None
+    resume = cfg.get("checkpoint") is not None
     if resume:
-        ckpt_path = Path(cfg.ckpt_path)
+        ckpt_path = Path(cfg.checkpoint)
         run_dir = ckpt_path.parent.parent
-        original_cfg_path = run_dir / 'config.yaml'
-        cfg = OmegaConf.load(original_cfg_path)
-        cfg.ckpt_path = str(ckpt_path)
+        original_cfg_path = run_dir / ".hydra/config.yaml"
+        original_cfg = OmegaConf.load(original_cfg_path)
+        # Only apply CLI overrides to the original config
+        overrides = HydraConfig.get().overrides.task
+        cli_cfg = OmegaConf.from_dotlist(overrides)
+        cfg = OmegaConf.merge(original_cfg, cli_cfg)
         cfg.og_run_dir = str(run_dir)
     else:
         cfg = merge_task_spec(cfg)

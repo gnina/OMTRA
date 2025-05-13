@@ -27,12 +27,18 @@ chmod +x build_env.sh
 - [ ] protein-ligand interaction metric? pose check! any others?
 - [ ] add posebusters
 - [ ] alternative time sampling methods for training (semlaflow, foldflow2)
-- [ ] verify apo-holo alignment
+- [ ] harmonic prior
 - [ ] fake atoms
 - [ ] experiment what standard deviation of priors
-- [ ] profile plinder dataset code
-- [ ] profile vector field edge creation/deletion code
 - [ ] turn off self-conditioning and see what happens
+- [ ] learned, task-dependent normalization for message passing
+- [ ] why does going 4->6 layers break the model?
+- [ ] test resume functionality
+- [ ] find something different flowmol vs. omtra architecture
+- [ ] vector field self.scalar_embedding MLPs should be 2 layers
+- [ ] same with self.edge_embedding in vf
+- [ ] self-conditioning edge_embedding should be 2 layers
+- [ ] investigate difference between code checkpoints
 
 
 # How to train?
