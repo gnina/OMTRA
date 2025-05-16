@@ -165,6 +165,12 @@ def main(args):
         g_list = [ dataset[(task_name, i)].to(device) for i in dataset_idxs ]
         n_replicates = args.n_replicates
 
+    # set coms if protein is present
+    if 'protein_identity' in task.groups_present and 'ligand_identity' in task.groups_present:
+        coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
+    else:
+        coms = None
+
     sampled_systems = model.sample(
         g_list=g_list,
         n_replicates=n_replicates,
@@ -173,6 +179,7 @@ def main(args):
         device=device,
         n_timesteps=args.n_timesteps,
         visualize=args.visualize,
+        coms=coms,
     )
 
     if args.output_dir is None:
@@ -188,18 +195,26 @@ def main(args):
             prot = 'protein_identity' in task.groups_present
             xt_traj_mols = sys.build_traj(ep_traj=False, lig=True, prot=prot)
             xhat_traj_mols = sys.build_traj(ep_traj=True, lig=True, prot=prot)
-            xt_file = output_dir / f"{task_name}_xt_traj_{i}.sdf"
-            xhat_file = output_dir / f"{task_name}_xhat_traj_{i}.sdf"
-            write_mols_to_sdf(xt_traj_mols['lig'], xt_file)
-            write_mols_to_sdf(xhat_traj_mols['lig'], xhat_file)
+            lig_xt_file = output_dir / f"{task_name}_lig_xt_traj_{i}.sdf"
+            lig_xhat_file = output_dir / f"{task_name}_lig_xhat_traj_{i}.sdf"
+            write_mols_to_sdf(xt_traj_mols['lig'], lig_xt_file)
+            write_mols_to_sdf(xhat_traj_mols['lig'], lig_xhat_file)
             
             if 'protein_identity' in task.groups_present or 'protein_structure' in task.groups_present:
-                write_arrays_to_cif(xt_traj_mols['prot'], xt_file.with_suffix('.cif'))
-                write_arrays_to_cif(xhat_traj_mols['prot'], xhat_file.with_suffix('.cif'))
+                prot_xt_file = output_dir / f"{task_name}_prot_xt_traj_{i}.cif"
+                prot_xhat_file = output_dir / f"{task_name}_prot_xhat_traj_{i}.cif"
+                write_arrays_to_cif(xt_traj_mols['prot'], prot_xt_file)
+                write_arrays_to_cif(xhat_traj_mols['prot'], prot_xhat_file)
     else:
         rdkit_mols = [ s.get_rdkit_ligand() for s in sampled_systems ]
         output_file = output_dir / f"{task_name}_samples.sdf"
         write_mols_to_sdf(rdkit_mols, output_file)
+
+        if 'protein_identity' in task.groups_present or 'protein_structure' in task.groups_present:
+            prot_arrays = [ s.get_protein_array() for s in sampled_systems ]
+            for i, prot_arr in enumerate(prot_arrays):
+                prot_file = output_dir / f"{task_name}_prot_{i}.cif"
+                write_arrays_to_cif([prot_arr], prot_file)
 
     if args.metrics:
         eval_fn = get_eval(task_name)

@@ -28,17 +28,18 @@ chmod +x build_env.sh
 - [ ] add posebusters
 - [ ] alternative time sampling methods for training (semlaflow, foldflow2)
 - [ ] harmonic prior
+- [ ] scale OT (https://arxiv.org/abs/2406.07266) - playing with variance of prior
 - [ ] fake atoms
+- [ ] explicit/implicit hydrogens
+- [ ] filter private library pharmit compounds
 - [ ] experiment what standard deviation of priors
 - [ ] turn off self-conditioning and see what happens
 - [ ] learned, task-dependent normalization for message passing
 - [ ] why does going 4->6 layers break the model?
 - [ ] test resume functionality
-- [ ] find something different flowmol vs. omtra architecture
 - [ ] vector field self.scalar_embedding MLPs should be 2 layers
 - [ ] same with self.edge_embedding in vf
 - [ ] self-conditioning edge_embedding should be 2 layers
-- [ ] investigate difference between code checkpoints
 
 
 # How to train?
