@@ -12,6 +12,7 @@ from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 
 # most taken from flowmol gvp (moreflowmol branch)
 # heteroconv adapted from GVPConv in flowmol gvp
+# from line_profiler import LineProfiler, profile
 
 
 # helper functions
@@ -107,6 +108,10 @@ class GVP(nn.Module):
         )
         self.Wu = nn.Parameter(self.Wu)
 
+        if isinstance(vectors_activation, nn.Sigmoid):
+            self.fuse_activation = True
+        else:
+            self.fuse_activation = False
         self.vectors_activation = vectors_activation
 
         self.to_feats_out = nn.Sequential(
@@ -125,6 +130,7 @@ class GVP(nn.Module):
 
         # self.scalar_to_vector_gates = nn.Linear(dim_feats_out, dim_vectors_out) if vector_gating else None
 
+    # @profile
     def forward(self, data):
         feats, vectors = data
         b, n, _, v, c = *feats.shape, *vectors.shape
@@ -135,16 +141,29 @@ class GVP(nn.Module):
         assert c == 3 and v == self.dim_vectors_in, "vectors have wrong dimensions"
         assert n == self.dim_feats_in, "scalar features have wrong dimensions"
 
-        Vh = einsum(
-            "b v c, v h -> b h c", vectors, self.Wh
-        )  # has shape (batch_size, dim_h, 3)
+        # Vh = einsum(
+        #     "b v c, v h -> b h c", vectors, self.Wh
+        # )  # has shape (batch_size, dim_h, 3)
+        # 1) move channel dim to front
+        v = vectors.transpose(1, 2)            # [B, C, V]
+        # 2) batched matmul
+        Vh_mat = torch.matmul(v, self.Wh)      # [B, C, H]
+        # 3) restore to [B, H, C]
+        Vh = Vh_mat.transpose(1, 2)      # [B, H, C]
 
         # if we are including cross-product features, compute them here
         if self.n_cp_feats > 0:
             # convert dim_vectors_in vectors to n_cp_feats*2 vectors
-            Vcp = einsum(
-                "b v c, v p -> b p c", vectors, self.Wcp
-            )  # has shape (batch_size, n_cp_feats*2, 3)
+            # Vcp = einsum(
+            #     "b v c, v p -> b p c", vectors, self.Wcp
+            # )  # has shape (batch_size, n_cp_feats*2, 3)
+
+            # compute Vcp via matmul instead of einsum
+            v_ = vectors.transpose(1, 2)               # [B, C, V]
+            Vcp_mat = torch.matmul(v_, self.Wcp)       # [B, C, P]
+            Vcp = Vcp_mat.transpose(1, 2)              # [B, P, C]
+
+
             # split the n_cp_feats*2 vectors into two sets of n_cp_feats vectors
             cp_src, cp_dst = torch.split(
                 Vcp, self.n_cp_feats, dim=1
@@ -159,9 +178,13 @@ class GVP(nn.Module):
                 (Vh, cp), dim=1
             )  # has shape (batch_size, dim_h + n_cp_feats, 3)
 
-        Vu = einsum(
-            "b h c, h u -> b u c", Vh, self.Wu
-        )  # has shape (batch_size, dim_vectors_out, 3)
+        # Vu = einsum(
+        #     "b h c, h u -> b u c", Vh, self.Wu
+        # )  # has shape (batch_size, dim_vectors_out, 3)
+        # compute Vu via matmul instead of einsum
+        vh_ = Vh.transpose(1, 2)                   # [B, C, H]
+        Vu_mat = torch.matmul(vh_, self.Wu)        # [B, C, U]
+        Vu = Vu_mat.transpose(1, 2)                # [B, U, C]
 
         sh = _norm_no_nan(Vh)
 
@@ -252,8 +275,8 @@ class HeteroGVPConv(nn.Module):
         n_message_gvps: int = 1,
         n_update_gvps: int = 1,
         attention: bool = False,
-        s_message_dim: int = 128,
-        v_message_dim: int = 16,
+        s_message_dim: int = None,
+        v_message_dim: int = None,
         n_heads: int = 1,
         n_expansion_gvps: int = 1,
         use_dst_feats: bool = False,
@@ -495,8 +518,10 @@ class HeteroGVPConv(nn.Module):
 
         if self.message_norm == "mean":
             self.agg_func = fn.mean
+            self.cross_reducer = "mean"
         else:
             self.agg_func = fn.sum
+            self.cross_reducer = "sum"
 
         # if message size is smaller than node embedding size, we need to project aggregated messages back to the node embedding size
         self.message_expansion = nn.ModuleDict()
@@ -530,6 +555,7 @@ class HeteroGVPConv(nn.Module):
             for ntype in self.node_types:
                 self.message_expansion[ntype] = nn.Identity()
 
+    # @profile
     def forward(
         self,
         g: dgl.DGLGraph,
@@ -554,7 +580,7 @@ class HeteroGVPConv(nn.Module):
 
             # edge feature
             for etype in self.edge_types:
-                if g.num_edges(etype) == 0:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
                 if self.edge_feat_size[etype] > 0:
                     assert edge_feats.get(etype) is not None, (
@@ -565,7 +591,7 @@ class HeteroGVPConv(nn.Module):
             # normalize x_diff and compute rbf embedding of edge distance
             # dij = torch.norm(g.edges[self.edge_type].data['x_diff'], dim=-1, keepdim=True)
             for etype in self.edge_types:
-                if g.num_edges(etype) == 0:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
                 if x_diff is not None and d is not None:
                     g.edges[etype].data["x_diff"] = x_diff[etype]
@@ -606,7 +632,7 @@ class HeteroGVPConv(nn.Module):
                 passing_edges = self.edge_types
 
             for etype in passing_edges:
-                if g.num_edges(etype) == 0:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
                 etype_message = partial(self.message, etype=etype)
                 g.apply_edges(etype_message, etype=etype)
@@ -614,7 +640,7 @@ class HeteroGVPConv(nn.Module):
             # if self.attenion, multiple messages by attention weights
             if self.attention:
                 for etype in self.edge_types:
-                    if g.num_edges(etype) == 0:
+                    if etype not in g.etypes or g.num_edges(etype) == 0:
                         continue
                     scalar_msg, att_logits = (
                         g.edges[etype].data["scalar_msg"][:, : self.s_message_dim],
@@ -642,9 +668,9 @@ class HeteroGVPConv(nn.Module):
             scalar_agg_fns = {}
             vector_agg_fns = {}
             for etype in passing_edges:
-                if g.num_edges(etype) == 0:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
-
+                """
                 g.update_all(
                     fn.copy_e("scalar_msg", "m"),
                     self.agg_func("m", "scalar_msg"),
@@ -656,6 +682,8 @@ class HeteroGVPConv(nn.Module):
                     etype=etype,
                 )
                 """
+                
+                
                 scalar_agg_fns[etype] = (
                     fn.copy_e("scalar_msg", "m"),
                     self.agg_func("m", "scalar_msg"),
@@ -663,10 +691,10 @@ class HeteroGVPConv(nn.Module):
                 vector_agg_fns[etype] = (
                     fn.copy_e("vec_msg", "m"),
                     self.agg_func("m", "vec_msg"),
-                )"""
+                )
 
-            # g.multi_update_all(scalar_agg_fns, cross_reducer=self.agg_func)
-            # g.multi_update_all(vector_agg_fns, cross_reducer=self.agg_func)
+            g.multi_update_all(scalar_agg_fns, cross_reducer=self.cross_reducer)
+            g.multi_update_all(vector_agg_fns, cross_reducer=self.cross_reducer)
 
             # get aggregated scalar and vector messages
             if isinstance(self.message_norm, str):

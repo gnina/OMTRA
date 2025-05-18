@@ -1,12 +1,15 @@
 defaults:
   - _self_
   - model: default
-  - trainer: distributed
+  - ligand_encoder: none
+  - trainer: default
   - task_group: protein
   - graph: default
   - prior: default
-  - callbacks: default
+  - callbacks: no_checkpoint
   - wandb_conf: default
+
+mode: omtra # mode for training, can be omtra (train omtra) or ligand_encoder (train just the ligand encoder)
 
 seed: 42
 
@@ -15,7 +18,7 @@ name: i_forgot_to_name_my_run
 # global overrides
 edges_per_batch: 300000 # TODO: it might be the case the pharmit and plinder tasks support different batch sizes..
 num_workers: 2
-max_steps: 100 # number of steps to train for
+max_steps: 1000 # number of steps to train for
 
 pharmit_path: ${omtra_root:}/data/pharmit_dev
 plinder_path: ${omtra_root:}/data/plinder
@@ -24,14 +27,6 @@ plinder_path: ${omtra_root:}/data/plinder
 # this is a directory that will symlink wandb 
 # run names and run ids to the actual hydra output directory
 symlink_dir: ./wandb_symlinks
-
-trainer:
-  use_distributed_sampler: False
-  devices: 2
-
-task_group:
-  datamodule:
-    distributed: True
 
 hydra:
   run:

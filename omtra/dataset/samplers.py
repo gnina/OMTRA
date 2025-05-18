@@ -26,6 +26,8 @@ class MultiTaskSampler(Sampler):
         self.multi_dataset = multi_dataset
         self.edges_per_batch = edges_per_batch
         self.max_steps = max_steps
+        if self.max_steps is None:
+            raise ValueError("max_steps must be specified")
         
         self.distributed = distributed
 
@@ -41,8 +43,6 @@ class MultiTaskSampler(Sampler):
         self.batch_idx = 0
 
         if self.distributed:
-            if torch.distributed.is_initialized():
-                self.cpu_group = torch.distributed.new_group(backend="gloo")
             self.num_replicas = num_replicas if num_replicas is not None else torch.distributed.get_world_size()
             self.rank = rank if rank is not None else torch.distributed.get_rank()
 
@@ -65,7 +65,7 @@ class MultiTaskSampler(Sampler):
         p = self.p_dataset_task[phase_idx]
 
         # Flatten the tensor to work with torch.multinomial
-        flat_p = p.flatten()
+        flat_p = p.flatten().cpu() # NOTE: changed this to cpu bc cgpt said its not deterministic on gpu?
 
         # Draw a single sample from the flattened distribution
         index = torch.multinomial(flat_p, 1).item()
@@ -121,26 +121,34 @@ class MultiTaskSampler(Sampler):
                 raise NotImplementedError(f"Dataset {dataset_name} not supported")
 
     def get_td_pair_distributed(self):
+        # if not hasattr(self, "cpu_group"):
+            # self.cpu_group = torch.distributed.new_group(backend="gloo")
+            
+        device = torch.device(f"cuda:{self.rank}")
         if self.rank == 0:
             task_idx, dataset_idx = self.sample_task_and_dataset()
-            task_idx_tensor = torch.tensor(task_idx, dtype=torch.int64)
-            dataset_idx_tensor = torch.tensor(dataset_idx, dtype=torch.int64)
+            task_idx_tensor = torch.tensor(task_idx, dtype=torch.int64, device=device)
+            dataset_idx_tensor = torch.tensor(dataset_idx, dtype=torch.int64, device=device)
         else:
-            task_idx_tensor = torch.tensor(0, dtype=torch.int64)
-            dataset_idx_tensor = torch.tensor(0, dtype=torch.int64)
+            task_idx_tensor = torch.tensor(0, dtype=torch.int64, device=device)
+            dataset_idx_tensor = torch.tensor(0, dtype=torch.int64, device=device)
 
-        torch.distributed.broadcast(task_idx_tensor, src=0, group=self.cpu_group)
-        torch.distributed.broadcast(dataset_idx_tensor, src=0, group=self.cpu_group)
+        # torch.distributed.broadcast(task_idx_tensor, src=0, group=self.cpu_group)
+        # torch.distributed.broadcast(dataset_idx_tensor, src=0, group=self.cpu_group)
+        torch.distributed.broadcast(task_idx_tensor, src=0)
+        torch.distributed.broadcast(dataset_idx_tensor, src=0)
 
+        # task_idx = task_idx_tensor.cpu().item()
+        # dataset_idx = dataset_idx_tensor.cpu().item()
         task_idx = task_idx_tensor.item()
         dataset_idx = dataset_idx_tensor.item()
+        
         return task_idx, dataset_idx
 
     def __iter__(self):
 
         self.build_chunk_trackers()
-        step_idx = 0
-        while step_idx < len(self):
+        while self.batch_idx < len(self):
             if self.distributed:
                 task_idx, dataset_idx = self.get_td_pair_distributed()
             else:
@@ -155,13 +163,13 @@ class MultiTaskSampler(Sampler):
 
             # construct the global indices
             global_idxs = [ (task_idx, dataset_idx, idx) for idx in batch_idxs ]
+
+            self.batch_idx += 1
             
             yield global_idxs
 
-            step_idx += 1
-
     def __len__(self):
-        return self.max_steps if self.max_steps is not None else float('inf')
+        return self.max_steps
     
     def state_dict(self):
         return {

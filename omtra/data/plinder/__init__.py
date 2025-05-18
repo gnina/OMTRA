@@ -81,10 +81,10 @@ class PharmacophoreData:
 class SystemData:
     system_id: str
     ligand_id: str
-    receptor: StructureData # 150 KB
     ligand: LigandData # 1.2 KB
-    pharmacophore: PharmacophoreData # 1.6 KB
-    pocket: StructureData # 10 KB
+    receptor: Optional[StructureData] = None # 150 KB
+    pharmacophore: Optional[PharmacophoreData] = None # 1.6 KB
+    pocket: Optional[StructureData] = None # 10 KB
     npndes: Optional[Dict[str, LigandData]] = None # 1.2 KB
     link_id: Optional[str] = None
     link_type: Optional[str] = None

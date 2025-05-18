@@ -1,4 +1,8 @@
 defaults:
   - default
 
+num_nodes: 1
 devices: 2
+use_distributed_sampler: False
+strategy: ddp_find_unused_parameters_true
+sync_batchnorm: False

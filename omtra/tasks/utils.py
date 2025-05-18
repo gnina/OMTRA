@@ -7,39 +7,19 @@ import torch
 
 from omtra.data.graph.edge_factory import get_edge_builders
 from omtra.data.graph.utils import get_batch_info, get_edges_per_batch
-from omtra.data.graph import edge_types as all_edge_types
+from omtra.data.graph import get_edges_for_task
 from omtra.data.graph import to_canonical_etype
 
-def get_edges_for_task(task: Task, graph_config: DictConfig) -> set:
-    ntypes = set()
-    modality_edges = set()
-    for m in task.modalities_present:
-        if m.is_node:
-            ntypes.add(m.entity_name)
-        else:
-            modality_edges.add(m.entity_name)
+# from line_profiler import LineProfiler, profile
 
-    task_edges = set()
-    graph_config_edges = set(list(graph_config.get("edges").keys()))
-    for etype in all_edge_types:
-        src_ntype, _, dst_ntype = to_canonical_etype(etype)
-        # if the edge requires node types not supported, skip it
-        if not (src_ntype in ntypes and dst_ntype in ntypes):
-            continue
-        
-        # if the edge is not in the graph config, skip it, unless it has a modality on it or is a covalent edge
-        predetermined = etype in modality_edges or 'covalent' in etype
-        if etype not in graph_config_edges and not predetermined:
-            continue
-        task_edges.add(etype)
-    return task_edges
-
-
+# @profile
 def build_edges(g: dgl.DGLHeteroGraph, 
                 task: Task, 
                 node_batch_idx: Dict[str, torch.Tensor], 
                 graph_config,
-                etype_subset: List[str] = None) -> dgl.DGLHeteroGraph:
+                etype_subset: List[str] = None,
+                lig_only: bool = False,
+                ) -> dgl.DGLHeteroGraph:
     batch_num_nodes, batch_num_edges = get_batch_info(g)
     batch_size = g.batch_size
     
@@ -52,6 +32,10 @@ def build_edges(g: dgl.DGLHeteroGraph,
     for etype in etypes:
         if etype in predetermined_edges or "covalent" in etype:
             continue
+        
+        if lig_only and "lig" not in etype:
+            continue
+        
         src_ntype, _, dst_ntype = to_canonical_etype(etype)
 
         # if we don't have any of the nodes for this edge type, skip it
@@ -74,7 +58,7 @@ def build_edges(g: dgl.DGLHeteroGraph,
     
     return g
 
-def remove_edges(g: dgl.DGLHeteroGraph) -> dgl.DGLHeteroGraph:
+def remove_edges(g: dgl.DGLHeteroGraph, lig_only: bool = False) -> dgl.DGLHeteroGraph:
     batch_num_nodes, batch_num_edges = get_batch_info(g)
     batch_size = g.batch_size
     
@@ -83,6 +67,9 @@ def remove_edges(g: dgl.DGLHeteroGraph) -> dgl.DGLHeteroGraph:
     
     for etype in etypes:
         if etype in predetermined_edges or "covalent" in etype:
+            continue
+        
+        if lig_only and "lig" not in etype:
             continue
         
         if g.num_edges(etype) == 0:

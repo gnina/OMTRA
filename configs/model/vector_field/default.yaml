@@ -1,9 +1,29 @@
+_target_: omtra.models.vector_field.VectorField
 
-# cant set target because we don't want recursive instantiation to kick off when creating Omtra model. 
-# this is a bummer because i would love to be able to change the vector field class at the config level.. :(
-# _target_: omtra.models.vector_field.VectorField
 
-self_conditioning: true
-convs_per_update: 4
-n_molecule_updates: 1
-n_hidden_scalars: 256
+n_vec_channels:                16
+n_cp_feats:                    4
+n_hidden_scalars:              256
+n_hidden_edge_feats:           64
+n_recycles:                    1
+n_molecule_updates:            1
+convs_per_update:              4
+n_message_gvps:                3
+n_update_gvps:                 3
+n_expansion_gvps:              3
+separate_mol_updaters:         true
+message_norm:                  100
+rbf_dmax:                      10
+rbf_dim:                       32
+time_embedding_dim:            64
+token_dim:                     64
+attention:                     false
+n_heads:                       1
+s_message_dim:                 null
+v_message_dim:                 null
+dropout:                       0.0
+has_mask:                      true
+self_conditioning:             true
+use_dst_feats:                 false
+dst_feat_msg_reduction_factor: 4
+rebuild_edges:                 false

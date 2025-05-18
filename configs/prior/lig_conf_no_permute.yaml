@@ -1,0 +1,6 @@
+ligand_conformer:
+  lig_x:
+    type: gaussian
+    params:
+      ot: true
+      permutation: false

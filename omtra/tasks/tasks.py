@@ -47,14 +47,28 @@ class Task:
     def plinder_link_version(self) -> str:
         prot_atom_prior = self.priors.get('prot_atom_x', None)
         if prot_atom_prior is None:
-            return None
+            return 'no_links'
         if prot_atom_prior['type'] == 'apo_exp':
             return 'exp'
         elif prot_atom_prior['type'] == 'apo_pred':
             return 'pred'
         else:
             return 'no_links'
-
+        
+    @classproperty
+    def node_modalities_present(self) -> List[Modality]:
+        """Returns the node modalities for this task. This is a subset of the modalities present in the task."""
+        return [ m for m in self.modalities_present if m.is_node ]
+    
+    @classproperty
+    def edge_modalities_present(self) -> List[Modality]:
+        """Returns the edge modalities for this task. This is a subset of the modalities present in the task."""
+        return [ m for m in self.modalities_present if not m.is_node ]
+    
+    @classproperty
+    def unconditional(self) -> bool:
+        """Returns True if the task is fully unconditional, i.e., all groups are generated and none are fixed."""
+        return set(self.groups_generated) == set(self.groups_present)
 
 ##
 # tasks with ligand only
@@ -110,6 +124,16 @@ class ProteinLigandDeNovo(Task):
         'type': 'target_dependent_gaussian',
     }
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
+
+
+@register_task("fixed_protein_ligand_denovo")
+class FixedProteinLigandDeNovo(Task):
+    groups_fixed = ['protein_identity', 'protein_structure']
+    groups_generated = ['ligand_identity', 'ligand_structure']
+
+    priors = deepcopy(pc.denovo_ligand)
+
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein) # can probably remove protein from this
     
 
 
@@ -150,6 +174,20 @@ class FlexibleDocking(Task):
     }
     priors['npnde_x'] = {
         'type': 'target_dependent_gaussian',
+    }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
+    
+
+@register_task("rigid_docking")
+class RigidDocking(Task):
+    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
+
+    groups_fixed = ["ligand_identity", "protein_identity", "protein_structure"]
+    groups_generated = ["ligand_structure"]
+
+    priors = deepcopy(pc.ligand_conformer)
+    priors["npnde_x"] = {
+        "type": "target_dependent_gaussian",
     }
     conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
 

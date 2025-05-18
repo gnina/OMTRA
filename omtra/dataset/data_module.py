@@ -3,6 +3,8 @@ from torch.utils.data import DataLoader
 from typing import List, Dict
 import dgl
 from omegaconf import DictConfig
+from copy import deepcopy
+import torch
 
 from omtra.dataset.multitask import MultitaskDataSet
 from omtra.dataset.samplers import MultiTaskSampler
@@ -23,6 +25,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         num_workers: int = 0, 
         distributed: bool = False,
         max_steps: int = None, 
+        pin_memory: bool = True,
     ):
         super().__init__()
         self.dataset_config = dataset_config
@@ -32,6 +35,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self.prior_config = prior_config
         self.graph_config = graph_config
         self.max_steps = max_steps
+        self.pin_memory = pin_memory
 
 
         self.td_coupling: TaskDatasetCoupling = build_td_coupling(task_phases, dataset_task_coupling)
@@ -53,17 +57,27 @@ class MultiTaskDataModule(pl.LightningDataModule):
                 max_steps=self.max_steps,
             )
 
+            # create a validation t-d coupling that is uniform over the tasks being trained on
+            val_td_coupling = deepcopy(self.td_coupling)
+            p = val_td_coupling.p_dataset_task.sum(dim=0)
+            mask = p != 0
+            p_uniform = mask.float() / mask.sum()
+            p_dataset_task = torch.zeros_like(val_td_coupling.p_dataset_task)
+            p_dataset_task = p_dataset_task + p_uniform.unsqueeze(0)
+            val_td_coupling.p_dataset_task = p_dataset_task
+
+
             # TODO: how exactly do we want to sample data for validation? we don't actually
             # need to follow the td_coupling for validation, right?
             self.val_sampler = MultiTaskSampler(
                 self.val_dataset, 
-                self.td_coupling,
+                val_td_coupling,
                 self.edges_per_batch, 
                 distributed=self.distributed,
+                max_steps=self.max_steps,
             )
 
     def load_dataset(self, split: str):
-        # TODO: tasks should just be absored into multitask_dataset_config
         return MultitaskDataSet(split, 
                              td_coupling=self.td_coupling,
                              graph_config=self.graph_config,
@@ -77,7 +91,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
                                 collate_fn=omtra_collate_fn, 
                                 worker_init_fn=worker_init_fn,
                                 persistent_workers=self.num_workers > 0,
-                                pin_memory=True,
+                                pin_memory=self.pin_memory,
                                 prefetch_factor=5 if self.num_workers > 0 else None,
                                 num_workers=self.num_workers)
 
