@@ -8,7 +8,7 @@ from pathlib import Path
 
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.data.graph import build_complex_graph
-from omtra.data.xace_ligand import sparse_to_dense
+from omtra.data.xace_ligand import MolXACE, add_fake_atoms
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.tasks.modalities import name_to_modality
@@ -26,10 +26,13 @@ class PharmitDataset(ZarrDataset):
                  processed_data_dir: str,
                  graph_config: DictConfig,
                  prior_config: DictConfig,
+                 fake_atom_p: float = 0.0,
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
         self.prior_config = prior_config
+        self.fake_atom_p = fake_atom_p
+        self.use_fake_atoms = fake_atom_p > 0
 
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
@@ -66,13 +69,12 @@ class PharmitDataset(ZarrDataset):
         include_pharmacophore = 'pharmacophore' in task_class.groups_present
 
         # slice lig node data
-        xace_ligand = []
+        xace_dict = {}
         start_idx, end_idx = self.slice_array('lig/node/graph_lookup', idx)
         start_idx, end_idx = int(start_idx), int(end_idx)
         for nfeat in ['x', 'a', 'c']:
-            xace_ligand.append(
-                self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
-            )
+            xace_dict[nfeat] = self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
+    
             
         # get slice indicies for ligand-ligand edges
         edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)
@@ -80,36 +82,45 @@ class PharmitDataset(ZarrDataset):
         # slice ligand-ligand edge data
         start_idx, end_idx = edge_slice_idxs
         start_idx, end_idx = int(start_idx), int(end_idx)
-        xace_ligand.append(self.slice_array('lig/edge/e', start_idx, end_idx))
-        xace_ligand.append(self.slice_array('lig/edge/edge_index', start_idx, end_idx))
+        xace_dict['e'] = self.slice_array('lig/edge/e', start_idx, end_idx)
+        xace_dict['edge_idxs'] = self.slice_array('lig/edge/edge_index', start_idx, end_idx)
 
-        # convert to torch tensors
-        # TODO: data typing!! need to design data typing!
-        xace_ligand = [torch.from_numpy(arr) for arr in xace_ligand]
+        # convert to torch tensors and set data types
+        for k in xace_dict:
+            xace_dict[k] = torch.from_numpy(xace_dict[k])
+            if k == 'x':
+                xace_dict[k] = xace_dict[k].float()
+            else:
+                xace_dict[k] = xace_dict[k].long()
 
-        # set data types
-        xace_ligand[0] = xace_ligand[0].float()
-        xace_ligand[1] = xace_ligand[1].long()
-        xace_ligand[2] = xace_ligand[2].long()
-        xace_ligand[3] = xace_ligand[3].long()
-        xace_ligand[4] = xace_ligand[4].long()
+        xace_ligand = MolXACE(**xace_dict)
+
+        if self.use_fake_atoms:
+            xace_ligand = add_fake_atoms(xace_ligand, self.fake_atom_p)
 
         # convert sparse xae to dense xae
-        lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(*xace_ligand)
+        xace_ligand = xace_ligand.sparse_to_dense()
+        # lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(*xace_ligand)
 
         # convert charges to token indicies
         charge_map_tensor = torch.tensor(charge_map)
-        lig_c = torch.searchsorted(charge_map_tensor, lig_c)
+        lig_c = torch.searchsorted(charge_map_tensor, xace_ligand.c)
 
         # construct inputs to graph building function
         g_node_data = {
-            'lig': {'x_1_true': lig_x, 'a_1_true': lig_a, 'c_1_true': lig_c},
+            'lig': {
+                'x_1_true': xace_ligand.x, 
+                'a_1_true': xace_ligand.a,
+                'c_1_true': lig_c,
+                },
         }
         g_edge_data = {
-            'lig_to_lig': {'e_1_true': lig_e},
+            'lig_to_lig': {
+                'e_1_true': xace_ligand.e,
+            },
         }
         g_edge_idxs = {
-            'lig_to_lig': lig_edge_idxs,
+            'lig_to_lig': xace_ligand.edge_idxs,
         }
 
         # if this task includes pharmacophore data, then we need to slice and add that data to the graph
