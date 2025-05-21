@@ -21,8 +21,8 @@ from omtra.data.graph.utils import (
     get_upper_edge_mask,
     copy_graph,
     build_lig_edge_idxs,
-    SampledSystem,
 )
+from omtra.eval.system import SampledSystem
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality

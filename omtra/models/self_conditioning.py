@@ -7,13 +7,10 @@ from typing import Dict
 import torch.nn.functional as tfn
 
 from omtra.models.gvp import _norm_no_nan, _rbf
-from omtra.tasks.modalities import MODALITY_ORDER, name_to_modality
-from omtra.utils.embedding import rbf_twoscale
-from omtra.utils.graph import canonical_node_features
+from omtra.tasks.modalities import name_to_modality
 from omtra.load.conf import TaskDatasetCoupling
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
-from functools import partial
 from einops import rearrange
 
 # TODO: adapt for heterographs

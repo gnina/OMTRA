@@ -1,4 +1,4 @@
-from omtra.data.graph.utils import SampledSystem
+from omtra.eval.system import SampledSystem
 from omtra.eval.reos import REOS
 from omtra.eval.ring_systems import RingSystemCounter, ring_counts_to_df
 from collections import Counter

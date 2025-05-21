@@ -31,6 +31,8 @@ chmod +x build_env.sh
 - [ ] scale OT (https://arxiv.org/abs/2406.07266) - playing with variance of prior
 - [ ] fake atoms
 - [ ] explicit/implicit hydrogens
+- [ ] aromaticity labels
+- [ ] fragmentation while computing additional labels
 - [ ] filter private library pharmit compounds
 - [ ] experiment what standard deviation of priors
 - [ ] turn off self-conditioning and see what happens
@@ -40,6 +42,8 @@ chmod +x build_env.sh
 - [ ] vector field self.scalar_embedding MLPs should be 2 layers
 - [ ] same with self.edge_embedding in vf
 - [ ] self-conditioning edge_embedding should be 2 layers
+- [ ] aux losses; interaction loss
+- [ ] gaussian smoothing on top of apo structures
 
 
 # How to train?

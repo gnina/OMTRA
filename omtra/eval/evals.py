@@ -6,7 +6,7 @@ from omtra.eval.utils import (
     compute_peppr_metrics_no_ref,
     compute_peppr_metrics_ref,
 )
-from omtra.data.graph.utils import SampledSystem
+from omtra.eval.system import SampledSystem
 from typing import Dict, Any, Optional, List
 
 
