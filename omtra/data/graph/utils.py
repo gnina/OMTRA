@@ -600,6 +600,16 @@ class SampledSystem:
         hetero = np.full_like(atom_names, False, dtype=bool)
         return coords, atom_names, elements, res_ids, res_names, chain_ids, hetero
 
+    def extract_pharm_from_graph(self, g=None):
+        if g is None:
+            g = self.g
+
+        coords = g.nodes["pharm"].data["x_1_true"].numpy()
+        pharm_types = g.nodes["pharm"].data["a_1_true"].numpy()
+        pharm_vecs = g.nodes["pharm"].data["v_1_true"].numpy()
+
+        return coords, pharm_types, pharm_vecs
+
     def build_molecule(
         self,
         positions,
