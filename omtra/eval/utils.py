@@ -78,7 +78,7 @@ def compute_validity(
             except Chem.rdchem.KekulizeException:
                 error_messages['Kekulize'] += 1
                 # print("Can't kekulize molecule")
-            except Chem.rdchem.AtomKekulizeException or ValueError:
+            except Exception as e:
                 error_messages['other'] += 1
     
     error_messages['total'] = len(sampled_systems)
