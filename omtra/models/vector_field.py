@@ -33,6 +33,7 @@ from omtra.constants import (
 
 
 from omtra.data.graph.utils import get_batch_idxs
+from omtra.utils.graph import g_local_scope
 
 # from line_profiler import LineProfiler, profile
 
@@ -344,6 +345,7 @@ class VectorField(nn.Module):
                 rbf_dmax=rbf_dmax,
             )
 
+    @g_local_scope
     def forward(
         self,
         g: dgl.DGLGraph,
@@ -358,185 +360,184 @@ class VectorField(nn.Module):
         """Predict x_1 (trajectory destination) given x_t, and, optionally, previous destination features."""
         device = g.device
 
-        with g.local_scope():
-            node_scalar_features = {}
-            node_positions = {}
-            node_vec_features = {}
-            edge_features = {}
+        node_scalar_features = {}
+        node_positions = {}
+        node_vec_features = {}
+        edge_features = {}
 
-            # the only edges that should be in g at this point are covalent, lig_to_lig, npnde_to_npnde, maybe pharm_to_pharm
-            # need to add edges into protein structure, and between differing ntypes (except covalent)
-            g = build_edges(g, task_class, node_batch_idx, self.graph_config)
+        # the only edges that should be in g at this point are covalent, lig_to_lig, npnde_to_npnde, maybe pharm_to_pharm
+        # need to add edges into protein structure, and between differing ntypes (except covalent)
+        g = build_edges(g, task_class, node_batch_idx, self.graph_config)
 
-            # compose the graph from modalities into the language of the GNN
-            # that is node positions, node scalar features, node vector features, and edge features
-            # our implicit assumption
-            node_modalities = [m for m in task_class.modalities_present if m.is_node]
-            edge_modalities = [
-                m for m in task_class.modalities_present if not m.is_node
-            ]
+        # compose the graph from modalities into the language of the GNN
+        # that is node positions, node scalar features, node vector features, and edge features
+        # our implicit assumption
+        node_modalities = [m for m in task_class.modalities_present if m.is_node]
+        edge_modalities = [
+            m for m in task_class.modalities_present if not m.is_node
+        ]
 
-            # loop over modalities defined on nodes
-            for modality in node_modalities:
-                ntype = modality.entity_name
-                if g.num_nodes(ntype) == 0:
-                    continue
-                if modality.data_key == "x":  # set node positions
-                    node_positions[ntype] = g.nodes[ntype].data[
-                        f"{modality.data_key}_t"
-                    ]
-                if (
-                    modality.data_key == "v"
-                ):  # set user-provided vector features as initial vector features
-                    vec_features = g.nodes[ntype].data[
-                        f"{modality.data_key}_t"
-                    ]  # has shape (n_nodes, n_vecs_per_node, 3)
-                    n, v_in, _ = vec_features.shape
-                    assert self.n_vec_channels >= v_in
-                    # concatenate zeros to the end of the vector features until there are self.n_vec_channels channels
-                    vec_padding = torch.zeros(
-                        n,
-                        self.n_vec_channels - v_in,
-                        3,
-                        device=device,
-                        dtype=vec_features.dtype,
-                    )
-                    vec_features = torch.cat([vec_features, vec_padding], dim=1)
-                    node_vec_features[ntype] = vec_features
-                elif modality.is_categorical:  # node categorical features
-                    if ntype not in node_scalar_features:
-                        node_scalar_features[ntype] = []
-                    node_scalar_features[ntype].append(
-                        self.token_embeddings[modality.name](
-                            g.nodes[ntype].data[f"{modality.data_key}_t"]
-                        )
-                    )
-
-            # loop back over node types, and anything without vector features should be given a zero vector
-            for ntype in node_scalar_features.keys():
-                if ntype in node_vec_features:
-                    continue
-                num_nodes = g.num_nodes(ntype)
-                node_vec_features[ntype] = torch.zeros(
-                    (num_nodes, self.n_vec_channels, 3), device=device
-                ).float()
-
-            # now lets collect edge features
-            for modality in edge_modalities:
-                etype = modality.entity_name
-                if self.edge_feat_sizes[etype] > 0 and g.num_edges(etype) > 0:
-                    edge_feats = self.token_embeddings[modality.name](
-                        g.edges[etype].data[f"{modality.data_key}_t"]
-                    )
-                    edge_feats = self.edge_embedding[etype](edge_feats)
-                    edge_features[etype] = edge_feats
-
-            # get task embedding
-            task_idx = self.td_coupling.task_space.index(
-                task_class.name
-            )  # integer of the task index
-            task_idx = torch.full(
-                (g.batch_size,), task_idx, device=device
-            )  # tensor of shape (batch_size) containing the task index
-            task_embedding_batch = self.task_embedding(
-                task_idx
-            )  # tensor of shape (batch_size, token_dim)
-
-            # add time and task embedding to node scalar features
-            for ntype in node_scalar_features.keys():
-                # add time embedding to node scalar features
-                if self.time_embedding_dim == 1:
-                    node_scalar_features[ntype].append(
-                        t[node_batch_idx[ntype]].unsqueeze(-1)
-                    )
-                else:
-                    t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
-                    t_emb = t_emb[node_batch_idx[ntype]]
-                    node_scalar_features[ntype].append(t_emb)
-
+        # loop over modalities defined on nodes
+        for modality in node_modalities:
+            ntype = modality.entity_name
+            if g.num_nodes(ntype) == 0:
+                continue
+            if modality.data_key == "x":  # set node positions
+                node_positions[ntype] = g.nodes[ntype].data[
+                    f"{modality.data_key}_t"
+                ]
+            if (
+                modality.data_key == "v"
+            ):  # set user-provided vector features as initial vector features
+                vec_features = g.nodes[ntype].data[
+                    f"{modality.data_key}_t"
+                ]  # has shape (n_nodes, n_vecs_per_node, 3)
+                n, v_in, _ = vec_features.shape
+                assert self.n_vec_channels >= v_in
+                # concatenate zeros to the end of the vector features until there are self.n_vec_channels channels
+                vec_padding = torch.zeros(
+                    n,
+                    self.n_vec_channels - v_in,
+                    3,
+                    device=device,
+                    dtype=vec_features.dtype,
+                )
+                vec_features = torch.cat([vec_features, vec_padding], dim=1)
+                node_vec_features[ntype] = vec_features
+            elif modality.is_categorical:  # node categorical features
+                if ntype not in node_scalar_features:
+                    node_scalar_features[ntype] = []
                 node_scalar_features[ntype].append(
-                    task_embedding_batch[node_batch_idx[ntype]]
-                )  # expand task embedding for each node in the batch
-
-                # concatenate all initial node scalar features and pass through the embedding layer
-                node_scalar_features[ntype] = torch.cat(
-                    node_scalar_features[ntype], dim=-1
-                )
-                node_scalar_features[ntype] = self.scalar_embedding[ntype](
-                    node_scalar_features[ntype]
+                    self.token_embeddings[modality.name](
+                        g.nodes[ntype].data[f"{modality.data_key}_t"]
+                    )
                 )
 
-            if self.self_conditioning and prev_dst_dict is None:
-                train_self_condition = self.training and (torch.rand(1) > 0.5).item()
-                inference_first_step = not self.training and (t == 0).all().item()
+        # loop back over node types, and anything without vector features should be given a zero vector
+        for ntype in node_scalar_features.keys():
+            if ntype in node_vec_features:
+                continue
+            num_nodes = g.num_nodes(ntype)
+            node_vec_features[ntype] = torch.zeros(
+                (num_nodes, self.n_vec_channels, 3), device=device
+            ).float()
 
-                # TODO: actually at the first inference step we can just not apply self conditioning, need to test performance effect
-                if train_self_condition or inference_first_step:
-                    with torch.no_grad():
-                        node_scalar_features_clone = {
-                            ntype: feats.clone()
-                            for ntype, feats in node_scalar_features.items()
-                        }
-                        node_vec_features_clone = {
-                            ntype: feats.clone()
-                            for ntype, feats in node_vec_features.items()
-                        }
-                        node_positions_clone = {
-                            ntype: pos.clone() for ntype, pos in node_positions.items()
-                        }
-                        edge_features_clone = {
-                            etype: feats.clone()
-                            for etype, feats in edge_features.items()
-                        }
-
-                        prev_dst_dict = self.denoise_graph(
-                            g,
-                            task_class,
-                            node_scalar_features_clone,
-                            node_vec_features_clone,
-                            node_positions_clone,
-                            edge_features_clone,
-                            node_batch_idx,
-                            upper_edge_mask,
-                            apply_softmax=True,
-                            remove_com=False,
-                        )
-
-            if self.self_conditioning and prev_dst_dict is not None:
-                (
-                    node_scalar_features,
-                    node_positions,
-                    node_vec_features,
-                    edge_features,
-                ) = self.self_conditioning_residual_layer(
-                    g,
-                    task_class,
-                    node_scalar_features,
-                    node_positions,
-                    node_vec_features,
-                    edge_features,
-                    prev_dst_dict,
-                    node_batch_idx,
-                    upper_edge_mask,
+        # now lets collect edge features
+        for modality in edge_modalities:
+            etype = modality.entity_name
+            if self.edge_feat_sizes[etype] > 0 and g.num_edges(etype) > 0:
+                edge_feats = self.token_embeddings[modality.name](
+                    g.edges[etype].data[f"{modality.data_key}_t"]
                 )
+                edge_feats = self.edge_embedding[etype](edge_feats)
+                edge_features[etype] = edge_feats
 
-            dst_dict = self.denoise_graph(
+        # get task embedding
+        task_idx = self.td_coupling.task_space.index(
+            task_class.name
+        )  # integer of the task index
+        task_idx = torch.full(
+            (g.batch_size,), task_idx, device=device
+        )  # tensor of shape (batch_size) containing the task index
+        task_embedding_batch = self.task_embedding(
+            task_idx
+        )  # tensor of shape (batch_size, token_dim)
+
+        # add time and task embedding to node scalar features
+        for ntype in node_scalar_features.keys():
+            # add time embedding to node scalar features
+            if self.time_embedding_dim == 1:
+                node_scalar_features[ntype].append(
+                    t[node_batch_idx[ntype]].unsqueeze(-1)
+                )
+            else:
+                t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
+                t_emb = t_emb[node_batch_idx[ntype]]
+                node_scalar_features[ntype].append(t_emb)
+
+            node_scalar_features[ntype].append(
+                task_embedding_batch[node_batch_idx[ntype]]
+            )  # expand task embedding for each node in the batch
+
+            # concatenate all initial node scalar features and pass through the embedding layer
+            node_scalar_features[ntype] = torch.cat(
+                node_scalar_features[ntype], dim=-1
+            )
+            node_scalar_features[ntype] = self.scalar_embedding[ntype](
+                node_scalar_features[ntype]
+            )
+
+        if self.self_conditioning and prev_dst_dict is None:
+            train_self_condition = self.training and (torch.rand(1) > 0.5).item()
+            inference_first_step = not self.training and (t == 0).all().item()
+
+            # TODO: actually at the first inference step we can just not apply self conditioning, need to test performance effect
+            if train_self_condition or inference_first_step:
+                with torch.no_grad():
+                    node_scalar_features_clone = {
+                        ntype: feats.clone()
+                        for ntype, feats in node_scalar_features.items()
+                    }
+                    node_vec_features_clone = {
+                        ntype: feats.clone()
+                        for ntype, feats in node_vec_features.items()
+                    }
+                    node_positions_clone = {
+                        ntype: pos.clone() for ntype, pos in node_positions.items()
+                    }
+                    edge_features_clone = {
+                        etype: feats.clone()
+                        for etype, feats in edge_features.items()
+                    }
+
+                    prev_dst_dict = self.denoise_graph(
+                        g,
+                        task_class,
+                        node_scalar_features_clone,
+                        node_vec_features_clone,
+                        node_positions_clone,
+                        edge_features_clone,
+                        node_batch_idx,
+                        upper_edge_mask,
+                        apply_softmax=True,
+                        remove_com=False,
+                    )
+
+        if self.self_conditioning and prev_dst_dict is not None:
+            (
+                node_scalar_features,
+                node_positions,
+                node_vec_features,
+                edge_features,
+            ) = self.self_conditioning_residual_layer(
                 g,
                 task_class,
                 node_scalar_features,
-                node_vec_features,
                 node_positions,
+                node_vec_features,
                 edge_features,
+                prev_dst_dict,
                 node_batch_idx,
                 upper_edge_mask,
-                apply_softmax,
-                remove_com,
             )
 
-            # TODO: added this here for testing, but not sure if this is the right place
-            g = remove_edges(g)
+        dst_dict = self.denoise_graph(
+            g,
+            task_class,
+            node_scalar_features,
+            node_vec_features,
+            node_positions,
+            edge_features,
+            node_batch_idx,
+            upper_edge_mask,
+            apply_softmax,
+            remove_com,
+        )
 
-            return dst_dict
+        # TODO: added this here for testing, but not sure if this is the right place
+        g = remove_edges(g)
+
+        return dst_dict
 
     # @profile
     def denoise_graph(
@@ -705,6 +706,7 @@ class VectorField(nn.Module):
 
         return dst_dict
 
+    @g_local_scope
     def precompute_distances(self, g: dgl.DGLGraph, node_positions=None, etype=None):
         """Precompute the pairwise distances between all nodes in the graph."""
         x_diff = {}
@@ -719,24 +721,23 @@ class VectorField(nn.Module):
             else:
                 raise ValueError("etypes must be a string or a list of strings")
             
-        with g.local_scope():
-            for ntype in self.node_types:
-                if g.num_nodes(ntype) == 0:
-                    continue
-                if node_positions is None:
-                    g.nodes[ntype].data["x_d"] = g.nodes[ntype].data["x_t"]
-                else:
-                    g.nodes[ntype].data["x_d"] = node_positions[ntype]
+        for ntype in self.node_types:
+            if g.num_nodes(ntype) == 0:
+                continue
+            if node_positions is None:
+                g.nodes[ntype].data["x_d"] = g.nodes[ntype].data["x_t"]
+            else:
+                g.nodes[ntype].data["x_d"] = node_positions[ntype]
 
-            for etype in etypes:
-                if etype not in g.etypes or g.num_edges(etype) == 0:
-                    continue
-                g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
-                dij = _norm_no_nan(g.edges[etype].data["x_diff"], keepdims=True) + 1e-8
-                x_diff[etype] = g.edges[etype].data["x_diff"] / dij
-                d[etype] = _rbf(
-                    dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim
-                )
+        for etype in etypes:
+            if etype not in g.etypes or g.num_edges(etype) == 0:
+                continue
+            g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
+            dij = _norm_no_nan(g.edges[etype].data["x_diff"], keepdims=True) + 1e-8
+            x_diff[etype] = g.edges[etype].data["x_diff"] / dij
+            d[etype] = _rbf(
+                dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim
+            )
 
         return x_diff, d
 
