@@ -20,7 +20,7 @@ edges_per_batch: 300000 # TODO: it might be the case the pharmit and plinder tas
 num_workers: 2
 max_steps: 1000 # number of steps to train for
 
-pharmit_path: ${omtra_root:}/data/pharmit_dev
+pharmit_path: ${omtra_root:}/data/pharmit
 plinder_path: ${omtra_root:}/data/plinder
 
 
