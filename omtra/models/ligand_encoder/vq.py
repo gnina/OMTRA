@@ -339,7 +339,7 @@ class LigandVQVAE(pl.LightningModule):
     
 
     def training_step(self, batch, batch_idx):
-        g, task_name, dataset_name = batch
+        g, task_name, dataset_name, sys_data = batch
 
         self.manual_checkpoint(batch_idx)
         

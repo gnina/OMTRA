@@ -27,12 +27,14 @@ class PharmitDataset(ZarrDataset):
                  graph_config: DictConfig,
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
+                 chemspace_conditioning: bool = False,
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
         self.prior_config = prior_config
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = fake_atom_p > 0
+        self.chemspace_conditioning = chemspace_conditioning
 
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
@@ -62,7 +64,7 @@ class PharmitDataset(ZarrDataset):
         return self.root['lig/node/graph_lookup'].shape[0]
 
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
-        task_name, idx = index
+        task_name, dataset_idx = index
         task_class: Task = task_name_to_class(task_name)
 
         # check if this task includes pharmacophore data
@@ -70,14 +72,14 @@ class PharmitDataset(ZarrDataset):
 
         # slice lig node data
         xace_dict = {}
-        start_idx, end_idx = self.slice_array('lig/node/graph_lookup', idx)
+        start_idx, end_idx = self.slice_array('lig/node/graph_lookup', dataset_idx)
         start_idx, end_idx = int(start_idx), int(end_idx)
         for nfeat in ['x', 'a', 'c']:
             xace_dict[nfeat] = self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
     
             
         # get slice indicies for ligand-ligand edges
-        edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)
+        edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', dataset_idx)
 
         # slice ligand-ligand edge data
         start_idx, end_idx = edge_slice_idxs
@@ -126,7 +128,7 @@ class PharmitDataset(ZarrDataset):
         # if this task includes pharmacophore data, then we need to slice and add that data to the graph
         if include_pharmacophore:
             # read pharmacophore data from zarr store
-            start_idx, end_idx = self.slice_array('pharm/node/graph_lookup', idx)
+            start_idx, end_idx = self.slice_array('pharm/node/graph_lookup', dataset_idx)
             pharm_x = self.slice_array('pharm/node/x', start_idx, end_idx)
             pharm_a = self.slice_array('pharm/node/a', start_idx, end_idx)
             pharm_v = self.slice_array('pharm/node/v', start_idx, end_idx)
@@ -148,12 +150,19 @@ class PharmitDataset(ZarrDataset):
             task=task_class,
             graph_config=self.graph_config,
             )
+        
+        system_features = {}
+        
+        if self.chemspace_conditioning:
+            db_data = self.slice_array('db/db', dataset_idx) # np array of shape (n,)
+            db_data = torch.from_numpy(db_data).bool()
+            system_features['pharmit_library'] = db_data
 
         # sample priors
         priors_fns = get_prior(task_class, self.prior_config, training=True)
         g = sample_priors(g, task_class, priors_fns, training=True)
 
-        return g
+        return g, db_data
     
     def retrieve_graph_chunks(self, frac_start: float, frac_end: float):
         """

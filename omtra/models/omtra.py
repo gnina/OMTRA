@@ -209,7 +209,7 @@ class OMTRA(pl.LightningModule):
 
     # @profile
     def training_step(self, batch_data, batch_idx):
-        g, task_name, dataset_name = batch_data
+        g, task_name, dataset_name, sys_data = batch_data
 
         # print(f"training step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
         self.manual_checkpoint(batch_idx)
@@ -232,7 +232,7 @@ class OMTRA(pl.LightningModule):
             )
 
         # forward pass
-        losses = self(g, task_name)
+        losses = self(g, task_name, sys_data=sys_data)
 
         train_log_dict = {}
         for key, loss in losses.items():
@@ -303,7 +303,7 @@ class OMTRA(pl.LightningModule):
         return 0.0
 
     # @profile
-    def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
+    def forward(self, g: dgl.DGLHeteroGraph, task_name: str, sys_data: Dict[str, torch.Tensor] = None):
         # sample time
         # TODO: what are time sampling methods used in other papers?
         t = torch.rand(g.batch_size, device=g.device).float()

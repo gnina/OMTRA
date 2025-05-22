@@ -127,9 +127,15 @@ class MultiTaskDataModule(pl.LightningDataModule):
             self.val_sampler.load_state_dict(state_dict['val_sampler_state'])
 
 def omtra_collate_fn(batch):
-    graphs, task_names, dataset_names = zip(*batch)
+    graphs, task_names, dataset_names, sys_data_dicts = zip(*batch)
     g = dgl.batch(graphs)
-    return g, task_names[0], dataset_names[0]
+
+    combined_data_dict = {}
+    for key in sys_data_dicts[0].keys():
+        combined_data_dict[key] = torch.stack([d[key] for d in sys_data_dicts], dim=0)
+
+
+    return g, combined_data_dict, task_names[0], dataset_names[0]
 
 # TODO: overkill because we set start method in train script but just to be safe
 def worker_init_fn(worker_id):
