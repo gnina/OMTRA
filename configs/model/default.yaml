@@ -9,3 +9,4 @@ defaults:
 k_checkpoints: 15
 checkpoint_interval: 5000
 fake_atom_p: ${fake_atom_p}
+pharmit_library_conditioning: ${pharmit_library_conditioning}

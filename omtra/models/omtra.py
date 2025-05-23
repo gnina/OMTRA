@@ -65,6 +65,7 @@ class OMTRA(pl.LightningModule):
         checkpoint_interval: int = 1000,
         og_run_dir: Optional[str] = None,
         fake_atom_p: float = 0.0,
+        pharmit_library_conditioning: bool = False,
     ):
         super().__init__()
 
@@ -79,6 +80,7 @@ class OMTRA(pl.LightningModule):
         self.prior_config = prior_config
         self.og_run_dir = og_run_dir
         self.fake_atom_p = fake_atom_p
+        self.pharmit_library_conditioning = pharmit_library_conditioning
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -209,7 +211,10 @@ class OMTRA(pl.LightningModule):
 
     # @profile
     def training_step(self, batch_data, batch_idx):
-        g, task_name, dataset_name, sys_data = batch_data
+        g = batch_data["graph"]
+        task_name = batch_data["task_name"]
+        dataset_name = batch_data["dataset_name"]
+        sys_data = batch_data["system_features"]
 
         # print(f"training step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
         self.manual_checkpoint(batch_idx)
@@ -265,6 +270,10 @@ class OMTRA(pl.LightningModule):
 
     def validation_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
+        g = batch_data["graph"]
+        task_name = batch_data["task_name"]
+        dataset_name = batch_data["dataset_name"]
+        sys_data = batch_data["system_features"]
 
         # print(f"validation step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
         device = g.device

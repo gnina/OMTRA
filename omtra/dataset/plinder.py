@@ -903,9 +903,12 @@ class PlinderDataset(ZarrDataset):
         # sample priors
         g = sample_priors(g, task_class=task_class, prior_fns=prior_fns, training=True)
 
-        system_features = {}
+        return_dict = {
+            'graph': g,
+            'system_features': {}
+        }
 
-        return g, system_features
+        return return_dict
 
     def retrieve_graph_chunks(self, frac_start, frac_end, apo_systems: bool = False):
         """

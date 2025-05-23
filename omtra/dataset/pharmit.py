@@ -27,14 +27,14 @@ class PharmitDataset(ZarrDataset):
                  graph_config: DictConfig,
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
-                 chemspace_conditioning: bool = False,
+                 pharmit_library_conditioning: bool = False,
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
         self.prior_config = prior_config
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = fake_atom_p > 0
-        self.chemspace_conditioning = chemspace_conditioning
+        self.pharmit_library_conditioning = pharmit_library_conditioning
 
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
@@ -153,7 +153,7 @@ class PharmitDataset(ZarrDataset):
         
         system_features = {}
         
-        if self.chemspace_conditioning:
+        if self.pharmit_library_conditioning:
             db_data = self.slice_array('db/db', dataset_idx) # np array of shape (n,)
             db_data = torch.from_numpy(db_data).bool()
             system_features['pharmit_library'] = db_data
@@ -162,7 +162,12 @@ class PharmitDataset(ZarrDataset):
         priors_fns = get_prior(task_class, self.prior_config, training=True)
         g = sample_priors(g, task_class, priors_fns, training=True)
 
-        return g, db_data
+        return_dict = {
+            'graph': g,
+            'system_features': system_features,
+        }
+
+        return return_dict
     
     def retrieve_graph_chunks(self, frac_start: float, frac_end: float):
         """

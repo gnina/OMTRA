@@ -2,4 +2,5 @@
 # these areguments will be unpacked into omtra.dataset.pharmit.PharmitDataset; but we need precise control over when this happens, so no using the _target_ key
 
 processed_data_dir: ${pharmit_path}
+pharmit_library_conditioning: ${pharmit_library_conditioning}
 # graphs_per_chunk: 500
