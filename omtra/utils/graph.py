@@ -1,4 +1,6 @@
 import numpy as np
+from functools import wraps
+import dgl
 
 
 def build_lookup_table(batch_num_nodes):
@@ -8,12 +10,11 @@ def build_lookup_table(batch_num_nodes):
     lookup_table[1:, 0] = lookup_table[:-1, 1]
     return lookup_table
 
-
-# TODO: i don't think we should be using this; just the modalities
-canonical_node_features = {
-    "lig": ["x", "a", "c"],
-    "npnde": ["x", "a", "c"],
-    "pharm": ["x", "a", "v"],
-    "prot_atom": ["x", "a", "e", "r"],
-    "prot_res": ["x", "r"],
-}
+def g_local_scope(f):
+    @wraps(f)
+    def wrapper(graph: dgl.DGLGraph, *args, **kwargs):
+        # enter a fresh local scope for all graph data
+        with graph.local_scope():
+            # call your function body
+            return f(graph, *args, **kwargs)
+    return wrapper

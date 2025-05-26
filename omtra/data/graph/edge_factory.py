@@ -1,8 +1,9 @@
 from functools import partial
 from omtra.data.graph import get_inv_edge_type
 from omtra.data.graph.register import edge_builder_register as register
+import functools
 
-
+@functools.lru_cache()
 def get_edge_builders(graph_config):
     edge_builders = {}
     

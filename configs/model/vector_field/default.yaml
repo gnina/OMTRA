@@ -26,3 +26,4 @@ has_mask:                      true
 self_conditioning:             true
 use_dst_feats:                 false
 dst_feat_msg_reduction_factor: 4
+rebuild_edges:                 false

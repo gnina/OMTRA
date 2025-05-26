@@ -124,6 +124,16 @@ class ProteinLigandDeNovo(Task):
         'type': 'target_dependent_gaussian',
     }
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
+
+
+@register_task("fixed_protein_ligand_denovo")
+class FixedProteinLigandDeNovo(Task):
+    groups_fixed = ['protein_identity', 'protein_structure']
+    groups_generated = ['ligand_identity', 'ligand_structure']
+
+    priors = deepcopy(pc.denovo_ligand)
+
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein) # can probably remove protein from this
     
 
 
@@ -164,6 +174,20 @@ class FlexibleDocking(Task):
     }
     priors['npnde_x'] = {
         'type': 'target_dependent_gaussian',
+    }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
+    
+
+@register_task("rigid_docking")
+class RigidDocking(Task):
+    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
+
+    groups_fixed = ["ligand_identity", "protein_identity", "protein_structure"]
+    groups_generated = ["ligand_structure"]
+
+    priors = deepcopy(pc.ligand_conformer)
+    priors["npnde_x"] = {
+        "type": "target_dependent_gaussian",
     }
     conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
 

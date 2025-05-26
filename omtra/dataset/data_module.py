@@ -25,6 +25,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         num_workers: int = 0, 
         distributed: bool = False,
         max_steps: int = None, 
+        pin_memory: bool = True,
     ):
         super().__init__()
         self.dataset_config = dataset_config
@@ -34,6 +35,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self.prior_config = prior_config
         self.graph_config = graph_config
         self.max_steps = max_steps
+        self.pin_memory = pin_memory
 
 
         self.td_coupling: TaskDatasetCoupling = build_td_coupling(task_phases, dataset_task_coupling)
@@ -89,7 +91,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
                                 collate_fn=omtra_collate_fn, 
                                 worker_init_fn=worker_init_fn,
                                 persistent_workers=self.num_workers > 0,
-                                pin_memory=True,
+                                pin_memory=self.pin_memory,
                                 prefetch_factor=5 if self.num_workers > 0 else None,
                                 num_workers=self.num_workers)
 

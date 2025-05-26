@@ -21,8 +21,8 @@ from omtra.data.graph.utils import (
     get_upper_edge_mask,
     copy_graph,
     build_lig_edge_idxs,
-    SampledSystem,
 )
+from omtra.eval.system import SampledSystem
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
@@ -45,6 +45,7 @@ from omtra.priors.sample import sample_priors
 from omtra.eval.register import get_eval
 from omtra.eval.utils import add_task_prefix
 
+# from line_profiler import profile
 
 class OMTRA(pl.LightningModule):
     def __init__(
@@ -62,6 +63,7 @@ class OMTRA(pl.LightningModule):
         prior_config: Optional[DictConfig] = None,
         k_checkpoints: int = 20,
         checkpoint_interval: int = 1000,
+        og_run_dir: Optional[str] = None,
     ):
         super().__init__()
 
@@ -74,6 +76,7 @@ class OMTRA(pl.LightningModule):
         self.conditional_path_config = conditional_paths
         self.optimizer_cfg = optimizer
         self.prior_config = prior_config
+        self.og_run_dir = og_run_dir
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -154,14 +157,13 @@ class OMTRA(pl.LightningModule):
     def manual_checkpoint(self, batch_idx: int):
 
         if batch_idx % self.checkpoint_interval == 0 and batch_idx != 0:
-            hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
-            log_dir = hydra_cfg['runtime']['output_dir']
+            log_dir = self.og_run_dir
             checkpoint_dir = Path(log_dir) / "checkpoints"
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
             current_checkpoints = list(checkpoint_dir.glob("*.ckpt"))
-            current_checkpoints.sort(key=lambda x: x.stem.split("_")[-1])
-            if len(current_checkpoints) >= self.k_checkpoints:
+            if self.global_rank == 0 and len(current_checkpoints) >= self.k_checkpoints:
+                current_checkpoints.sort(key=lambda x: int(x.stem.split("_")[-1]))
                 # remove the oldest checkpoint
                 oldest_checkpoint = current_checkpoints[0]
                 oldest_checkpoint.unlink()
@@ -169,6 +171,11 @@ class OMTRA(pl.LightningModule):
             checkpoint_path = checkpoint_dir / f'batch_{batch_idx}.ckpt'
             print('saving checkpoint to ', checkpoint_path, flush=True)
             self.trainer.save_checkpoint(str(checkpoint_path))
+            if self.global_rank == 0:
+                try:
+                    os.chmod(checkpoint_path, 0o644)  # Readable by others
+                except Exception as e:
+                    print(f"Error changing permissions for {checkpoint_path}: {e}")
             print(f'Saved checkpoint to {checkpoint_path}')
                 
     
@@ -197,6 +204,7 @@ class OMTRA(pl.LightningModule):
             else:
                 self.loss_fn_dict[modality.name] = nn.MSELoss(reduction=reduction)
 
+    # @profile
     def training_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
 
@@ -266,9 +274,15 @@ class OMTRA(pl.LightningModule):
             g_list = dgl.unbatch(g)
             n_replicates = 2
 
+        if 'ligand_identity' in task.groups_present and 'protein_identity' in task.groups_present:
+            coms = dgl.readout_nodes(g, feat='x_1_true', op='mean', ntype='lig')
+            coms = [ coms[i] for i in range(g.batch_size) ]
+        else:
+            coms = None
+
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=200, device=device)
+        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device, coms=coms)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         # TODO: compute evals and log them / do we want to log them separately for each task?
@@ -277,11 +291,15 @@ class OMTRA(pl.LightningModule):
         
         if metrics:
             metrics = add_task_prefix(metrics, task_name)
+            sample_count_key = f"{task_name}_{dataset_name}_sample_count"
+            metrics[sample_count_key] = self.sample_counts[(task_name, dataset_name)]
             self.log_dict(metrics, sync_dist=True, batch_size=1, on_step=True)
+
         self.train()
         
         return 0.0
 
+    # @profile
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
         # sample time
         # TODO: what are time sampling methods used in other papers?

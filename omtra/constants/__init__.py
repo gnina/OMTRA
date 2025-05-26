@@ -357,7 +357,7 @@ aa_substitutions = {
     "TYY": "TYR",
 }
 
-_DEFAULT_DISTANCE_RANGE = {
+DEFAULT_DISTANCE_RANGE = {
     # Taken from Biotite Python
     # Taken from Allen et al.
     #               min   - 2*std     max   + 2*std

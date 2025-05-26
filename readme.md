@@ -23,18 +23,27 @@ chmod +x build_env.sh
 - [ ] what to do with pharm interaction feature
 - [ ] pharmit dataset chemical space conditoning + predictor?
 - [ ] when training omtra with ligand encoder, inject encoder config from encoder checkpoint
-- [ ] sample counts are really large when training?
-- [ ] task-specific losses
-- [ ] wandb metric groups? how does that work?
-- [ ] need to isolate/replicate dataloader breaking with num_workers > 2
 - [ ] methods for evaluating conformer quality?
-- [ ] smooth task distribution for validation set
-- [ ] fix molecular stability metric
 - [ ] protein-ligand interaction metric? pose check! any others?
 - [ ] add posebusters
-- [ ] don't need flowmol validity stuff for conformer generation / docking
 - [ ] alternative time sampling methods for training (semlaflow, foldflow2)
-- [ ] verify apo-holo alignment
+- [ ] harmonic prior
+- [ ] scale OT (https://arxiv.org/abs/2406.07266) - playing with variance of prior
+- [ ] fake atoms
+- [ ] explicit/implicit hydrogens
+- [ ] aromaticity labels
+- [ ] fragmentation while computing additional labels
+- [ ] filter private library pharmit compounds
+- [ ] experiment what standard deviation of priors
+- [ ] turn off self-conditioning and see what happens
+- [ ] learned, task-dependent normalization for message passing
+- [ ] why does going 4->6 layers break the model?
+- [ ] test resume functionality
+- [ ] vector field self.scalar_embedding MLPs should be 2 layers
+- [ ] same with self.edge_embedding in vf
+- [ ] self-conditioning edge_embedding should be 2 layers
+- [ ] aux losses; interaction loss
+- [ ] gaussian smoothing on top of apo structures
 
 
 # How to train?

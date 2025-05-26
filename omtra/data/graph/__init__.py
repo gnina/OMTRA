@@ -53,12 +53,16 @@ def get_edges_for_task(task: Task, graph_config: DictConfig) -> set:
 
     task_edges = set()
     graph_config_edges = set(list(graph_config.get("edges").keys()))
+    symmetric_edges = set(list(graph_config.get("symmetric_etypes", [])))
+    for etype in symmetric_edges:
+        inv_etype = get_inv_edge_type(etype)
+        graph_config_edges.add(inv_etype)
+        
     for etype in all_edge_types:
         src_ntype, _, dst_ntype = to_canonical_etype(etype)
         # if the edge requires node types not supported, skip it
         if not (src_ntype in ntypes and dst_ntype in ntypes):
             continue
-        
         # if the edge is not in the graph config, skip it, unless it has a modality on it or is a covalent edge
         predetermined = etype in modality_edges or 'covalent' in etype
         if etype not in graph_config_edges and not predetermined:
@@ -138,6 +142,10 @@ def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[st
     # TODO: not .. this?
     if etype == 'npnde_to_npnde':
         return src_n*1.25
+
+    if etype not in graph_config.edges:
+        inv_etype = get_inv_edge_type(etype)
+        etype = inv_etype
 
     graph_type = graph_config.edges[etype]['type']
     if graph_type == 'complete':

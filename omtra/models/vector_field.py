@@ -34,6 +34,7 @@ from omtra.constants import (
 
 from omtra.data.graph.utils import get_batch_idxs
 
+# from line_profiler import LineProfiler, profile
 
 class VectorField(nn.Module):
     def __init__(
@@ -67,6 +68,7 @@ class VectorField(nn.Module):
         self_conditioning: bool = False,
         use_dst_feats: bool = False,
         dst_feat_msg_reduction_factor: float = 4,
+        rebuild_edges: bool = False,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -83,6 +85,7 @@ class VectorField(nn.Module):
         self.time_embedding_dim = time_embedding_dim
         self.self_conditioning = self_conditioning
         self.has_mask = has_mask
+        self.rebuild_edges = rebuild_edges
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -533,6 +536,7 @@ class VectorField(nn.Module):
 
             return dst_dict
 
+    # @profile
     def denoise_graph(
         self,
         g: dgl.DGLHeteroGraph,
@@ -560,52 +564,89 @@ class VectorField(nn.Module):
                     d=d,
                 )
                 # every convs_per_update convolutions, update the node positions and edge features
+                # TODO: this code has gotten hairy, the molecule update operation should be collected into a separate method to make denoise_graph cleaner
                 if conv_idx != 0 and (conv_idx + 1) % self.convs_per_update == 0:
                     if self.separate_mol_updaters:
                         updater_idx = conv_idx // self.convs_per_update
                     else:
                         updater_idx = 0
+                    last_conv = conv_idx == len(self.conv_layers) - 1
+                    last_recycle = recycle_idx == self.n_recycles - 1
+                    last_update = last_conv and last_recycle
 
                     modalities_generated = task_class.modalities_generated
-                    for modality in modalities_generated:
-                        if modality.graph_entity == "node" and modality.data_key == "x":
-                            ntype = modality.entity_name
-                            if g.num_nodes(ntype) == 0:
-                                continue
-                            node_positions[ntype] = self.node_position_updaters[ntype][
-                                updater_idx
-                            ](
-                                node_scalar_features[ntype],
-                                node_positions[ntype],
-                                node_vec_features[ntype],
-                            )
-                        if modality.graph_entity == "edge":
-                            x_diff, d = self.precompute_distances(
-                                g, node_positions
-                            )  # NOTE: consider adding etype arg to precompute dists to avoid recomputing for all etypes
-                            etype = modality.entity_name
-                            edge_features[etype] = self.edge_updaters[etype][
-                                updater_idx
-                            ](
-                                g,
-                                node_scalar_features,
-                                edge_features[etype],
-                                d=d[etype],
-                                etype=etype,
-                            )
+
+                    # iterate over positions being generated, update them
+                    ntypes_updated = set()
+                    for m in modalities_generated:
+                        is_position = m.graph_entity == "node" and m.data_key == "x"
+                        if not is_position:
+                            continue
+                        ntype = m.entity_name
+                        if g.num_nodes(ntype) == 0:
+                            continue
+                        node_positions[ntype] = self.node_position_updaters[ntype][
+                            updater_idx
+                        ](
+                            node_scalar_features[ntype],
+                            node_positions[ntype],
+                            node_vec_features[ntype],
+                        )
+                        ntypes_updated.add(ntype)
+
+                    # recompute x_diff and d for the updated node positions
+                    for canonical_etype in g.canonical_etypes:
+                        if g.num_edges(canonical_etype) != 0:
+                            continue
+                        src_ntype, etype, dst_ntype = canonical_etype
+                        edges_need_update = src_ntype in ntypes_updated or dst_ntype in ntypes_updated
+                        if not edges_need_update:
+                            continue
+                        x_diff_etype, d_etype = self.precompute_distances(
+                            g, node_positions, etype=etype
+                        )
+                        x_diff.update(x_diff_etype)
+                        d.update(d_etype)
+                        
+
+                    # iterate over edge features being modeled and update them
+                    # implicit assumption here that edges with modalities defined on them are not being rebuilt
+                    for m in task_class.modalities_present:
+                        if m.is_node:
+                            continue
+                        etype = m.entity_name
+                        if g.num_edges(etype) == 0:
+                            continue
+                        edge_features[etype] = self.edge_updaters[etype][
+                            updater_idx
+                        ](
+                            g,
+                            node_scalar_features,
+                            edge_features[etype],
+                            d=d[etype],
+                            etype=etype,
+                        )
+
+                    if self.rebuild_edges and not last_update:
+                        g = remove_edges(g, lig_only=True)
+                        g = build_edges(g, task_class, node_batch_idx, self.graph_config, lig_only=True)
+                        edges_to_rebuild = [k for k in x_diff if 'lig' in k and k != 'lig_to_lig']
+                        x_diff_rebuilt, d_rebuilt = self.precompute_distances(g, node_positions, etype=edges_to_rebuild)
+                        x_diff.update(x_diff_rebuilt)
+                        d.update(d_rebuilt)
 
         logits = {}
-        for modality in task_class.modalities_generated:
-            if modality.is_node and modality.is_categorical:
-                ntype = modality.entity_name
-                logits[modality.name] = self.node_output_heads[modality.name](
+        for m in task_class.modalities_generated:
+            if m.is_node and m.is_categorical:
+                ntype = m.entity_name
+                logits[m.name] = self.node_output_heads[m.name](
                     node_scalar_features[ntype]
                 )
-            elif not modality.is_node and modality.is_categorical:
-                etype = modality.entity_name
+            elif not m.is_node and m.is_categorical:
+                etype = m.entity_name
                 ue_feats = edge_features[etype][upper_edge_mask[etype]]
                 le_feats = edge_features[etype][~upper_edge_mask[etype]]
-                logits[modality.name] = self.edge_output_heads[modality.name](
+                logits[m.name] = self.edge_output_heads[m.name](
                     ue_feats + le_feats
                 )
 
@@ -640,32 +681,42 @@ class VectorField(nn.Module):
         # build a dictionary of predicted features
         dst_dict = {}
         # modalities_present = task_class.modalities_fixed + task_class.modalities_generated
-        for modality in task_class.modalities_generated:
-            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+        for m in task_class.modalities_generated:
+            if m.is_node and g.num_nodes(m.entity_name) == 0:
                 continue
-            if modality.data_key == "x":
-                dst_dict[modality.name] = node_positions[modality.entity_name]
-            elif modality.is_categorical:
-                dst_dict[modality.name] = logits[modality.name]
+            if m.data_key == "x":
+                dst_dict[m.name] = node_positions[m.entity_name]
+            elif m.is_categorical:
+                dst_dict[m.name] = logits[m.name]
                 if apply_softmax:
-                    dst_dict[modality.name] = torch.softmax(
-                        dst_dict[modality.name], dim=-1
+                    dst_dict[m.name] = torch.softmax(
+                        dst_dict[m.name], dim=-1
                     )
-            elif modality.data_key == "v":
-                ntype = modality.entity_name
+            elif m.data_key == "v":
+                ntype = m.entity_name
                 s_in = node_scalar_features[ntype]
                 v_in = node_vec_features[ntype]
-                _, v_out = self.node_output_heads[modality.name]((s_in, v_in))
-                dst_dict[modality.name] = v_out
+                _, v_out = self.node_output_heads[m.name]((s_in, v_in))
+                dst_dict[m.name] = v_out
             else:
-                raise NotImplementedError(f"unaccounted for modality: {modality.name}")
+                raise NotImplementedError(f"unaccounted for modality: {m.name}")
 
         return dst_dict
 
-    def precompute_distances(self, g: dgl.DGLGraph, node_positions=None):
+    def precompute_distances(self, g: dgl.DGLGraph, node_positions=None, etype=None):
         """Precompute the pairwise distances between all nodes in the graph."""
         x_diff = {}
         d = {}
+        if not etype:
+            etypes = self.edge_types
+        else:
+            if isinstance(etype, str):
+                etypes = [etype]
+            elif isinstance(etype, list):
+                etypes = etype
+            else:
+                raise ValueError("etypes must be a string or a list of strings")
+            
         with g.local_scope():
             for ntype in self.node_types:
                 if g.num_nodes(ntype) == 0:
@@ -675,8 +726,8 @@ class VectorField(nn.Module):
                 else:
                     g.nodes[ntype].data["x_d"] = node_positions[ntype]
 
-            for etype in self.edge_types:
-                if g.num_edges(etype) == 0:
+            for etype in etypes:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
                 g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
                 dij = _norm_no_nan(g.edges[etype].data["x_diff"], keepdims=True) + 1e-8
@@ -724,8 +775,12 @@ class VectorField(nn.Module):
                 m_fixed = task.modalities_fixed
                 for m in task.modalities_present:
                     if m.is_node:
+                        if g.num_nodes(m.entity_name) == 0:
+                            continue
                         data_src = g.nodes[m.entity_name]
                     else:
+                        if g.num_edges(m.entity_name) == 0:
+                            continue
                         data_src = g.edges[m.entity_name]
                     xt = data_src.data[f"{m.data_key}_t"]
                     
@@ -813,6 +868,8 @@ class VectorField(nn.Module):
         # if visualizing, generate trajectory dict for each example
         per_system_traj = [ {} for _ in range(g.batch_size) ]
         for m in task.modalities_present:
+            if m.name not in traj or len(traj[m.name]) == 0:
+                continue
             batch_traj = torch.stack(traj[m.name], dim=0) # tensor of shape (n_timesteps, n_nodes/n_edges, *)
             batch_pred_traj = torch.stack(traj[f'{m.name}_pred'], dim=0) 
             if m.is_node:
