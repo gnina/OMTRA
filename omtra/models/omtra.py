@@ -269,7 +269,7 @@ class OMTRA(pl.LightningModule):
         return total_loss
 
     def validation_step(self, batch_data, batch_idx):
-        g, task_name, dataset_name = batch_data
+        
         g = batch_data["graph"]
         task_name = batch_data["task_name"]
         dataset_name = batch_data["dataset_name"]
@@ -317,6 +317,10 @@ class OMTRA(pl.LightningModule):
         # TODO: what are time sampling methods used in other papers?
         t = torch.rand(g.batch_size, device=g.device).float()
 
+        print("G")
+        print(g)
+        print("sys_data")
+        print(sys_data['pharmit_library'])
         # maybe not necessary right now, perhaps after we add edges appropriately
         node_batch_idxs, edge_batch_idxs = get_batch_idxs(g)
         lig_ue_mask = get_upper_edge_mask(g, "lig_to_lig")
