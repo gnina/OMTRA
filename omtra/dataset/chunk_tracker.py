@@ -1,4 +1,5 @@
 import torch
+from typing import Optional
 import functools
 
 from omtra.dataset.zarr_dataset import ZarrDataset
@@ -62,23 +63,49 @@ class GraphChunkTracker:
         return batch_idxs.tolist()
 
 
-def adaptive_batch_loader(nodes_per_graph: torch.Tensor, max_nodes: int) -> torch.Tensor:
+def adaptive_batch_loader(
+    nodes_per_graph: torch.Tensor,
+    max_nodes: int,
+    weights: Optional[torch.Tensor] = None
+) -> torch.Tensor:
     """
     Selects a *prefix* of a random permutation of graph-indices whose cumulative
-    node count stays ≤ max_nodes. Fully vectorized, no Python loops or .item().
+    node count stays ≤ max_nodes, optionally performing category-based sampling
+    by skipping graphs according to provided weights (higher weight => higher skip probability).
+    Fully vectorized, no Python loops or .item__().
+
+    Args:
+        nodes_per_graph: tensor of size (N,) with node counts per graph.
+        max_nodes: maximum cumulative nodes in a batch.
+        weights: optional tensor of size (N,) with skip probabilities per graph in [0,1].
     """
     # 1) shuffle once
     perm = torch.randperm(nodes_per_graph.size(0), device=nodes_per_graph.device)
     # 2) grab node counts in that order
     nodes_shuf = nodes_per_graph[perm]
+    if weights is not None:
+        # draw skip mask based on provided probabilities
+        skip_mask_perm = torch.rand_like(nodes_shuf, dtype=torch.float) < weights[perm]
+        # zero out node counts for skipped graphs
+        nodes_contrib = nodes_shuf * (~skip_mask_perm)
+    else:
+        nodes_contrib = nodes_shuf
     # 3) cumulative sum
-    cumsum = nodes_shuf.cumsum(dim=0)
+    cumsum = nodes_contrib.cumsum(dim=0)
     # 4) mask: which positions still fit
-    mask = cumsum <= max_nodes
+    if weights is not None:
+        mask = (cumsum <= max_nodes) & (~skip_mask_perm)
+    else:
+        mask = cumsum <= max_nodes
     # 5) get the valid prefix positions
     valid_positions = torch.nonzero(mask, as_tuple=False).squeeze(1)
     # 6) ensure at least one graph
     if valid_positions.numel() == 0:
+        if weights is not None:
+            # fallback to first non-skipped graph
+            non_skipped = (~skip_mask_perm).nonzero(as_tuple=False).squeeze(1)
+            if non_skipped.numel() > 0:
+                return perm[non_skipped[:1]]
         return perm[:1]
     # 7) return the corresponding original indices
     return perm[valid_positions]

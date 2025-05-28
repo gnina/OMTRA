@@ -73,6 +73,9 @@ class PlinderDataset(ZarrDataset):
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
 
+        # get ccd code frequencies for every item in the dataset
+        self.system_lookup = add_ccd_frequency_column(self.system_lookup)
+
         self.encode_element = {
             element: i for i, element in enumerate(protein_element_map)
         }
@@ -1005,3 +1008,40 @@ class PlinderDataset(ZarrDataset):
         node_counts = np.stack(node_counts, axis=0).sum(axis=0)
         node_counts = torch.from_numpy(node_counts)
         return node_counts
+
+
+def add_ccd_frequency_column(
+    df: pd.DataFrame,
+    ccd_col: str = "ccd",
+    freq_col: str = "ccd_freq",
+    include_nan: bool = False
+) -> pd.DataFrame:
+    """
+    Adds a new column to the DataFrame containing the frequency of each CCD code.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The original DataFrame with a column named `ccd_col`.
+    ccd_col : str, default "CCD"
+        Name of the column containing CCD codes.
+    freq_col : str, default "CCD_freq"
+        Name of the new column to create for frequencies.
+    include_nan : bool, default False
+        Whether to count NaN values in the frequency. If False, NaNs get a 0.
+
+    Returns
+    -------
+    pd.DataFrame
+        The same DataFrame with an extra column `freq_col`.
+    """
+    # Compute counts for each CCD value (optionally including NaNs)
+    counts = df[ccd_col].value_counts(dropna=not include_nan, normalize=True)
+
+    # Map counts back to the original rows
+    df[freq_col] = df[ccd_col].map(counts)
+
+    # For codes not seen (e.g. NaNs when include_nan=False), fill with 0 and cast to int
+    df[freq_col] = df[freq_col].fillna(0)
+
+    return df
