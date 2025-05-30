@@ -46,13 +46,16 @@ def main(args):
 
 
     fps = []
+    smiles = []
     for idx in range(start_idx, end_idx):
-        fps.apend(ds.get_fingerprint(idx))
+        result = ds[idx]
+        fps.append(result['fp'])
+        smiles.append(result['smiles'])
     fps = np.array(fps).astype(bool)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     output_file = args.output_dir / f"fps_block_{args.block_index}.npz"
-    np.savez_compressed(output_file, fps=fps)
+    np.savez_compressed(output_file, fps=fps, smiles=smiles)
 
 if __name__ == "__main__":
     args = parse_args()

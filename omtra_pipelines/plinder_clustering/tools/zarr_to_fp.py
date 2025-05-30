@@ -14,6 +14,15 @@ from omtra.constants import (
     residue_map,
 )
 
+import warnings
+
+# Suppress the specific warning from vlen_utf8.py
+warnings.filterwarnings(
+    "ignore",
+    message="The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.*",
+    module="zarr.codecs.vlen_utf8",
+)
+
 class PlinderLigandExtractor(ZarrDataset):
 
     def __init__(self, *args, **kwargs):
@@ -22,7 +31,7 @@ class PlinderLigandExtractor(ZarrDataset):
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
 
 
-    def get_fingerprint(self, idx):
+    def __getitem__(self, idx):
         system_info = self.system_lookup[
             self.system_lookup["system_idx"] == idx
         ].iloc[0]
@@ -58,7 +67,8 @@ class PlinderLigandExtractor(ZarrDataset):
 
         rdkit_mol = self.to_rdkit_molecule(ligand)
         fp = Chem.RDKFingerprint(rdkit_mol)
-        return fp
+        smiles = Chem.MolToSmiles(rdkit_mol)
+        return dict(fp=fp, smiles=smiles)
 
     def to_rdkit_molecule(self, ligand: LigandData):
         """Builds a rdkit molecule from the given atom and bond information."""
@@ -66,7 +76,7 @@ class PlinderLigandExtractor(ZarrDataset):
 
         atom_types = [ lig_atom_type_map[i] for i in ligand.atom_types.tolist() ]
         atom_charges = ligand.atom_charges.tolist()
-        bond_src_idxs, bond_dst_idxs = ligand.bond_indicies.T
+        bond_src_idxs, bond_dst_idxs = ligand.bond_indices.T
         bond_types = ligand.bond_types.tolist()
         positions = ligand.coords
 
@@ -102,3 +112,12 @@ class PlinderLigandExtractor(ZarrDataset):
 
     def __len__(self):
         return self.system_lookup.shape[0]
+    
+    def get_num_nodes(self, *args, **kwargs):
+        pass
+
+    def name(self):
+        return "plinder_ligand_extractor"
+    
+    def retrieve_graph_chunks(self):
+        pass

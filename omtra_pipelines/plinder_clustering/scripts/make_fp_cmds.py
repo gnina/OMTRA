@@ -25,6 +25,11 @@ def parse_args():
         type=Path,
         default=Path('./fp_blocks/')
     )
+    parser.add_argument(
+        '--cmd_file',
+        type=Path,
+        default=Path('./make_fp_cmds.sh'),
+    )
     return parser.parse_args()
 
 def main(args):
@@ -36,12 +41,12 @@ def main(args):
 
     cmds = []
     for block_index in range(n_blocks):
-        cmd = f"python -m omtra_pipelines.plinder_clustering.get_fingerprints " \
+        cmd = f"python -m omtra_pipelines.plinder_clustering.scripts.get_fingerprints " \
               f"{args.processed_data_dir} --block-size {args.block_size} " \
               f"--block-index {block_index} --output_dir {args.output_dir}"
         cmds.append(cmd)
 
-    with open('make_fp_cmds.sh', 'w') as f:
+    with open(args.cmd_file, 'w') as f:
         f.write('\n'.join(cmds)+'\n')
 
 if __name__ == "__main__":
