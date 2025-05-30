@@ -92,7 +92,6 @@ class Encoder(nn.Module):
         }
 
 
-
         ####
         # convert graph data into a format to be passed into the message-passing layers
         ####
@@ -163,7 +162,11 @@ class VectorQuantizer(nn.Module):
         avg_probs = torch.mean(encodings, dim=0)  
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))    #  "spread" of the quantized embeddings. Indicates how well the codebook is being used 
         
-        return loss, quantized, perplexity
+        # Number of unique codebook vectors used 
+        unique_codes = torch.unique(encoding_indices)
+        num_unique_codes = unique_codes.numel()
+
+        return loss, quantized, encoding_indices, perplexity, num_unique_codes
     
 
 class VectorQuantizerEMA(nn.Module):
@@ -227,7 +230,11 @@ class VectorQuantizerEMA(nn.Module):
         avg_probs = torch.mean(encodings, dim=0)  
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))    #  "spread" of the quantized embeddings. Indicates how well the codebook is being used 
         
-        return loss, quantized, perplexity
+        # Number of unique codebook vectors used 
+        unique_codes = torch.unique(encoding_indices)
+        num_unique_codes = unique_codes.numel()
+
+        return loss, quantized, encoding_indices, perplexity, num_unique_codes
 
 
 class Decoder(nn.Module):
@@ -316,12 +323,12 @@ class LigandVQVAE(pl.LightningModule):
                  num_bond_decod_hiddens,
                  num_hidden_layers, 
                  commitment_cost,
+                 mask_prob,
                  a_embed_dim=16,
                  c_embed_dim=8,
                  e_embed_dim=8,
                  rbf_dim=32,
                  rbf_dmax=10,                 
-                 mask_prob=0.10,
                  k_checkpoints: int = 20,
                  checkpoint_interval: int = 1000,
                  use_ema=True,
@@ -335,7 +342,6 @@ class LigandVQVAE(pl.LightningModule):
         self.checkpoint_interval: int = checkpoint_interval
         self.og_run_dir = og_run_dir
 
-        self.mask_prob = mask_prob
         self.n_mask_feats = int(mask_prob > 0)  # Number of masked features (atom types and charges)
 
         self.num_atom_types = len(lig_atom_type_map) 
@@ -360,7 +366,8 @@ class LigandVQVAE(pl.LightningModule):
                                num_gvp_layers= num_gvp_layers, 
                                latent_dim=latent_dim,
                                rbf_dim = self.rbf_dim,
-                               rbf_dmax = self.rbf_dmax)
+                               rbf_dmax = self.rbf_dmax,
+                               mask_prob = mask_prob)
 
 
         if use_ema: # Exponential Moving Average codebook vector updates
@@ -426,7 +433,7 @@ class LigandVQVAE(pl.LightningModule):
         """ Pass to VQ-VAE model """
         z_e = self.encoder(g, mask_prob=mask_prob)   # Encoding
 
-        loss, z_d, perplexity = self.vq_vae(z_e)    # Vector Quantization
+        loss, z_d, _, perplexity, num_unique_codes = self.vq_vae(z_e)    # Vector Quantization
         
         atom_type_logits, atom_charge_logits, bond_order_logits = self.decoder(g, z_d)    # Decoding
 
@@ -456,7 +463,8 @@ class LigandVQVAE(pl.LightningModule):
                   'c_accuracy': self.atom_charge_accuracy.compute(),
                   'e_accuracy': self.bond_order_accuracy.compute(),
                   'e_non_zero_accuracy': self.nonzero_bond_order_accuracy.compute(),
-                  'perplexity': perplexity}
+                  'perplexity': perplexity,
+                  'num_unique_codes': num_unique_codes}
 
         return losses
     
