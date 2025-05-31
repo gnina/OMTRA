@@ -56,7 +56,10 @@ class PlinderDataset(ZarrDataset):
         processed_data_dir: str,
         graph_config: Optional[DictConfig] = None,
         prior_config: Optional[DictConfig] = None,
-        fake_atom_p: float = 0.0
+        fake_atom_p: float = 0.0,
+        pskip_factor: float = 0.0, 
+        # this is a parmaeter that controls whether/how we do weighted sampling of the the dataset
+        # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
     ):
         super().__init__(
             split,
@@ -69,12 +72,16 @@ class PlinderDataset(ZarrDataset):
         self.graph_config = graph_config
         self.prior_config = prior_config
         self.fake_atom_p = fake_atom_p
+        self.pskip_factor = pskip_factor
+        self.weighted_sampling = pskip_factor > 0.0 and split == 'train'
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
 
-        # get ccd code frequencies for every item in the dataset
-        self.system_lookup = add_ccd_frequency_column(self.system_lookup)
+        if self.weighted_sampling:
+            if 'cluster_id' not in self.system_lookup.columns:
+                raise ValueError(f'Weighted sampling enabled but no cluster assignments found for plinder link version {link_version} and split {split}')
+            self.system_lookup = compute_pskip(self.system_lookup, pskip_factor=self.pskip_factor)
 
         self.encode_element = {
             element: i for i, element in enumerate(protein_element_map)
@@ -592,6 +599,7 @@ class PlinderDataset(ZarrDataset):
         self,
         ligand: LigandData,
         ligand_id: str,
+        task: Task,
         pocket: Optional[StructureData] = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
@@ -601,7 +609,8 @@ class PlinderDataset(ZarrDataset):
 
         lig_xace = ligand.to_xace_mol(dense=True)
 
-        if self.fake_atom_p > 0:
+        denovo_ligand = 'ligand_identity' in task.groups_generated
+        if self.fake_atom_p > 0 and denovo_ligand:
             lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
 
         lig_c = self.encode_charges(lig_xace.c)
@@ -803,7 +812,11 @@ class PlinderDataset(ZarrDataset):
         return node_data, edge_idxs, edge_data
 
     def convert_system(
-        self, system: SystemData, include_pharmacophore: bool, include_protein: bool
+        self, 
+        system: SystemData,
+        task: Task, 
+        include_pharmacophore: bool, 
+        include_protein: bool
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -838,7 +851,10 @@ class PlinderDataset(ZarrDataset):
 
         # read ligand data
         lig_node_data, lig_edge_idxs, lig_edge_data = self.convert_ligand(
-            system.ligand, system.ligand_id, system.pocket
+            system.ligand, 
+            system.ligand_id, 
+            task=task,
+            pocket=system.pocket
         )
         node_data.update(lig_node_data)
         edge_idxs.update(lig_edge_idxs)
@@ -874,6 +890,7 @@ class PlinderDataset(ZarrDataset):
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
             self.convert_system(
                 system,
+                task=task_class,
                 include_pharmacophore=include_pharmacophore,
                 include_protein=include_protein,
             )
@@ -1009,12 +1026,19 @@ class PlinderDataset(ZarrDataset):
         node_counts = torch.from_numpy(node_counts)
         return node_counts
 
+    def get_pskip(self, start_idx, end_idx):
+        """
+        Computes the p_skip values for the systems in the specified range.
+        """
+        pskip = self.system_lookup['p_skip'].values[start_idx:end_idx]
+        pskip = torch.from_numpy(pskip)
+        return pskip
 
-def add_ccd_frequency_column(
+def compute_pskip(
     df: pd.DataFrame,
-    ccd_col: str = "ccd",
-    freq_col: str = "ccd_freq",
-    include_nan: bool = False
+    id_col: str = "cluster_id",
+    freq_col: str = "freq",
+    pskip_factor: float = 0.0,
 ) -> pd.DataFrame:
     """
     Adds a new column to the DataFrame containing the frequency of each CCD code.
@@ -1036,12 +1060,11 @@ def add_ccd_frequency_column(
         The same DataFrame with an extra column `freq_col`.
     """
     # Compute counts for each CCD value (optionally including NaNs)
-    counts = df[ccd_col].value_counts(dropna=not include_nan, normalize=True)
+    counts = df[id_col].value_counts(normalize=True)
 
     # Map counts back to the original rows
-    df[freq_col] = df[ccd_col].map(counts)
+    df[freq_col] = df[id_col].map(counts)
 
-    # For codes not seen (e.g. NaNs when include_nan=False), fill with 0 and cast to int
-    df[freq_col] = df[freq_col].fillna(0)
-
+    df['p_skip'] = 1 - df[freq_col].min() / df[freq_col]
+    df['p_skip'] = df['p_skip'] * pskip_factor
     return df

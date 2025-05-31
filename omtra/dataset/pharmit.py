@@ -67,6 +67,8 @@ class PharmitDataset(ZarrDataset):
 
         # check if this task includes pharmacophore data
         include_pharmacophore = 'pharmacophore' in task_class.groups_present
+        # warning: this will break if we mess with different forms of ligands identity
+        lig_denovo = 'ligand_identity' in task_class.groups_generated
 
         # slice lig node data
         xace_dict = {}
@@ -95,7 +97,7 @@ class PharmitDataset(ZarrDataset):
 
         xace_ligand = MolXACE(**xace_dict)
 
-        if self.use_fake_atoms:
+        if self.use_fake_atoms and lig_denovo:
             xace_ligand = add_fake_atoms(xace_ligand, self.fake_atom_p)
 
         # convert sparse xae to dense xae

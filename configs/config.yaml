@@ -20,6 +20,7 @@ edges_per_batch: 300000 # TODO: it might be the case the pharmit and plinder tas
 num_workers: 2
 max_steps: 1000 # number of steps to train for
 fake_atom_p: 0.0 # upper bound on fraction of fake atoms added to a molecule
+plinder_pskip_factor: 0.0 # 0 -> no weighted sampling, 1 -> uniform sampling over clusters
 
 pharmit_path: ${omtra_root:}/data/pharmit
 plinder_path: ${omtra_root:}/data/plinder
