@@ -710,10 +710,10 @@ class VectorField(nn.Module):
 
         if extract_latents_for_confidence:
             pre_output_head_latents = {
-                "node_scalar_features": node_scalar_features,
-                "node_vec_features": node_vec_features, 
-                "node_positions": node_positions,
-                "edge_features": edge_features
+                "node_scalar_features": node_scalar_features['lig'],
+                "node_vec_features": node_vec_features['lig'], 
+                "node_positions": node_positions['lig'],
+                "edge_features": edge_features['lig_to_lig'],
             }
             return dst_dict, pre_output_head_latents 
         else:
@@ -769,12 +769,7 @@ class VectorField(nn.Module):
     ):
         # TODO: adapt flowmol integrate for hetero version
         # TODO: figure out what should be attribute of class vs passed as arg vs pulled from cfg etc, nail down defaults
-
-        if extract_latents_for_confidence:
-            collected_latents = {
-                "final_vf_latent": None,
-            }
-        
+    
         if cat_temp_func is None:
             cat_temp_func = self.cat_temp_func
 
@@ -844,7 +839,7 @@ class VectorField(nn.Module):
                 last_step = False
 
             # compute next step and set x_t = x_s
-            step_output = self.step(
+            g, dst_dict = self.step(
                 g=g,
                 task=task,
                 s_i=s_i,
@@ -865,14 +860,6 @@ class VectorField(nn.Module):
                 extract_latents_for_confidence=extract_latents_for_confidence,
                 **kwargs,
             )
-            
-            if extract_latents_for_confidence:
-                g, dst_dict, current_step_latents = step_output
-                
-                if last_step:
-                    collected_latents['final_vf_latent'] = current_step_latents
-            else:
-                g, dst_dict = step_output
 
             if visualize:
                 add_frame(g)
@@ -892,12 +879,9 @@ class VectorField(nn.Module):
                 continue
             g.edges[etype].data[f"{dk}_1"] = g.edges[etype].data[f"{dk}_t"]
 
-        
+
         if not visualize:
-            if not extract_latents_for_confidence:
-                return g # default path
-            else:
-                return g, collected_latents
+            return g
         
         # if visualizing, generate trajectory dict for each example
         per_system_traj = [ {} for _ in range(g.batch_size) ]
@@ -916,9 +900,6 @@ class VectorField(nn.Module):
                 per_system_traj[i][m.name] = per_graph_mtrajs[i]
                 per_system_traj[i][f'{m.name}_pred'] = per_graph_pred_mtrajs[i]
     
-        if extract_latents_for_confidence:
-            return g, {'traj': per_system_traj, 'latents': collected_latents}
-        
         return g, per_system_traj
 
     def step(
@@ -963,10 +944,14 @@ class VectorField(nn.Module):
         )
         
         if extract_latents_for_confidence:
-            dst_dict, final_gnn_latents_this_step = vf_forward_output
+            dst_dict, model_latents = vf_forward_output
+            # if the user requested latents, we rely on the plumbing we have in `forward` and `denoise_graph` to obtain model_latents, and populate it to the graph
+            g.nodes["lig"].data["node_scalar_features"] = model_latents["node_scalar_features"]
+            g.nodes["lig"].data["node_vec_features"] = model_latents["node_vec_features"]
+            g.nodes["lig"].data["node_positions"] = model_latents["node_positions"]
+            g.nodes["lig"].data["edge_features"] = model_latents["edge_features"]            
         else:
             dst_dict = vf_forward_output
-            final_gnn_latents_this_step = None
 
         dt = s_i - t_i
 
@@ -1058,10 +1043,7 @@ class VectorField(nn.Module):
             data_src[f"{m.data_key}_t"] = xt
             data_src[f"{m.data_key}_1_pred"] = x_1_sampled
 
-        if extract_latents_for_confidence:
-            return g, dst_dict, final_gnn_latents_this_step
-        else:
-            return g, dst_dict
+        return g, dst_dict
     
     def campbell_step(
         self,

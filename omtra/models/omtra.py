@@ -663,15 +663,7 @@ class OMTRA(pl.LightningModule):
             **itg_kwargs
         )
 
-        if extract_latents_for_confidence:
-            g, per_graph_traj_or_latents = itg_result 
-            
-            if visualize:
-                per_graph_traj = per_graph_traj_or_latents['traj']
-                all_extracted_latents = per_graph_traj_or_latents['latents']
-            else:
-                all_extracted_latents = per_graph_traj_or_latents # if not visualizing, it will be just latents
-        elif visualize:
+        if visualize:
             g, per_graph_traj = itg_result
         else:
             g = itg_result
@@ -693,8 +685,4 @@ class OMTRA(pl.LightningModule):
                 **ss_kwargs,
             )
             sampled_systems.append(sampled_system)
-        
-        if extract_latents_for_confidence:
-            return sampled_systems, all_extracted_latents 
-        else:
-            return sampled_systems
+        return sampled_systems
