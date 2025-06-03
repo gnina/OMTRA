@@ -15,35 +15,28 @@ chmod +x build_env.sh
 ```
 
 # TODO:
-- [ ] residue type as node feature?
 - [ ] need to apply masking on node vec feature loss
 - [ ] need to consider permutation invariance for vector feature prediction?
-- [ ] CCD code frequency weighting in plinder dataset
 - [ ] there is massive utiltiy in an on-the-fly (batched) addition of radius edges overlaid on top of edges that contain bond order as an edge feature
 - [ ] what to do with pharm interaction feature
-- [ ] pharmit dataset chemical space conditoning + predictor?
 - [ ] when training omtra with ligand encoder, inject encoder config from encoder checkpoint
-- [ ] methods for evaluating conformer quality?
-- [ ] protein-ligand interaction metric? pose check! any others?
-- [ ] add posebusters
+- [ ] methods for evaluating conformer quality? - PB gen?
+- [ ] scoring PL-interaction on denovo designs
 - [ ] alternative time sampling methods for training (semlaflow, foldflow2)
 - [ ] harmonic prior
 - [ ] scale OT (https://arxiv.org/abs/2406.07266) - playing with variance of prior
-- [ ] fake atoms
 - [ ] explicit/implicit hydrogens
 - [ ] aromaticity labels
 - [ ] fragmentation while computing additional labels
 - [ ] filter private library pharmit compounds
 - [ ] experiment what standard deviation of priors
-- [ ] turn off self-conditioning and see what happens
 - [ ] learned, task-dependent normalization for message passing
 - [ ] why does going 4->6 layers break the model?
 - [ ] test resume functionality
-- [ ] vector field self.scalar_embedding MLPs should be 2 layers
 - [ ] same with self.edge_embedding in vf
-- [ ] self-conditioning edge_embedding should be 2 layers
 - [ ] aux losses; interaction loss
 - [ ] gaussian smoothing on top of apo structures
+- [ ] re-run pharm conditioning with rebuild_edges=True
 
 # Essetial things
 
