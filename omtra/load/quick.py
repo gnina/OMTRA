@@ -90,7 +90,7 @@ def omtra_from_config(cfg: DictConfig) -> OMTRA:
         _recursive_=False,
         prior_config=cfg.prior,
         og_run_dir=log_dir,
-        eval_config=cfg.task_group.train_evals,
+        eval_config=cfg.eval,
     )
 
     return model
