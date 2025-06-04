@@ -948,7 +948,7 @@ class VectorField(nn.Module):
             # if the user requested latents, we rely on the plumbing we have in `forward` and `denoise_graph` to obtain model_latents, and populate it to the graph
             keys = ["node_scalar_features", "node_vec_features", "node_positions"] 
             
-            # TODO: add "edge_features", 'lig_to_lig' type does not exist right now
+            # TODO: add "edge_features" if needed
             for key in keys:
                 for ntype in model_latents[key]:
                     g.nodes[ntype].data[key] = model_latents[key][ntype]          
