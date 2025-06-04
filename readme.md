@@ -33,9 +33,7 @@ chmod +x build_env.sh
 - [ ] learned, task-dependent normalization for message passing
 - [ ] why does going 4->6 layers break the model?
 - [ ] test resume functionality
-- [ ] same with self.edge_embedding in vf
 - [ ] aux losses; interaction loss
-- [ ] gaussian smoothing on top of apo structures
 - [ ] re-run pharm conditioning with rebuild_edges=True
 - [ ] re-run pharm conditioning with better edge building parameters
 - [ ] each conv can be a self-conv followed by interacton conv
