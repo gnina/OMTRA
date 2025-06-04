@@ -41,6 +41,7 @@ chmod +x build_env.sh
 - [ ] add shape-color similarity for docking evaluation
 - [ ] if doing docking or conformational sampling, do more replicates for one system?
 - [ ] use sc-rdkit for denovo evals: https://github.com/oxpig/DeLinker/blob/master/analysis/calc_SC_RDKit.py
+- [ ] reproduce loss weightings from flowmol
 
 # Essetial things
 
