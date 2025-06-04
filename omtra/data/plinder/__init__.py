@@ -3,6 +3,8 @@ from typing import List, Optional, Dict
 from dataclasses import dataclass
 import biotite.structure as struc
 from omtra.constants import charge_map
+import torch
+from omtra.data.xace_ligand import MolXACE
 
 @dataclass
 class BackboneData:
@@ -67,6 +69,31 @@ class LigandData:
         atom_array.set_annotation("charge", np.array([charge_map[int(charge)] for charge in self.atom_charges]))
         
         return atom_array
+    
+    def to_xace_mol(self, dense=False) -> MolXACE:
+        xace_dict = {
+            'x': self.coords,
+            'a': self.atom_types,
+            'c': self.atom_charges,
+            'e': self.bond_types,
+            'edge_idxs': self.bond_indices,
+        }
+
+        if self.bond_types is None or self.bond_indices is None:
+            xace_dict['e'] = torch.zeros((0,), dtype=torch.long)
+            xace_dict['edge_idxs'] = torch.zeros((2, 0), dtype=torch.long)
+
+        for k in xace_dict:
+            xace_dict[k] = torch.from_numpy(xace_dict[k])
+            if k == 'x':
+                xace_dict[k] = xace_dict[k].float()
+            else:
+                xace_dict[k] = xace_dict[k].long()
+
+        xace_ligand = MolXACE(**xace_dict)
+        if dense:
+            xace_ligand = xace_ligand.sparse_to_dense()
+        return xace_ligand
 
 
 @dataclass

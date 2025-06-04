@@ -19,6 +19,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                  single_dataset_configs: Dict[str, dict], 
                  graph_config: DictConfig,
                  prior_config: DictConfig,
+                 fake_atom_p: float = 0.0,
         ):
         """
         Describing the nature of the inputs, for now:
@@ -34,6 +35,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         self.prior_config = prior_config
         self.single_dataset_configs = single_dataset_configs
         self.td_coupling = td_coupling
+        self.fake_atom_p = fake_atom_p
 
         self.task_space = td_coupling.task_space
         self.dataset_space = td_coupling.dataset_space
@@ -77,6 +79,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                     split=self.split, 
                     graph_config=self.graph_config,
                     prior_config=self.prior_config,
+                    fake_atom_p=fake_atom_p,
                     **single_dataset_config)
 
 

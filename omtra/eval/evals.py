@@ -5,8 +5,9 @@ from omtra.eval.utils import (
     reos_and_rings,
     compute_peppr_metrics_no_ref,
     compute_peppr_metrics_ref,
+    compute_pharmacophore_match
 )
-from omtra.data.graph.utils import SampledSystem
+from omtra.eval.system import SampledSystem
 from typing import Dict, Any, Optional, List
 
 
@@ -51,6 +52,7 @@ def denovo_ligand_from_pharmacophore(sampled_systems: List[SampledSystem]):
     metrics.update(reos_and_rings(sampled_systems))
 
     # TODO: add pharm metrics
+    metrics.update(compute_pharmacophore_match(sampled_systems))
     return metrics
 
 

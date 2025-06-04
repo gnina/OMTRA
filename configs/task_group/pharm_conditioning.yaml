@@ -8,16 +8,12 @@ defaults:
 # Define tasks with time-varying probabilities
 # this is p(task) but p(task) can change through the course of training
 task_phases:
-  - duration_batches: null  # remaining batches (no upper limit)
+  - duration_batches: null
     tasks:
-      - name: denovo_ligand
-        probability: 0.999
-      - name: ligand_conformer
-        probability: 0.0001
+      - name: denovo_ligand_from_pharmacophore
+        probability: 1.0
 
 # define p(dataset|task) coupling (assume static for simplicity)
 dataset_task_coupling:
-  denovo_ligand:
-    - [pharmit, 1.0]
-  ligand_conformer:
+  denovo_ligand_from_pharmacophore:
     - [pharmit, 1.0]
