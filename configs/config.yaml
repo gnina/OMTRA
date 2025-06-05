@@ -1,9 +1,9 @@
 defaults:
   - _self_
   - model: default
-  - ligand_encoder: none
+  - ligand_encoder: no_ligand_encoder
   - trainer: default
-  - task_group: protein
+  - task_group: fixed_protein
   - graph: default
   - prior: default
   - callbacks: no_checkpoint
@@ -13,15 +13,18 @@ mode: omtra # mode for training, can be omtra (train omtra) or ligand_encoder (t
 
 seed: 42
 
-name: i_forgot_to_name_my_run
+name: unes_v1 #i_forgot_to_name_my_run
 
 # global overrides
-edges_per_batch: 300000 # TODO: it might be the case the pharmit and plinder tasks support different batch sizes..
-num_workers: 2
-max_steps: 1000 # number of steps to train for
+edges_per_batch: 200000 # TODO: it might be the case the pharmit and plinder tasks support different batch sizes..
+num_workers: 4
+max_steps: 50000 # number of steps to train for
 
-pharmit_path: ${omtra_root:}/data/pharmit_dev
-plinder_path: ${omtra_root:}/data/plinder
+#pharmit_path: ${omtra_root:}/omtra/data/pharmit_dev
+#plinder_path: ${omtra_root:}/omtra/data/plinder
+#temporary change of plinder & pharmit dataset locations nate
+pharmit_path: /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit_dev 
+plinder_path: /net/galaxy/home/koes/tjkatz/OMTRA/data/plinder
 
 
 # this is a directory that will symlink wandb 

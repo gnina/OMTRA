@@ -6,5 +6,6 @@ defaults:
   - vector_field: default
   - optimizer: default
 
+ligand_encoder_checkpoint: /net/galaxy/home/koes/icd3/moldiff/OMTRA/wandb_symlinks/ph5050_newdenoise_ugac8bfh/checkpoints/last.ckpt
 k_checkpoints: 15
 checkpoint_interval: 5000

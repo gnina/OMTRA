@@ -2,4 +2,5 @@ group: null
 mode: online
 name: ${name}
 project: omtra
-entity: koes-group
+entity: nno-carnegie-mellon-university
+log_model: True

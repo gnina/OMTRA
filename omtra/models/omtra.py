@@ -44,7 +44,7 @@ from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
 from omtra.eval.register import get_eval
 from omtra.eval.utils import add_task_prefix
-
+from omtra.utils.fm_ood_loss import flow_matching_ood_loss
 # from line_profiler import profile
 
 class OMTRA(pl.LightningModule):
@@ -64,6 +64,7 @@ class OMTRA(pl.LightningModule):
         k_checkpoints: int = 20,
         checkpoint_interval: int = 1000,
         og_run_dir: Optional[str] = None,
+        uncertainty_estimate: bool = False,
     ):
         super().__init__()
 
@@ -77,6 +78,7 @@ class OMTRA(pl.LightningModule):
         self.optimizer_cfg = optimizer
         self.prior_config = prior_config
         self.og_run_dir = og_run_dir
+        self.uncertainty_estimate = uncertainty_estimate
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -125,16 +127,67 @@ class OMTRA(pl.LightningModule):
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
         )
-
+        '''
         if not ligand_encoder.is_empty():
             self.ligand_encoder = hydra.utils.instantiate(ligand_encoder)
             if ligand_encoder_checkpoint is not None:
+                print(type(self.ligand_encoder))
                 ligand_encoder_pre = type(self.ligand_encoder).load_from_checkpoint(
-                    ligand_encoder_checkpoint
+                    ligand_encoder_checkpoint, **ligand_encoder, strict=False
                 )
                 self.ligand_encoder.load_state_dict(ligand_encoder_pre.state_dict())
         else:
             self.ligand_encoder = None
+
+        
+        #my weird version
+        if not ligand_encoder.is_empty():
+            optimizer = hydra.utils.instantiate(self.optimizer_cfg, params=self.parameters())
+            self.ligand_encoder = hydra.utils.instantiate(
+                vector_field,
+                td_coupling=self.td_coupling,
+                interpolant_scheduler=self.interpolant_scheduler,
+                graph_config=self.graph_config,
+            )
+            if ligand_encoder_checkpoint is not None:
+                ligand_encoder_pre = type(self.ligand_encoder).load_from_checkpoint(
+                    ligand_encoder_checkpoint, **ligand_encoder, strict=False
+                )
+                self.ligand_encoder.load_state_dict(ligand_encoder_pre.state_dict())
+        else:
+            self.ligand_encoder = None
+        
+        '''
+        #another weird version
+
+        # Load checkpoint
+        ckpt = torch.load("/net/galaxy/home/koes/icd3/moldiff/OMTRA/wandb_symlinks/ph5050_newdenoise_ugac8bfh/checkpoints/last.ckpt", map_location="cpu")
+
+        # Extract just vector_field weights
+        vectorfield_state_dict = {
+            k.replace("vector_field.", ""): v
+            for k, v in ckpt["state_dict"].items()
+            if k.startswith("vector_field.")
+        }
+
+        # You now need the right constructor args — see if they’re saved
+        vectorfield_args = ckpt["hyper_parameters"].get("vector_field", {})
+
+        if not ligand_encoder.is_empty():
+            self.ligand_encoder = hydra.utils.instantiate(
+                ligand_encoder,
+                **vectorfield_args,
+                td_coupling=self.td_coupling,
+                interpolant_scheduler=self.interpolant_scheduler,
+                graph_config=self.graph_config,
+            )
+            if ligand_encoder_checkpoint is not None:
+                load_result = self.ligand_encoder.load_state_dict(vectorfield_state_dict , strict=False)
+                print("Missing keys:", load_result.missing_keys)
+                print("Unexpected keys:", load_result.unexpected_keys)
+        else:
+            self.ligand_encoder = None
+
 
         self.configure_loss_fns()
 
@@ -177,7 +230,6 @@ class OMTRA(pl.LightningModule):
                 except Exception as e:
                     print(f"Error changing permissions for {checkpoint_path}: {e}")
             print(f'Saved checkpoint to {checkpoint_path}')
-                
     
     def configure_loss_fns(self):
         if self.time_scaled_loss:
@@ -201,6 +253,11 @@ class OMTRA(pl.LightningModule):
                 self.loss_fn_dict[modality.name] = nn.CrossEntropyLoss(
                     reduction=reduction, ignore_index=-100
                 )
+            #nate add a flag here so we can toggle uncertainty estimate:
+            #elif modality.data_key == "x" and self.uncertainty_estimate:
+
+
+
             else:
                 self.loss_fn_dict[modality.name] = nn.MSELoss(reduction=reduction)
 
@@ -224,7 +281,7 @@ class OMTRA(pl.LightningModule):
                 metric_name,
                 self.sample_counts[(task_name, dataset_name)],
                 rank_zero_only=True,
-                sync_dist=False,
+                sync_dist=False
                 # commit=False
             )
 
@@ -242,18 +299,14 @@ class OMTRA(pl.LightningModule):
 
         # train_log_dict["train_total_loss"] = total_loss
         train_log_dict = add_task_prefix(train_log_dict, task_name)
+        
+        #nate figure out a way to cleanly incorporate into log_dict
+        #and preserve granularity
         self.log_dict(train_log_dict, sync_dist=False, on_step=True)
         self.log(
             f"{task_name}/train_total_loss",
             total_loss,
             prog_bar=False,
-            sync_dist=False,
-            on_step=True,
-        )
-        self.log(
-            "train_total_loss",
-            total_loss,
-            prog_bar=True,
             sync_dist=False,
             on_step=True,
         )
@@ -263,7 +316,8 @@ class OMTRA(pl.LightningModule):
     def validation_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
 
-        # print(f"validation step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
+        #nate comment this out later
+        print(f"validation step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
         device = g.device
         task = task_name_to_class(task_name)
         if task.unconditional:
@@ -293,7 +347,11 @@ class OMTRA(pl.LightningModule):
             metrics = add_task_prefix(metrics, task_name)
             sample_count_key = f"{task_name}_{dataset_name}_sample_count"
             metrics[sample_count_key] = self.sample_counts[(task_name, dataset_name)]
-            self.log_dict(metrics, sync_dist=True, batch_size=1, on_step=True)
+            #self.log_dict(metrics, sync_dist=True, batch_size=1, on_step=True)
+
+        #nate testing out if logging works
+        self.log("debug/test_scalar", torch.tensor(42.0), on_step=True, batch_size=1)
+        wandb.log({"debug/test_scalar_manual": 42.0}, step=self.global_step)
 
         self.train()
         
@@ -367,12 +425,58 @@ class OMTRA(pl.LightningModule):
             if modality.is_node and g.num_nodes(modality.entity_name) == 0:
                 losses[modality.name] = torch.tensor(0.0, device=g.device)
                 continue
+            
+            #this was the old weighted version 
+                
             losses[modality.name] = (
                 self.loss_fn_dict[modality.name](vf_output[modality.name], target)
                 * weight
             )
+            '''
+            #HERE'S WHERE I ADD IN THE LOSS FUNCTION nate
+            if modality.data_key == "x":
+                #mu = vf_output[modality.name + "_mu"]          # shape currently (N, 3)
+                
+                mu = vf_output[modality.name]
+                log_sigma2 = vf_output[modality.name + "_logvar"]
+
+                ground_truth = targets[modality.name]
+
+                loss_fm, _, log_term, nll_term, reg_term = flow_matching_ood_loss(mu, log_sigma2, ground_truth, lam=1.0)
+                #using flow matching loss as the new loss for positional features i think...
+                losses[modality.name] = loss_fm
+                
+                # wandb log settings nate
+                self.log(
+                    f"confidence/{modality.name}_std",
+                    log_sigma2.exp().sqrt().mean().item()
+                )
+                self.log(
+                    f"loss_fm/{modality.name}_loss_fm", 
+                    loss_fm.item()
+                )
+                self.log(
+                    f"loss/{modality.name}_log_term",
+                    log_term
+                )
+                self.log(
+                    f"loss/{modality.name}_nll_term",
+                    nll_term
+                )
+                self.log(
+                    f"loss/{modality.name}_reg_term",
+                    reg_term
+                )
+
+            else:            
+                losses[modality.name] = (
+                    self.loss_fn_dict[modality.name](vf_output[modality.name], target)
+                    * weight
+                ) 
+            '''
             if self.time_scaled_loss:
                 losses[modality.name] = losses[modality.name].mean()
+
         return losses
 
     def configure_optimizers(self):

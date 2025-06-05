@@ -237,6 +237,9 @@ class VectorField(nn.Module):
             )
         self.conv_layers = nn.ModuleList(self.conv_layers)
 
+        #nate, moved the node_output_heads instantiation higher to make things flow better
+        self.node_output_heads = nn.ModuleDict()
+
         # create molecule update layers
         self.node_position_updaters = nn.ModuleDict()
         self.edge_updaters = nn.ModuleDict()
@@ -253,6 +256,15 @@ class VectorField(nn.Module):
             if not is_node_position:
                 continue
             ntype = modality.entity_name
+
+            # nate HERE'S WHERE I ADD IN OUTPUT HEADS FOR UNCERTAINTY ESTIMATE
+            # Output head for log-variance (might switch to a GVP if vector features improve performance)
+            self.node_output_heads[modality.name + "_logvar"] = nn.Sequential(
+                nn.Linear(n_hidden_scalars, n_hidden_scalars),
+                nn.SiLU(),
+                nn.Linear(n_hidden_scalars, 1),
+            )
+
             self.node_position_updaters[ntype] = nn.ModuleList()
             for _ in range(n_updaters):
                 self.node_position_updaters[ntype].append(
@@ -287,7 +299,6 @@ class VectorField(nn.Module):
         # node positions will be covered by the node update module.
         # TODO: node position updates interleaved with convs doesn't work well when some nodes are fixed and others are not
         # we could only support node position updates via a node_output_head...TBD
-        self.node_output_heads = nn.ModuleDict()
         # loop over modalities on nodes that are being generated
         for modality in modalities_generated_cls:
             is_node = modality.graph_entity == "node"
@@ -314,7 +325,7 @@ class VectorField(nn.Module):
             elif (
                 modality.data_key == "x"
             ):  # if a node position, we don't need to do anything to it
-                continue
+                continue  
             else:
                 raise ValueError("unaccounted for node feature type being generated")
 
@@ -356,6 +367,7 @@ class VectorField(nn.Module):
         """Predict x_1 (trajectory destination) given x_t, and, optionally, previous destination features."""
         device = g.device
 
+        #nate slam everything back one ident to the left during merge conflict
         with g.local_scope():
             node_scalar_features = {}
             node_positions = {}
@@ -577,6 +589,8 @@ class VectorField(nn.Module):
                     modalities_generated = task_class.modalities_generated
 
                     # iterate over positions being generated, update them
+                    #nate i think here is where i want a neural network to take the update parameters
+                    #also as the parameters you can use for predicting STDEV
                     ntypes_updated = set()
                     for m in modalities_generated:
                         is_position = m.graph_entity == "node" and m.data_key == "x"
@@ -686,6 +700,11 @@ class VectorField(nn.Module):
                 continue
             if m.data_key == "x":
                 dst_dict[m.name] = node_positions[m.entity_name]
+
+                # nate, here's where i and logvar predictions
+
+                dst_dict[m.name + "_logvar"] = self.node_output_heads[m.name + "_logvar"]((node_scalar_features[ntype]))
+
             elif m.is_categorical:
                 dst_dict[m.name] = logits[m.name]
                 if apply_softmax:
@@ -698,6 +717,7 @@ class VectorField(nn.Module):
                 v_in = node_vec_features[ntype]
                 _, v_out = self.node_output_heads[m.name]((s_in, v_in))
                 dst_dict[m.name] = v_out
+
             else:
                 raise NotImplementedError(f"unaccounted for modality: {m.name}")
 
@@ -769,6 +789,9 @@ class VectorField(nn.Module):
         alpha_t, beta_t = self.interpolant_scheduler.weights(t, task)
         alpha_t_prime, beta_t_prime = self.interpolant_scheduler.weight_derivative(t, task)
 
+
+        #nate lets check on the impact on time when sampling w/wo visualization
+        #then either mimic or take advantage of to track uncertainty value and every time point
         if visualize:
             traj = defaultdict(list)
             def add_frame(g, traj=traj, task=task, first_frame=False):
@@ -925,7 +948,7 @@ class VectorField(nn.Module):
 
         dt = s_i - t_i
 
-        # get continuous and categorical modalities
+        # vector_fieldget continuous and categorical modalities
         categorical_modalities = []
         continuous_modalities = []
         for m in task.modalities_generated:

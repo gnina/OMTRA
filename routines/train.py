@@ -120,7 +120,7 @@ def train(cfg: DictConfig):
         resume_info["run_id"] = run_id
         resume_info["name"] = wandb_logger.experiment.name
         resume_info["url"] = wandb_logger.experiment.url
-
+        
         # write resume info as yaml file to run directory
         resume_info_file = run_dir / "resume_info.yaml"
         with open(resume_info_file, "w") as f:
@@ -140,12 +140,15 @@ def train(cfg: DictConfig):
         override_dir = None
     callbacks: List[pl.Callback] = instantiate_callbacks(cfg.callbacks, override_dir=override_dir)
         
+    #nate change the trainer config back to 2 for validation
     trainer = pl.Trainer(
         logger=wandb_logger,
         **cfg.trainer,
         callbacks=callbacks,
+        log_every_n_steps=1,
+        num_sanity_val_steps=0
     )
-    
+
     torch.cuda.empty_cache()
     trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("checkpoint"))
 
