@@ -1,5 +1,5 @@
 import torch
-from omtra.data.graph.utils import SampledSystem
+from omtra.eval.system import SampledSystem
 
 # this implementation is from: https://gist.github.com/bougui505/e392a371f5bab095a3673ea6f4976cc8?permalink_comment_id=5286981#gistcomment-5286981
 # as a sanity check we can compare it to the implementation in rdkit:
@@ -13,22 +13,15 @@ def find_rigid_alignment(A, B):
         -    A: Torch tensor of shape (N,D) -- Point Cloud to Align (source)
         -    B: Torch tensor of shape (N,D) -- Reference Point Cloud (target)
         Returns:
-        -    R: optimal rotation
-        -    t: optimal translation
+        -     aligned : (N, D) torch.Tensor --  The coordinates of `A` after the optimal rotation/translation
+
     Test on rotation + translation and on rotation + translation + reflection
         >>> A = torch.tensor([[1., 1.], [2., 2.], [1.5, 3.]], dtype=torch.float)
         >>> R0 = torch.tensor([[np.cos(60), -np.sin(60)], [np.sin(60), np.cos(60)]], dtype=torch.float)
         >>> B = (R0.mm(A.T)).T
         >>> t0 = torch.tensor([3., 3.])
         >>> B += t0
-        >>> R, t = find_rigid_alignment(A, B)
-        >>> A_aligned = (R.mm(A.T)).T + t
-        >>> rmsd = torch.sqrt(((A_aligned - B)**2).sum(axis=1).mean())
-        >>> rmsd
-        tensor(3.7064e-07)
-        >>> B *= torch.tensor([-1., 1.])
-        >>> R, t = find_rigid_alignment(A, B)
-        >>> A_aligned = (R.mm(A.T)).T + t
+        >>> A_aligned = find_rigid_alignment(A, B)
         >>> rmsd = torch.sqrt(((A_aligned - B)**2).sum(axis=1).mean())
         >>> rmsd
         tensor(3.7064e-07)
@@ -48,7 +41,10 @@ def find_rigid_alignment(A, B):
     # Translation vector
     t = b_mean[None, :] - R.mm(a_mean[None, :].T).T
     t = t.T
-    return R, t.squeeze()
+
+    pred_aligned = (R.mm(A.T)).T + t.squeeze()
+
+    return pred_aligned
 
 def get_gt_as_rdkit_ligand(g):
     """

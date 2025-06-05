@@ -12,7 +12,7 @@ train_dataset = datamodule.load_dataset("val")
 pharmit_dataset = train_dataset.datasets['pharmit']
 
 batch_size = 128
-num_total_samples = 256 # len(pharmit_dataset) changed for testing
+num_total_samples = 512 # len(pharmit_dataset) changed for testing
 ckpt_path = '/home/ruh/Research/OMTRA/models/batch_295000.ckpt'
 
 
@@ -41,16 +41,14 @@ for i in range(0, num_total_samples, batch_size):
 
     print(".", end="")
 
-    for _ in range(0, batch_size):
-        pred_coords = sampled_systems[_].g.nodes["lig"].data["x_1"].cpu()
-        gt_coords   = g_list[_].nodes['lig'].data['x_1_true'].cpu()
+    for idx in range(0, batch_size):
+        pred_coords = sampled_systems[idx].g.nodes["lig"].data["x_1"].cpu()
+        gt_coords   = g_list[idx].nodes['lig'].data['x_1_true'].cpu()
     
-        pred_coords_rdkit = sampled_systems[_].get_rdkit_ligand()
-        gt_coords_rdkit   = get_gt_as_rdkit_ligand(g_list[_])
+        pred_coords_rdkit = sampled_systems[idx].get_rdkit_ligand()
+        gt_coords_rdkit   = get_gt_as_rdkit_ligand(g_list[idx])
 
-        
-        R, t = find_rigid_alignment(pred_coords, gt_coords)
-        pred_aligned = (R.mm(pred_coords.T)).T + t
+        pred_aligned = find_rigid_alignment(pred_coords, gt_coords)
         kabsch_rmsd = torch.sqrt(((pred_aligned - gt_coords)**2).sum(axis=1).mean())
     
         rdkit_rmsd = rdMolAlign.GetBestRMS(pred_coords_rdkit, gt_coords_rdkit)
@@ -59,9 +57,9 @@ for i in range(0, num_total_samples, batch_size):
         delta.append(kabsch_rmsd - rdkit_rmsd)
         
         latents = {
-            "node_scalar_features" : sampled_systems[_].g.nodes["lig"].data["node_scalar_features"],
-            "node_vec_features" : sampled_systems[_].g.nodes["lig"].data["node_vec_features"],
-            "node_positions" : sampled_systems[_].g.nodes["lig"].data["node_positions"],
+            "node_scalar_features" : sampled_systems[idx].g.nodes["lig"].data["node_scalar_features"],
+            "node_vec_features" : sampled_systems[idx].g.nodes["lig"].data["node_vec_features"],
+            "node_positions" : sampled_systems[idx].g.nodes["lig"].data["node_positions"],
         }
         
         records.append({
