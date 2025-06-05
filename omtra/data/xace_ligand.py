@@ -1,7 +1,6 @@
 from typing import Dict, List, Optional
 import numpy as np
 from rdkit import Chem
-import dgl
 import torch
 import traceback
 from multiprocessing import Pool
@@ -222,6 +221,7 @@ def add_fake_atoms(mol: MolXACE, fake_atom_p: float):
 
 
 def add_k_hop_edges(x, a, c, e, edge_idxs, k=2):
+    import dgl
     n_atoms = x.shape[0]
     
     edge_to_bond = {}

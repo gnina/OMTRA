@@ -68,6 +68,7 @@ class SystemProcessor:
     def __init__(
         self,
         system_id: str,
+        embeddings: Optional[bool] = False,
         link_type: Optional[str] = None,
         ligand_atom_map: List[str] = lig_atom_type_map,
         npnde_atom_map: List[str] = npnde_atom_type_map,
@@ -92,6 +93,7 @@ class SystemProcessor:
 
         self.link_type = link_type
         self.pdb_writer = None
+        self.embeddings = embeddings
 
     def extract_backbone(
         self,
@@ -368,6 +370,7 @@ class SystemProcessor:
             )
             if pocket:
                 pockets_data[key] = pocket
+                logger.info(f"ok how many embeddings are we getting {pockets_data[key].pocket_embedding.shape}")
         return {
             "holo": holo_data,
             linked_id: linked_data,
@@ -575,7 +578,10 @@ class SystemProcessor:
         output = model.logits(protein_tensor, EMBEDDING_CONFIG)
         if device == torch.device("cuda"):
             model.to(torch.device("cpu"))
-        return output.embeddings.cpu().numpy()
+
+        # squeeze batch dim to convert per residue matrix embedding to (num_residue, 1536) vector
+        # if we don't want per residue embeddings simply add mean
+        return output.embeddings.squeeze().numpy() #.mean(axis=0 , keepdims=True)
 
     def embed_chain(self, model: ESM3InferenceClient, protein_chain: ProteinChain) -> np.ndarray:
         
@@ -587,7 +593,10 @@ class SystemProcessor:
         output = model.logits(protein_tensor, EMBEDDING_CONFIG)
         if device == torch.device("cuda"):
             model.to(torch.device("cpu"))
-        return output.embeddings.cpu().numpy()
+        
+        # squeeze batch dim to convert per residue matrix embedding to (num_residue, 1536) vector
+        # if we don't want per residue embeddings simply add mean
+        return output.embeddings.squeeze().numpy() #.mean(axis=0 , keepdims=True)
 
 
     def ESM3_embed(self, res_name:np.ndarray, chain_id:np.ndarray, backbone_data: np.ndarray, bb_mask: np.ndarray[bool]) -> np.ndarray:  
@@ -624,7 +633,7 @@ class SystemProcessor:
                         temp.append(residue_to_single[seq[i]]) 
                     else: 
                         try: 
-                            temp.append(aa_substitutions[seq[i]]) 
+                            temp.append(residue_to_single[aa_substitutions[seq[i]]]) 
                         except: 
                             temp.append(residue_to_single['UNK'])
                 concat_seq.append(temp)
@@ -643,7 +652,7 @@ class SystemProcessor:
                     sequence.append(residue_to_single[residue_names[i]]) 
                 else: 
                     try: 
-                        sequence.append(aa_substitutions[residue_names[i]]) 
+                        sequence.append(residue_to_single[aa_substitutions[residue_names[i]]]) 
                     except: 
                         sequence.append(residue_to_single['UNK'])
             
@@ -695,7 +704,11 @@ class SystemProcessor:
 
         bb_mask = struc.filter_peptide_backbone(pocket)
 
-        embedding = self.ESM3_embed(pocket.res_name, pocket.chain_id, backbone_data.coords, bb_mask)
+        #default is false
+        if self.embeddings:
+            embedding = self.ESM3_embed(pocket.res_name, pocket.chain_id, backbone_data.coords, bb_mask)
+        else:
+            embedding = None
 
         return StructureData(
             coords=pocket.coord,
@@ -1016,7 +1029,6 @@ class SystemProcessor:
                 ligand.coords,
                 self.system.chain_mapping,
             )
-
             if not pocket_data:
                 logger.warning(
                     f"No pocket extracted for system {self.system_id} ligand {ligand_key}"
@@ -1032,7 +1044,6 @@ class SystemProcessor:
                 self.pdb_writer.write(pocket_data, pocket_path)
 
             pockets_data[ligand_key] = pocket_data
-
         for ligand_key in ligands_to_remove:
             del ligand_data[ligand_key]
 
