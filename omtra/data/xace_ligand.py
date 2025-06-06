@@ -6,8 +6,10 @@ import torch
 import traceback
 from multiprocessing import Pool
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, Union
 from collections import defaultdict
+import math
+from omtra.constants import lig_atom_type_map
 
 from omtra.utils.misc import combine_tcv_counts, bad_mol_reporter
 
@@ -18,13 +20,46 @@ RDLogger.DisableLog('rdApp.*')
 
 @dataclass
 class MolXACE:
-    positions: Optional[np.ndarray] = None
-    atom_types: Optional[np.ndarray] = None
-    atom_charges: Optional[np.ndarray] = None
-    bond_types: Optional[np.ndarray] = None  # corresponds to edge attributes (bond orders)
-    bond_idxs: Optional[np.ndarray] = None   # corresponds to edge index (upper triangular edges)
+    x: Optional[Union[np.ndarray, torch.Tensor]] = None
+    a: Optional[Union[np.ndarray, torch.Tensor]] = None
+    c: Optional[Union[np.ndarray, torch.Tensor]] = None
+    e: Optional[Union[np.ndarray, torch.Tensor]] = None  # corresponds to edge attributes (bond orders)
+    edge_idxs: Optional[Union[np.ndarray, torch.Tensor]] = None   # corresponds to edge index (upper triangular edges)
     tcv_counts: Optional[dict] = None
     failure_mode: Optional[str] = None
+
+
+    def sparse_to_dense(self):
+        """Converts the sparse representation of the molecule to a dense representation."""
+        if self.edge_idxs is None or self.e is None:
+            raise ValueError("bond_idxs and bond_types must be set to convert to dense representation.")
+        
+        # Create a dense adjacency matrix
+        n_atoms = self.a.shape[0]
+        adj = torch.zeros((n_atoms, n_atoms), dtype=self.e.dtype)
+        adj[self.edge_idxs[:, 0], self.edge_idxs[:, 1]] = self.e
+        
+        # Get the upper-triangular indices
+        upper_edge_idxs = torch.triu_indices(n_atoms, n_atoms, offset=1)
+        
+        # Get the edge labels for the upper-triangular edges
+        upper_edge_labels = adj[upper_edge_idxs[0], upper_edge_idxs[1]]
+
+        lower_edge_idxs = torch.stack((upper_edge_idxs[1], upper_edge_idxs[0]))
+        
+        # Create the final edge representation
+        edge_idxs = torch.cat((upper_edge_idxs, lower_edge_idxs), dim=1)
+        bond_types = torch.cat((upper_edge_labels, upper_edge_labels))
+
+        dense_xace = MolXACE(
+            x=self.x,
+            a=self.a,
+            c=self.c,
+            e=bond_types,
+            edge_idxs=edge_idxs
+        )
+        
+        return dense_xace
 
 
 class MoleculeTensorizer():
@@ -60,7 +95,7 @@ class MoleculeTensorizer():
             args = [(molecule, self.atom_map_dict, self.explicit_hydrogens) for molecule in molecules]
             results = self.pool.starmap(rdmol_to_xace, args)
             for idx, molxace in enumerate(results):
-                if molxace is None or molxace.positions is None:
+                if molxace is None or molxace.x is None:
                     failed_idxs.append(idx)
                     failure_counts[molxace.failure_mode] += 1
                 else:
@@ -153,43 +188,37 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         tcv_counts[tuple(row)] = count
 
     return MolXACE(
-        positions=positions,
-        atom_types=atom_types,
-        atom_charges=atom_charges,
-        bond_types=bond_types,
-        bond_idxs=bond_idxs,
+        x=positions,
+        a=atom_types,
+        c=atom_charges,
+        e=bond_types,
+        edge_idxs=bond_idxs,
         tcv_counts=tcv_counts,
     )
 
+def add_fake_atoms(mol: MolXACE, fake_atom_p: float):
+    n_real_atoms, _ = mol.x.shape
+    max_num_fake_atoms = math.ceil(n_real_atoms*fake_atom_p)
+    num_fake_atoms = torch.randint(low=0, high=max_num_fake_atoms, size=(1,))
 
-def sparse_to_dense(x, a, c, e, edge_idxs):
-    """Converts a sparse xace ligand to a dense xace ligand.
-    
-    We are overloading the word "sparse" here. The graph representation in both the input
-    and output is "sparse" in the classic sense of sparse tensors or sparse adjacency matrices.
-    But this is not the sparse to dense conversion that is being referred to in the function name.
+    anchor_atom_idxs = torch.randint(low=0, high=n_real_atoms, size=(num_fake_atoms,))
+    fake_atom_positions = mol.x[anchor_atom_idxs]
+    # TODO: think about how to decide fake atom positions
+    # currently: gaussians around anchor atom 
+    # possibilities: collapse on nearest atom, random placement in molecule interior,
+    # fixed distance from acnhor atom
+    fake_atom_positions = fake_atom_positions + torch.randn_like(fake_atom_positions) 
+    fake_atom_charges = torch.zeros_like(mol.c[anchor_atom_idxs])
+    fake_atom_types = torch.full_like(mol.a[anchor_atom_idxs], fill_value=len(lig_atom_type_map))
 
-    When we store xace ligands to disk, we only record bond orders for existing bonds.
-    If there is no bond, we don't record the edge or bond order on that edge. Moreover,
-    we only record upper-edge pairs (where dst node index > src node index).
-    Of course for training our model must predict the absence of bonds between atoms. 
-    And we need edge labels for both directions (upper and lower triangle edges).
-    So, here we need to modify the list of edges and the edge labels to include:
-     - non-bonded edges 
-     - upper and lower triangle edges
-    This is what is meant by "sparse to dense". We should adopt better terminology; a future problem :p
-    """
-    n_atoms = x.shape[0]
-    adj = torch.zeros((n_atoms, n_atoms), dtype=edge_idxs.dtype)
-    adj[edge_idxs[:, 0], edge_idxs[:, 1]] = e
-    upper_edge_idxs = torch.triu_indices(n_atoms, n_atoms, offset=1)
-    upper_edge_labels = adj[upper_edge_idxs[0], upper_edge_idxs[1]]
-    lower_edge_idxs = torch.stack((upper_edge_idxs[1], upper_edge_idxs[0]))
+    # combine fake atoms with real atoms
+    mol.x = torch.cat((mol.x, fake_atom_positions), dim=0)
+    mol.a = torch.cat((mol.a, fake_atom_types), dim=0)
+    mol.c = torch.cat((mol.c, fake_atom_charges), dim=0)
 
-    # construct final edge representation: this includes upper-lower edges and unbonded edges
-    edge_idxs = torch.cat((upper_edge_idxs, lower_edge_idxs), dim=1)
-    e = torch.cat((upper_edge_labels, upper_edge_labels))
-    return x, a, c, e, edge_idxs
+    return mol
+
+
 
 
 def add_k_hop_edges(x, a, c, e, edge_idxs, k=2):

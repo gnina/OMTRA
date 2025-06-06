@@ -17,3 +17,4 @@ graph_config: ${graph}
 edges_per_batch: ${edges_per_batch}
 num_workers: ${num_workers}
 max_steps: ${max_steps}
+fake_atom_p: ${fake_atom_p}

@@ -1,2 +1,3 @@
 processed_data_dir: ${plinder_path}
+pskip_factor: ${plinder_pskip_factor} # 0 -> no weighted sampling, 1 -> uniform sampling over clusters
 # graphs_per_chunk: 1000

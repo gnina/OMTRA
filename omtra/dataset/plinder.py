@@ -16,7 +16,7 @@ from omtra.constants import (
 )
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders, approx_n_edges
-from omtra.data.xace_ligand import sparse_to_dense, add_k_hop_edges
+from omtra.data.xace_ligand import add_k_hop_edges, MolXACE, add_fake_atoms
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
@@ -56,6 +56,10 @@ class PlinderDataset(ZarrDataset):
         processed_data_dir: str,
         graph_config: Optional[DictConfig] = None,
         prior_config: Optional[DictConfig] = None,
+        fake_atom_p: float = 0.0,
+        pskip_factor: float = 0.0, 
+        # this is a parmaeter that controls whether/how we do weighted sampling of the the dataset
+        # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
     ):
         super().__init__(
             split,
@@ -67,15 +71,24 @@ class PlinderDataset(ZarrDataset):
         self.link_version = link_version
         self.graph_config = graph_config
         self.prior_config = prior_config
+        self.fake_atom_p = fake_atom_p
+        self.pskip_factor = pskip_factor
+        self.weighted_sampling = pskip_factor > 0.0 and split == 'train'
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
+
+        if self.weighted_sampling:
+            if 'cluster_id' not in self.system_lookup.columns:
+                raise ValueError(f'Weighted sampling enabled but no cluster assignments found for plinder link version {link_version} and split {split}')
+            self.system_lookup = compute_pskip(self.system_lookup, pskip_factor=self.pskip_factor)
 
         self.encode_element = {
             element: i for i, element in enumerate(protein_element_map)
         }
         self.encode_residue = {res: i for i, res in enumerate(residue_map)}
         self.encode_atom = {atom: i for i, atom in enumerate(protein_atom_map)}
+        self.charge_map_tensor = torch.tensor(charge_map)
 
     @classproperty
     def name(cls):
@@ -499,15 +512,7 @@ class PlinderDataset(ZarrDataset):
         return node_data, edge_idxs, edge_data, pocket_mask, backbone_pocket_mask
 
     def encode_charges(self, charges: torch.Tensor) -> torch.Tensor:
-        charge_type_map = {charge: i for i, charge in enumerate(charge_map)}
-        encoded_charges = []
-        for charge in charges:
-            charge = int(charge.item())
-            if charge not in charge_type_map:
-                raise ValueError(f"{charge} not in charge map")
-            else:
-                encoded_charges.append(charge_type_map[charge])
-        return torch.Tensor(encoded_charges).long()
+        return torch.searchsorted(self.charge_map_tensor, charges)
     
     def infer_covalent_bonds(
         self,
@@ -594,44 +599,37 @@ class PlinderDataset(ZarrDataset):
         self,
         ligand: LigandData,
         ligand_id: str,
+        task: Task,
         pocket: Optional[StructureData] = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
         Dict[str, Dict[str, torch.Tensor]],
     ]:
-        coords = torch.from_numpy(ligand.coords).float()
-        atom_types = torch.from_numpy(ligand.atom_types).long()
-        atom_charges = torch.from_numpy(ligand.atom_charges).long()
 
-        if ligand.bond_types is not None and ligand.bond_indices is not None:
-            bond_types = torch.from_numpy(ligand.bond_types).long()
-            bond_indices = torch.from_numpy(ligand.bond_indices).long()
-        else:
-            bond_types = torch.zeros((0,), dtype=torch.long)
-            bond_indices = torch.zeros((2, 0), dtype=torch.long)
+        lig_xace = ligand.to_xace_mol(dense=True)
 
-        lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(
-            coords, atom_types, atom_charges, bond_types, bond_indices
-        )
+        denovo_ligand = 'ligand_identity' in task.groups_generated
+        if self.fake_atom_p > 0 and denovo_ligand:
+            lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
 
-        lig_c = self.encode_charges(lig_c)
+        lig_c = self.encode_charges(lig_xace.c)
         node_data = {
             "lig": {
-                "x_1_true": lig_x,
-                "a_1_true": lig_a,
+                "x_1_true": lig_xace.x,
+                "a_1_true": lig_xace.a,
                 "c_1_true": lig_c,
             }
         }
 
         edge_data = {
             "lig_to_lig": {
-                "e_1_true": lig_e,
+                "e_1_true": lig_xace.e,
             }
         }
 
         edge_idxs = {
-            "lig_to_lig": lig_edge_idxs,
+            "lig_to_lig": lig_xace.edge_idxs,
         }
         if ligand.is_covalent and ligand.linkages and pocket is not None:
             prot_atom_to_lig_tensor, prot_res_to_lig_tensor = self.infer_covalent_bonds(
@@ -814,7 +812,11 @@ class PlinderDataset(ZarrDataset):
         return node_data, edge_idxs, edge_data
 
     def convert_system(
-        self, system: SystemData, include_pharmacophore: bool, include_protein: bool
+        self, 
+        system: SystemData,
+        task: Task, 
+        include_pharmacophore: bool, 
+        include_protein: bool
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -849,7 +851,10 @@ class PlinderDataset(ZarrDataset):
 
         # read ligand data
         lig_node_data, lig_edge_idxs, lig_edge_data = self.convert_ligand(
-            system.ligand, system.ligand_id, system.pocket
+            system.ligand, 
+            system.ligand_id, 
+            task=task,
+            pocket=system.pocket
         )
         node_data.update(lig_node_data)
         edge_idxs.update(lig_edge_idxs)
@@ -885,6 +890,7 @@ class PlinderDataset(ZarrDataset):
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
             self.convert_system(
                 system,
+                task=task_class,
                 include_pharmacophore=include_pharmacophore,
                 include_protein=include_protein,
             )
@@ -1005,6 +1011,11 @@ class PlinderDataset(ZarrDataset):
 
             node_counts.append(counts)
 
+        if self.fake_atom_p > 0:
+            lig_node_counts = node_counts[0]
+            mean_fake_atoms = self.fake_atom_p/2 * lig_node_counts
+            node_counts[0] = lig_node_counts + mean_fake_atoms.astype(int)
+
         if per_ntype:
             num_nodes_dict = {
                 ntype: ncount for ntype, ncount in zip(node_types, node_counts)
@@ -1014,3 +1025,46 @@ class PlinderDataset(ZarrDataset):
         node_counts = np.stack(node_counts, axis=0).sum(axis=0)
         node_counts = torch.from_numpy(node_counts)
         return node_counts
+
+    def get_pskip(self, start_idx, end_idx):
+        """
+        Computes the p_skip values for the systems in the specified range.
+        """
+        pskip = self.system_lookup['p_skip'].values[start_idx:end_idx]
+        pskip = torch.from_numpy(pskip)
+        return pskip
+
+def compute_pskip(
+    df: pd.DataFrame,
+    id_col: str = "cluster_id",
+    freq_col: str = "freq",
+    pskip_factor: float = 0.0,
+) -> pd.DataFrame:
+    """
+    Adds a new column to the DataFrame containing the frequency of each CCD code.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The original DataFrame with a column named `ccd_col`.
+    ccd_col : str, default "CCD"
+        Name of the column containing CCD codes.
+    freq_col : str, default "CCD_freq"
+        Name of the new column to create for frequencies.
+    include_nan : bool, default False
+        Whether to count NaN values in the frequency. If False, NaNs get a 0.
+
+    Returns
+    -------
+    pd.DataFrame
+        The same DataFrame with an extra column `freq_col`.
+    """
+    # Compute counts for each CCD value (optionally including NaNs)
+    counts = df[id_col].value_counts(normalize=True)
+
+    # Map counts back to the original rows
+    df[freq_col] = df[id_col].map(counts)
+
+    df['p_skip'] = 1 - df[freq_col].min() / df[freq_col]
+    df['p_skip'] = df['p_skip'] * pskip_factor
+    return df

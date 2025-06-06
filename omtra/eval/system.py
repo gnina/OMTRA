@@ -373,7 +373,7 @@ class SampledSystem:
         ctmc_mol: bool = False,
         show_fake_atoms: bool = False,
         npnde: bool = False,
-    ):
+    ) -> Tuple[torch.Tensor, List[str], List[int], torch.Tensor, torch.Tensor, torch.Tensor]:
         if g is None:
             g = self.g
 
@@ -401,12 +401,9 @@ class SampledSystem:
             lig_g.remove_nodes(fake_atom_idxs)
 
         # extract node-level features
-        positions = lig_g.ndata["x_1"]
-
-        # extract node-level features
-        positions = lig_g.ndata["x_1"]
+        positions: torch.Tensor = lig_g.ndata["x_1"]
         atom_types = lig_g.ndata["a_1"]
-        atom_types = [atom_type_map[int(atom)] for atom in atom_types]
+        atom_types: List[str] = [atom_type_map[int(atom)] for atom in atom_types]
 
         if self.exclude_charges:
             atom_charges = None
@@ -419,7 +416,7 @@ class SampledSystem:
                 neutral_index = self.charge_map.index(0)
                 charge_data[masked_charge] = neutral_index
 
-            atom_charges = [self.charge_map[int(charge)] for charge in charge_data]
+            atom_charges: List[int] = [self.charge_map[int(charge)] for charge in charge_data]
 
         # get bond types and atom indicies for every edge, convert types from simplex to integer
         bond_types = lig_g.edata["e_1"].clone()
@@ -554,6 +551,7 @@ class SampledSystem:
 
         n_frames = self.traj[test_key].shape[0]
         if lig:
+            # TODO: this was so that we can align trajectory frames to the last frame, need to do this
             lig_x_final = self.traj["lig_x"][-1]
 
         traj_mols = defaultdict(list)

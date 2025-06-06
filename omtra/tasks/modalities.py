@@ -98,13 +98,13 @@ Modality.register(MODALITY_REGISTER,
     n_categories=len(ph_idx_to_type)
 )
 
-Modality.register(MODALITY_REGISTER,
-    name='pharm_v',
-    group='pharmacophore',
-    graph_entity='node',
-    entity_name='pharm',
-    data_key='v'
-)
+# Modality.register(MODALITY_REGISTER,
+#     name='pharm_v',
+#     group='pharmacophore',
+#     graph_entity='node',
+#     entity_name='pharm',
+#     data_key='v'
+# )
 
 Modality.register(MODALITY_REGISTER,
     name='prot_atom_x',

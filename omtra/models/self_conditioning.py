@@ -24,12 +24,14 @@ class SelfConditioningResidualLayer(nn.Module):
         rbf_dim,
         rbf_dmax,
         n_pharmvec_channels=4,
+        fake_atoms: bool = False,
     ):
         super().__init__()
 
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
         self.n_pharmvec_channels = n_pharmvec_channels
+        self.fake_atoms = fake_atoms
 
         modalities_present = [m 
             for task_name in sorted(td_coupling.task_space)
@@ -48,6 +50,9 @@ class SelfConditioningResidualLayer(nn.Module):
             ntype = modality.entity_name
             if modality.is_categorical:
                 self.node_generated_dims[ntype] += modality.n_categories
+                if modality.name == 'lig_a' and self.fake_atoms:
+                    # if we are using fake atoms, we need to add an extra dimension for the fake atom type
+                    self.node_generated_dims[ntype] += 1
             elif modality.data_key == 'x': # positions
                 self.node_generated_dims[ntype] += rbf_dim
             elif modality.data_key == 'v': # vectors
@@ -133,7 +138,8 @@ class SelfConditioningResidualLayer(nn.Module):
                     node_res_input = dst_dict[m.name] # if we generating this feature, just use predicted logits
                 else:
                     # if we are not generating this feature (it is fixed), use the current state
-                    node_res_input = tfn.one_hot(g.nodes[ntype].data[f'{m.data_key}_t'], m.n_categories)
+                    extra_dim = int(m.name == 'lig_a' and self.fake_atoms)
+                    node_res_input = tfn.one_hot(g.nodes[ntype].data[f'{m.data_key}_t'], m.n_categories+extra_dim)
             else:
                 raise ValueError(f"Unexpected modality: {m.name}")
             node_residual_inputs[ntype].append(node_res_input)

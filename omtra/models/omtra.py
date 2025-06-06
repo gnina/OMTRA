@@ -64,6 +64,7 @@ class OMTRA(pl.LightningModule):
         k_checkpoints: int = 20,
         checkpoint_interval: int = 1000,
         og_run_dir: Optional[str] = None,
+        fake_atom_p: float = 0.0,
     ):
         super().__init__()
 
@@ -77,6 +78,7 @@ class OMTRA(pl.LightningModule):
         self.optimizer_cfg = optimizer
         self.prior_config = prior_config
         self.og_run_dir = og_run_dir
+        self.fake_atom_p = fake_atom_p
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -124,6 +126,7 @@ class OMTRA(pl.LightningModule):
             td_coupling=self.td_coupling,
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
+            fake_atoms=self.fake_atom_p>0.0,
         )
 
         if not ligand_encoder.is_empty():
@@ -548,6 +551,14 @@ class OMTRA(pl.LightningModule):
             # in this case, the distrbution could come from pharmit or plinder dataset..user-chosen option?
 
         if add_ligand:
+
+            if self.fake_atom_p > 0.0:
+                n_real_atoms = n_lig_atoms
+                max_num_fake_atoms = torch.ceil(n_real_atoms*self.fake_atom_p).float()
+                frac = torch.rand_like(max_num_fake_atoms)
+                num_fake_atoms = torch.floor(frac*(max_num_fake_atoms+1)).long()
+                n_real_atoms = n_real_atoms + num_fake_atoms
+
             for g_idx, g_i in enumerate(g_flat):
                 # clear ligand nodes (and edges) if they exist
                 if g_i.num_nodes("lig") > 0:
@@ -681,6 +692,7 @@ class OMTRA(pl.LightningModule):
                 ss_kwargs = dict()
             sampled_system = SampledSystem(
                 g=g_i,
+                fake_atoms=self.fake_atom_p>0.0,
                 **ss_kwargs,
             )
             sampled_systems.append(sampled_system)

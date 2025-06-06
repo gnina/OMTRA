@@ -12,9 +12,20 @@ def build_lookup_table(batch_num_nodes):
 
 def g_local_scope(f):
     @wraps(f)
-    def wrapper(graph: dgl.DGLGraph, *args, **kwargs):
-        # enter a fresh local scope for all graph data
+    def wrapper(*args, **kwargs):
+        # Determine if the first argument is 'self' or the graph
+        if isinstance(args[0], (dgl.DGLGraph, dgl.DGLHeteroGraph)):
+            graph = args[0]
+            remaining_args = args[1:]
+        else:
+            self, graph = args[0], args[1]
+            remaining_args = args[2:]
+        
+        # Enter a fresh local scope for all graph data
         with graph.local_scope():
-            # call your function body
-            return f(graph, *args, **kwargs)
+            # Call your function body
+            if 'self' in locals():
+                return f(self, graph, *remaining_args, **kwargs)
+            else:
+                return f(graph, *remaining_args, **kwargs)
     return wrapper

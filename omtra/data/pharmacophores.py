@@ -133,6 +133,7 @@ def get_pharmacophore_dict(ligand, receptor=None):
     
     pharmacophores = {feature: {'P': [], 'V': [], 'I': []} for feature in smarts_patterns}
     
+    Chem.SanitizeMol(ligand)
     ligand = Chem.AddHs(ligand, addCoords=True)
     if receptor: receptor = Chem.AddHs(receptor, addCoords=True)
 
