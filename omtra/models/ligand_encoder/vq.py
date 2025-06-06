@@ -121,7 +121,7 @@ class Encoder(nn.Module):
         # convert ligand scalar features to latent atom types
         atom_latents = self.to_atom_latents(scalar_feats['lig'])  # (n_nodes, latent_dim)
             
-        return atom_latents
+        return atom_latents, mask
 
 
 
@@ -351,11 +351,17 @@ class LigandVQVAE(pl.LightningModule):
         self.rbf_dmax = rbf_dmax
         self.mask_prob = mask_prob
 
+        """
+        self.a_accuracy_train = torchmetrics.Accuracy(task='multiclass', num_classes=len(lig_atom_type_map))
+        self.c_accuracy_train = torchmetrics.Accuracy(task='multiclass', num_classes=len(charge_map))
+        self.e_accuracy_train = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
+        self.e_nonzero_accuracy_train = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
 
-        self.atom_type_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(lig_atom_type_map))
-        self.atom_charge_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(charge_map))
-        self.bond_order_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
-        self.nonzero_bond_order_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
+        self.a_accuracy_val = torchmetrics.Accuracy(task='multiclass', num_classes=len(lig_atom_type_map))
+        self.c_accuracy_val = torchmetrics.Accuracy(task='multiclass', num_classes=len(charge_map))
+        self.e_accuracy_val = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
+        self.e_nonzero_accuracy_val = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
+        """
         
         self.encoder = Encoder(
                                scalar_size=scalar_size, 
@@ -365,8 +371,8 @@ class LigandVQVAE(pl.LightningModule):
                                e_embed_dim= e_embed_dim,
                                num_gvp_layers= num_gvp_layers, 
                                latent_dim=latent_dim,
-                               rbf_dim = self.rbf_dim,
-                               rbf_dmax = self.rbf_dmax,
+                               rbf_dim = rbf_dim,
+                               rbf_dmax = rbf_dmax,
                                mask_prob = mask_prob)
 
 
@@ -421,7 +427,7 @@ class LigandVQVAE(pl.LightningModule):
         self.bond_order_loss_fn = torch.nn.CrossEntropyLoss()
 
 
-    def forward(self, g: dgl.DGLHeteroGraph, mask_prob=None): 
+    def forward(self, g: dgl.DGLHeteroGraph, is_train, mask_prob=None): 
         """ Get relevant features from batched graph """
 
         target_atom_types = g.nodes['lig'].data['a_1_true']  # (n_nodes,)
@@ -431,7 +437,7 @@ class LigandVQVAE(pl.LightningModule):
 
 
         """ Pass to VQ-VAE model """
-        z_e = self.encoder(g, mask_prob=mask_prob)   # Encoding
+        z_e, _ = self.encoder(g, mask_prob=mask_prob)   # Encoding
 
         loss, z_d, _, perplexity, num_unique_codes = self.vq_vae(z_e)    # Vector Quantization
         
@@ -443,26 +449,37 @@ class LigandVQVAE(pl.LightningModule):
 
         # Accuracy
         pred_atom_types = torch.argmax(atom_type_logits, dim=1)
-        self.atom_type_accuracy.update(pred_atom_types, target_atom_types)  
-
         pred_atom_charges = torch.argmax(atom_charge_logits, dim=1)
-        self.atom_charge_accuracy.update(pred_atom_charges, target_atom_charges)
-
         pred_bond_orders = torch.argmax(bond_order_logits, dim=1)
-        self.bond_order_accuracy.update(pred_bond_orders, target_bond_orders)
-
         nonzero_indices = torch.nonzero(target_bond_orders != 0, as_tuple=True)[0]
-        self.nonzero_bond_order_accuracy.update(pred_bond_orders[nonzero_indices], target_bond_orders[nonzero_indices])
 
-        
+        """
+        if is_train:
+            self.a_accuracy_train.update(pred_atom_types, target_atom_types)  
+            self.c_accuracy_train.update(pred_atom_charges, target_atom_charges)
+            self.e_accuracy_train.update(pred_bond_orders, target_bond_orders)
+            self.e_nonzero_accuracy_train.update(pred_bond_orders[nonzero_indices], target_bond_orders[nonzero_indices])
+        else:
+            self.a_accuracy_val.update(pred_atom_types, target_atom_types)  
+            self.c_accuracy_val.update(pred_atom_charges, target_atom_charges)
+            self.e_accuracy_val.update(pred_bond_orders, target_bond_orders)
+            self.e_nonzero_accuracy_val.update(pred_bond_orders[nonzero_indices], target_bond_orders[nonzero_indices])
+        """
+
+        a_accuracy = (pred_atom_types == target_atom_types).float().mean()
+        c_accuracy = (pred_atom_charges == target_atom_charges).float().mean()
+        e_accuracy = (pred_bond_orders == target_bond_orders).float().mean()
+        e_nonzero_accuracy = (pred_bond_orders[nonzero_indices] == target_bond_orders[nonzero_indices]).float().mean()
+
+
         losses = {'vq+comittment_loss': loss,
                   'a_recon_loss': atom_type_loss,
                   'c_recon_loss': atom_charge_loss,
                   'e_recon_loss': bond_order_loss,
-                  'a_accuracy': self.atom_type_accuracy.compute(),
-                  'c_accuracy': self.atom_charge_accuracy.compute(),
-                  'e_accuracy': self.bond_order_accuracy.compute(),
-                  'e_non_zero_accuracy': self.nonzero_bond_order_accuracy.compute(),
+                  'a_accuracy': a_accuracy,
+                  'c_accuracy': c_accuracy,
+                  'e_accuracy': e_accuracy,
+                  'e_non_zero_accuracy': e_nonzero_accuracy,
                   'perplexity': perplexity,
                   'num_unique_codes': num_unique_codes}
 
@@ -474,7 +491,7 @@ class LigandVQVAE(pl.LightningModule):
 
         self.manual_checkpoint(batch_idx)
         
-        losses = self.forward(g)
+        losses = self.forward(g, is_train=True)
 
         train_log_dict = {}
         for key, metric in losses.items():
@@ -488,6 +505,14 @@ class LigandVQVAE(pl.LightningModule):
         self.log_dict(train_log_dict, sync_dist=True)
         self.log("train_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True)
 
+        """
+        # Compute and log accuracy
+        self.log("a_accuracy_train", self.a_accuracy_train.compute(), on_step=True, sync_dist=True)
+        self.log("c_accuracy_train", self.c_accuracy_train.compute(), on_step=True, sync_dist=True)
+        self.log("e_accuracy_train", self.e_accuracy_train.compute(), on_step=True, sync_dist=True)
+        self.log("e_non_zero_accuracy_train", self.e_nonzero_accuracy_train.compute(), on_step=True, sync_dist=True)
+        """
+
         return total_loss
     
 
@@ -496,7 +521,7 @@ class LigandVQVAE(pl.LightningModule):
 
         self.manual_checkpoint(batch_idx)
     
-        losses = self.forward(g, mask_prob=0.0)
+        losses = self.forward(g, is_train=False, mask_prob=0.0)
 
         val_log_dict = {}
         for key, metric in losses.items():
@@ -510,8 +535,31 @@ class LigandVQVAE(pl.LightningModule):
         self.log_dict(val_log_dict, sync_dist=True, batch_size=g.batch_size)
         self.log("val_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True, batch_size=g.batch_size)
 
+        """
+        # Compute and log accuracy
+        # Instead of on_epoch=True, do on_step=True to see running accuracy per val batch
+        self.log("a_accuracy_val", self.a_accuracy_val.compute(), on_step=True, sync_dist=True, batch_size=g.batch_size)
+        self.log("c_accuracy_val", self.c_accuracy_val.compute(), on_step=True, sync_dist=True, batch_size=g.batch_size)
+        self.log("e_accuracy_val", self.e_accuracy_val.compute(), on_step=True, sync_dist=True, batch_size=g.batch_size)
+        self.log("e_non_zero_accuracy_val", self.e_nonzero_accuracy_val.compute(), on_step=True, sync_dist=True, batch_size=g.batch_size)
+        """
         return total_loss
 
+    """
+    def on_train_epoch_start(self):
+        # Reset training metrics at the start of each epoch
+        self.a_accuracy_train.reset()
+        self.c_accuracy_train.reset()
+        self.e_accuracy_train.reset()
+        self.e_nonzero_accuracy_train.reset()
+
+    def on_validation_epoch_start(self):
+        # Reset validation metrics at the start of each epoch
+        self.a_accuracy_val.reset()
+        self.c_accuracy_val.reset()
+        self.e_accuracy_val.reset()
+        self.e_nonzero_accuracy_val.reset()
+    """
 
     def configure_optimizers(self, lr=1e-4):
         optimizer = optim.Adam(self.parameters(), lr=lr)
