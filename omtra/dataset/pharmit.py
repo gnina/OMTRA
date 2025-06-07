@@ -157,6 +157,10 @@ class PharmitDataset(ZarrDataset):
 
         return g
     
+    def retrieve_atom_idxs(self, idx) -> tuple:
+        start_idx, end_idx = self.slice_array('lig/node/graph_lookup', idx)
+        return start_idx, end_idx
+
     def retrieve_graph_chunks(self, frac_start: float, frac_end: float):
         """
         This dataset contains len(self) examples. We divide all samples (or, graphs) into separate chunk. 

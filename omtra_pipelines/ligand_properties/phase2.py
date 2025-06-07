@@ -8,23 +8,8 @@ import zarr
 from rdkit import Chem
 from rdkit.Chem import BRICS
 
-from omtra.load.quick import datamodule_from_config
-import omtra.load.quick as quick_load
 from omtra.tasks.register import task_name_to_class
 from omtra.eval.system import SampledSystem
-
-
-def parse_args():
-    p = argparse.ArgumentParser(description='Compute new properties for a block of Pharmit data.')
-
-    p.add_argument('--pharmit_path', type=Path, help='Path to the Pharmit Zarr store.', default=Path('/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit'))
-    p.add_argument('--block_start_idx', type=int, default=0, help='Index of the first molecule in the block.')
-    p.add_argument('--block_size', type=int, default=100, help='Number of ligands to process.')
-    p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
-    
-    args = p.parse_args()
-
-    return args
 
 
 def ligand_properties(mol: Chem.Mol) -> np.ndarray:
@@ -40,18 +25,19 @@ def ligand_properties(mol: Chem.Mol) -> np.ndarray:
     aromaticity = []    # Whether the atom is in an aromatic ring (binary flag)
     hybridization = []  # Hydridization (int)
     in_ring = []        # Whether the atom is in a ring (binary flag)
-    conjugated_pi_system = []   # Whether the atom in a conjugated π system (binary flag)
     chiral_center = []         # Whether the atom is a chiral center (binary flag)
 
-    chiral_centers = set(idx for idx, _ in Chem.FindMolChiralCenters(mol, includeUnassigned=True))  # Collect indices of chiral atoms
-
+    # Collect indices of chiral atoms
+    try:
+        chiral_centers = set(idx for idx, _ in Chem.FindMolChiralCenters(mol, includeUnassigned=True))
+    except:
+        chiral_centers = set()
 
     for atom in mol.GetAtoms():
         implicit_Hs.append(atom.GetNumImplicitHs())
         aromaticity.append(int(atom.GetIsAromatic()))
         hybridization.append(int(atom.GetHybridization()))
         in_ring.append(int(atom.IsInRing()))
-        conjugated_pi_system.append(int(atom.GetIsConjugated()))
         chiral_center.append(int(atom.GetIdx() in chiral_centers))
     
     new_feats = np.array([
@@ -59,7 +45,6 @@ def ligand_properties(mol: Chem.Mol) -> np.ndarray:
         aromaticity,
         hybridization,
         in_ring,
-        conjugated_pi_system,
         chiral_center
     ], dtype=np.int8).T
 
@@ -128,80 +113,93 @@ def dgl_to_rdkit(g):
 
 
 def process_pharmit_block(block_start_idx: int, block_size: int):
-    """ Gets the new atom properties for each molecule in the block and writes to Zarr store
-
+    """ 
     Parameters:
-        pharmit_path (Path): Path to the Pharmit zarr store
-        array_name (str): Name of the Zarr array to add new data to
         block_start_idx (int): Index of the first ligand in the block
-        block_size (int): Number of ligands in the blocl
+        block_size (int): Number of ligands in the block
+
+    Returns:
+        new_feats (List[np.ndarray]): Feature arrays per contiguous atom block.
+        contig_idxs (List[Tuple[int, int]]): Start/end atom indices for each contiguous block.
+        failed_idxs (List[int]): Indices of ligands that failed processing.
     """
-    
-    global pharmit_dataset  # Load Pharmit dataset object
+
+    global pharmit_dataset
+
+    # Load Pharmit dataset object
     n_mols = len(pharmit_dataset)
-    block_end_idx = block_start_idx + block_size
+    block_end_idx = min(block_start_idx + block_size, n_mols)
 
-
-    # idx correction if pharmit dataset is not a multiple of block_size 
-    if block_end_idx > n_mols: 
-        block_end_idx = n_mols
-
-    ligand_idxs = []
+    contig_idxs = []
     new_feats = []
+    failed_idxs = []
+
+    cur_contig_feats = []
+    contig_start_idx = None
+    contig_end_idx = None
 
     for idx in range(block_start_idx, block_end_idx):
-        g, start_idx, end_idx = pharmit_dataset[('denovo_ligand', idx)]   # TODO: How will PharmitDataset class be modified so we can access each molecule's atom lookup
-        mol = dgl_to_rdkit(g)
+        
+        start_idx, end_idx = pharmit_dataset.retrieve_atom_idxs(idx)
 
         try:
+            g = pharmit_dataset[('denovo_ligand', idx)]
+            mol = dgl_to_rdkit(g)
             Chem.SanitizeMol(mol)
+
+            atom_props = ligand_properties(mol)                         # (n_atoms, 5)
+            fragments = fragment_molecule(mol)                          # (n_atoms, 1)
+            atom_props = np.concatenate((atom_props, fragments), axis=1)# (n_atoms, 6)
+
+            assert atom_props.shape[0] == (end_idx - start_idx), f"Mismatch in atom counts: computed properties for {atom_props.shape[0]} atoms but expected {(end_idx - start_idx)}"
+
+            if contig_start_idx is None:
+                contig_start_idx = start_idx
+
+            cur_contig_feats.append(atom_props)
+            contig_end_idx = end_idx  # always update with latest good molecule
+
         except Exception as e:
-            print(f"Sanitization failed for molecule {idx}: {e}.")
-            # TODO: How do handle failures? In theory, this should never fail since we sanitized before storing in the Zarr store
-            continue
+            print(f"Failed to compute features for molecule {idx}: {e}. Creating new contig from {contig_start_idx}-{contig_end_idx}")
+            failed_idxs.append(idx)
 
-        lig_properties = ligand_properties(mol)                         # (n_atoms, 6)
-        fragments = fragment_molecule(mol)                              # (n_atoms, 1)
-        lig_properties = np.concatenate((lig_properties, fragments), axis=1)  # (n_atoms, 7)
+            # Close current contiguous chunk (if any)
+            if cur_contig_feats:
+                feat_array = np.vstack(cur_contig_feats)
+                contig_idxs.append((contig_start_idx, contig_end_idx))
+                new_feats.append(feat_array)
 
-        ligand_idxs.append([start_idx, end_idx])
-        new_feats.append(lig_properties)
-    
-    return ligand_idxs, new_feats
-    
+                # Reset
+                cur_contig_feats = []
+                contig_start_idx = None
+                contig_end_idx = None
+
+    # After final molecule, flush last chunk if present
+    if cur_contig_feats:
+        atom_props = np.vstack(cur_contig_feats)
+        contig_idxs.append((contig_start_idx, contig_end_idx))
+        new_feats.append(atom_props)
+
+    return new_feats, contig_idxs, failed_idxs
 
         
 class BlockWriter:
-    def __init__(self, pharmit_path: Path):
-        self.pharmit_path = pharmit_path
-
-    def save_chunk(self, array_name: str, ligand_idxs: np.ndarray, new_feats: np.ndarray):
-
+    def __init__(self, store_path: str):
         # Open Pharmit Zarr store
-        root = zarr.open(self.pharmit_path, mode='r+') # read-write mode
-        lig_node_group = root['lig/node']
+        self.root = zarr.open(store_path, mode='r+')
+        self.lig_node_group = self.root['lig/node']
+
+    def save_chunk(self, array_name: str, contig_idxs: np.ndarray, new_feats: np.ndarray):
 
         # Check that Zarr array was correctly made
-        if array_name not in lig_node_group:
+        if array_name not in self.lig_node_group:
             raise KeyError(f"Zarr array '{array_name}' not found in 'lig/node' group.")
 
-        for i, lig_properties in enumerate(new_feats):
-            start_idx = ligand_idxs[i][0]
-            end_idx = ligand_idxs[i][1]
+        for i, atom_props in enumerate(new_feats):
+            start_idx = contig_idxs[i][0]
+            end_idx = contig_idxs[i][1]
 
-            # Check that number of atoms for the ligand in the zarr store = number of atoms we have after computing new properties
-            assert lig_properties.shape[0] == (end_idx - start_idx), f"Mismatch in atom counts: lig_properties has {lig_properties.shape[0]} rows but expected {(end_idx - start_idx)}"
+            print(f"Writing from {start_idx} to {end_idx}")
 
             # write features to zarr store
-            lig_node_group[array_name][start_idx:end_idx] = lig_properties
-
-
-
-if __name__ == '__main__':
-    args = parse_args()
-    pharmit_path = args.pharmit_path
-    array_name = args.array_name
-    block_start_idx = args.block_start_idx
-    block_size = args.block_size
-
-    process_pharmit_block(pharmit_path, array_name, block_start_idx, block_size)
+            self.lig_node_group[array_name][start_idx:end_idx] = atom_props
