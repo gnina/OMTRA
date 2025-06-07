@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 import hydra
 import os
+import functools
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
@@ -460,7 +461,7 @@ class OMTRA(pl.LightningModule):
         coms: Optional[
             torch.Tensor
         ] = None,  # center of mass for adding ligands/pharms to systems
-        unconditional_n_atoms_dist: str = "plinder",  # distribution to use for sampling number of atoms in unconditional tasks
+        unconditional_n_atoms_dist: str = None,  # distribution to use for sampling number of atoms in unconditional tasks
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
         visualize=False,
@@ -472,11 +473,14 @@ class OMTRA(pl.LightningModule):
 
         # TODO: user-supplied n_atoms dict?
 
-
+        # set device
         if device is None and g_list is not None:
             device = g_list[0].device
         elif device is None:
             device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
+        if unconditional_n_atoms_dist is None:
+            unconditional_n_atoms_dist = self.infer_n_atoms_dist(task)
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
@@ -697,3 +701,20 @@ class OMTRA(pl.LightningModule):
             )
             sampled_systems.append(sampled_system)
         return sampled_systems
+    
+
+    @functools.lru_cache()
+    def infer_n_atoms_dist(self, task):
+        # infer n_atoms_dist if none
+        trained_on_pharmit = 'pharmit' in self.td_coupling.dataset_space
+        trained_on_plinder = 'plinder' in self.td_coupling.dataset_space
+        has_protein = 'protein_identity' in task.groups_present
+        if trained_on_pharmit and not trained_on_plinder:
+            unconditional_n_atoms_dist = 'pharmit'
+        elif trained_on_plinder and not trained_on_pharmit:
+            unconditional_n_atoms_dist = 'plinder'
+        elif has_protein:
+            unconditional_n_atoms_dist = 'plinder'
+        elif not has_protein:
+            unconditional_n_atoms_dist = 'pharmit'
+        return unconditional_n_atoms_dist

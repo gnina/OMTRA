@@ -131,10 +131,14 @@ def adaptive_batch_loader(
     # so if this happens, we just rerun the adaptive batch selection 
     # with slightly lower skip probabilities
     n_nodes_selected = nodes_shuf[valid_positions].sum().item()
-    if n_nodes_selected/max_nodes < 0.9:
-        if not weighted:
-            raise NotImplementedError('did not expect this edge case')
-        return adaptive_batch_loader(nodes_per_graph, max_nodes, pskip=0.97*pskip)
+    capacity_utilization = n_nodes_selected / max_nodes
+    
+    if capacity_utilization < 0.9 and weighted:
+        n_graphs_not_rejected = (~skip_mask_perm).sum().item()
+        n_graphs_selected = valid_positions.shape[0]
+        rejection_limited = n_graphs_not_rejected == n_graphs_selected
+        if rejection_limited:
+            return adaptive_batch_loader(nodes_per_graph, max_nodes, pskip=0.97*pskip)
 
     # 7) return the corresponding original indices
     return perm[valid_positions]
