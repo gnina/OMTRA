@@ -1,0 +1,19 @@
+# this block must be included in all task_group configs
+# especially the datamodule: default attribue
+defaults:
+  - _self_
+  - datamodule: default
+
+
+# Define tasks with time-varying probabilities
+# this is p(task) but p(task) can change through the course of training
+task_phases:
+  - duration_batches: null
+    tasks:
+      - name: denovo_ligand_from_pharmacophore
+        probability: 1.0
+
+# define p(dataset|task) coupling (assume static for simplicity)
+dataset_task_coupling:
+  denovo_ligand_from_pharmacophore:
+    - [pharmit, 1.0]

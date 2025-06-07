@@ -10,6 +10,7 @@ import torch
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.eval.register import get_eval
+from omtra.scripts.visualize_pharms import pharm_to_xyz, type_idx_to_elem
 import json
 from biotite.structure.io.pdbx import CIFFile
 import biotite.structure as struc
@@ -23,6 +24,7 @@ default_config_path = str(default_config_path)
 
 from rdkit import Chem
 import argparse
+
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -118,6 +120,14 @@ def write_arrays_to_cif(arrays, filename):
     struc.io.pdbx.set_structure(cif_file, arr_stack)
     cif_file.write(filename)
 
+def save_pharmacophore_xyz(sampled_systems, output_dir, task_name):
+    pharm_file = output_dir / f"{task_name}_pharmacophores.xyz"
+    with open(pharm_file, 'w') as f:
+        for sample in sampled_systems:
+            coords, types, _ = sample.extract_pharm_from_graph()
+            xyz_content = pharm_to_xyz(coords, types, type_idx_to_elem)
+            f.write(xyz_content)
+
 def main(args):
     # 1) resolve checkpoint path
     ckpt_path = args.checkpoint
@@ -189,6 +199,9 @@ def main(args):
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving samples to {output_dir}")
+
+    if task_name == "denovo_ligand_from_pharmacophore":
+        save_pharmacophore_xyz(sampled_systems, output_dir, task_name)
 
     if args.visualize:
         for i, sys in enumerate(sampled_systems):

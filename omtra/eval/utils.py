@@ -1,6 +1,7 @@
 from omtra.eval.system import SampledSystem
 from omtra.eval.reos import REOS
 from omtra.eval.ring_systems import RingSystemCounter, ring_counts_to_df
+from omtra.data.pharmacophores import get_pharmacophores
 from collections import Counter
 from rdkit import Chem
 from typing import List, Dict, Any, Optional, Tuple
@@ -11,6 +12,7 @@ from pathlib import Path
 from omtra.utils import omtra_root
 import yaml
 from collections import defaultdict
+import numpy as np
 
 allowed_bonds = {
     "H": {0: 1, 1: 0, -1: 0},
@@ -134,6 +136,86 @@ def compute_stability(sampled_systems: List[SampledSystem]):
         "frac_atoms_stable": frac_atoms_stable,
         "frac_mols_stable_valence": frac_mols_stable_valence,
     }
+    return metrics
+
+
+def group_pharm_types_by_position(positions, types):
+    grouped = defaultdict(set)
+    for pos, t in zip(positions, types):
+        key = tuple(np.round(pos, 3))
+        grouped[key].add(t)
+    return grouped
+
+def compute_pharmacophore_match(sampled_systems: List[SampledSystem], threshold=1.0):
+    total_true = total_gen = total_extra = matched = extra_gen = sample_match = 0
+    error_counts = defaultdict(int)
+    
+    for sample in sampled_systems:
+
+        try:
+            rdmol = sample.get_rdkit_ligand()
+            gen_coords, gen_types, _, _ = get_pharmacophores(rdmol)
+            gen_coords = np.array(gen_coords)
+            gen_types = np.array(gen_types)
+        except Chem.rdchem.AtomValenceException:
+            error_counts['get_pharmacophores_AtomValenceException'] += 1
+            continue
+        except Exception as e:
+            error_type = f"get_pharmacophores_{type(e).__name__}"
+            error_counts[error_type] += 1
+            continue
+
+        true_coords, true_types, _ = sample.extract_pharm_from_graph()
+        true_coords = np.array(true_coords)
+        true_types = np.array(true_types)
+
+        # to compare positions that have multiple types
+        g_gen = group_pharm_types_by_position(gen_coords, gen_types)
+        g_true = group_pharm_types_by_position(true_coords, true_types)
+        
+        true_items = list(g_true.items())
+        gen_items = list(g_gen.items())
+        
+        matched_gen = set()
+        matched_true = 0
+        
+        for i, (true_pos, true_types_set) in enumerate(true_items):
+            best_j, best_dist = None, threshold + 1
+            
+            for j, (gen_pos, gen_types_set) in enumerate(gen_items):
+                if j in matched_gen or true_types_set != gen_types_set:
+                    continue
+                    
+                dist = np.linalg.norm(np.array(true_pos) - np.array(gen_pos))
+                if dist <= threshold and dist < best_dist:
+                    best_j, best_dist = j, dist
+            
+            if best_j is not None:
+                matched_gen.add(best_j)
+                matched_true += len(true_types_set)
+        
+        extra_gen = sum(len(gen_types_set) for j, (_, gen_types_set) in enumerate(gen_items) 
+                          if j not in matched_gen)
+        
+        matched += matched_true
+        total_extra += extra_gen
+        total_true += len(true_types)
+        total_gen += len(gen_types)
+        
+        if matched_true == len(true_types) and extra_gen == 0:
+            sample_match += 1
+    
+    for error, count in error_counts.items():
+        print(f"{error}: {count}")
+
+    metrics =  {
+        "frac_pharm_samples_matching": sample_match / len(sampled_systems),
+        "frac_true_centers_matched": matched / total_true if total_true else 0,
+        "frac_gen_centers_extra": total_extra / total_gen if total_gen else 0,
+        "num_true_centers": total_true,
+        "num_gen_centers": total_gen
+    }
+
     return metrics
 
 @functools.lru_cache()
