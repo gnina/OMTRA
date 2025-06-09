@@ -112,7 +112,7 @@ def dgl_to_rdkit(g):
     return rdkit_ligand
 
 
-def process_pharmit_block(block_start_idx: int, block_size: int):
+def process_pharmit_block(block_start_idx: int, block_size: int, pharmit_dataset):
     """ 
     Parameters:
         block_start_idx (int): Index of the first ligand in the block
@@ -123,8 +123,6 @@ def process_pharmit_block(block_start_idx: int, block_size: int):
         contig_idxs (List[Tuple[int, int]]): Start/end atom indices for each contiguous block.
         failed_idxs (List[int]): Indices of ligands that failed processing.
     """
-
-    global pharmit_dataset
 
     # Load Pharmit dataset object
     n_mols = len(pharmit_dataset)

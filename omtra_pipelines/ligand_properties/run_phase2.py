@@ -178,7 +178,7 @@ def run_single(pharmit_path: Path,
         block_start_idx = block_idx * block_size        
         try:
             start_time = time.time()
-            new_feats, contig_idxs, failed_idxs = process_pharmit_block(block_start_idx, block_size)
+            new_feats, contig_idxs, failed_idxs = process_pharmit_block(block_start_idx, block_size, pharmit_dataset)
             processing_time = time.time() - start_time
             
             write_start = time.time()
@@ -212,8 +212,8 @@ if __name__ == '__main__':
     block_writer = BlockWriter(store_path)
 
     start_time = time.time()
-    run_parallel(args.pharmit_path, args.array_name, args.block_size, args.n_cpus, block_writer, args.output_dir)
-    #run_single(args.pharmit_path, args.array_name, args.block_size, block_writer, args.output_dir)
+    #run_parallel(args.pharmit_path, args.array_name, args.block_size, args.n_cpus, block_writer, args.output_dir)
+    run_single(args.pharmit_path, args.array_name, args.block_size, block_writer, args.output_dir)
     end_time = time.time()
 
     print(f"Total time: {end_time - start_time:.1f} seconds")
