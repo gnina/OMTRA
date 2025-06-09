@@ -6,6 +6,7 @@ from dgl.nn.functional import edge_softmax
 from typing import List, Tuple, Union, Dict, Optional, Set
 from functools import partial
 import math
+from torch_scatter import scatter_softmax
 
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 
@@ -275,6 +276,7 @@ class HeteroGVPConv(nn.Module):
         n_message_gvps: int = 1,
         n_update_gvps: int = 1,
         attention: bool = False,
+        att_type: str = 'crosstype',
         s_message_dim: int = None,
         v_message_dim: int = None,
         n_heads: int = 1,
@@ -305,9 +307,16 @@ class HeteroGVPConv(nn.Module):
         self.dropout_rate = dropout
         self.message_norm = message_norm
         self.attention = attention
+        self.att_type = att_type
+        self.n_heads = n_heads
 
         if not self.edge_feat_size:
             self.edge_feat_size = {etype: 0 for etype in self.edge_types}
+
+        if self.att_type == 'crosstype':
+            self.att_func = self.compute_att_weights_crosstype
+        elif self.att_type == 'pertype':
+            self.att_func = self.compute_att_weights_per_type
 
         # dims for message reduction and also attention
         self.s_message_dim = s_message_dim
@@ -639,31 +648,7 @@ class HeteroGVPConv(nn.Module):
 
             # if self.attenion, multiple messages by attention weights
             if self.attention:
-                for etype in self.edge_types:
-                    if etype not in g.etypes or g.num_edges(etype) == 0:
-                        continue
-                    scalar_msg, att_logits = (
-                        g.edges[etype].data["scalar_msg"][:, : self.s_message_dim],
-                        g.edges[etype].data["scalar_msg"][:, self.s_message_dim :],
-                    )
-                    att_logits = self.att_weight_projection[etype](att_logits)
-
-                    etype_graph = dgl.edge_type_subgraph(g, [etype])
-                    att_weights = edge_softmax(etype_graph, att_logits)
-
-                    # att_weights = edge_softmax(g, att_logits)
-                    s_att_weights = att_weights[:, : self.n_heads]
-                    v_att_weights = att_weights[:, self.n_heads :]
-                    s_att_weights = s_att_weights.repeat_interleave(
-                        self.s_feats_per_head, dim=1
-                    )
-                    v_att_weights = v_att_weights.repeat_interleave(
-                        self.v_feats_per_head, dim=1
-                    )
-                    g.edges[etype].data["scalar_msg"] = scalar_msg * s_att_weights
-                    g.edges[etype].data["vec_msg"] = g.edges[etype].data[
-                        "vec_msg"
-                    ] * v_att_weights.unsqueeze(-1)
+                self.att_func(g, passing_edges)
 
             scalar_agg_fns = {}
             vector_agg_fns = {}
@@ -742,6 +727,102 @@ class HeteroGVPConv(nn.Module):
                 updated_vec_feats[ntype] = vec_feat
 
             return updated_scalar_feats, updated_vec_feats
+
+    def compute_att_weights_crosstype(self, g: dgl.DGLHeteroGraph, passing_edges: List[str]):
+
+
+        # collect valid etypes
+        valid_etypes = []
+        dst_ntypes = set()
+        for etype in passing_edges:
+            if etype not in g.etypes or g.num_edges(etype) == 0:
+                continue
+            valid_etypes.append(etype)
+            _, _, dst_ntype = to_canonical_etype(etype)
+            dst_ntypes.add(dst_ntype)
+
+        ntype_mins = {}
+        current_min = 0
+        for dst_ntype in dst_ntypes:
+            ntype_mins[dst_ntype] = current_min
+            current_min += g.num_nodes(dst_ntype)
+            
+        # collect logits and destination node ids for all passing edge types
+        logits_list = []
+        dst_list = []
+        lengths = []
+        etypes = []
+        for etype in valid_etypes:
+            _, _, dst_ntype = to_canonical_etype(etype)
+            # extract raw attention logits and project
+            att_logits = g.edges[etype].data["scalar_msg"][:, self.s_message_dim:]
+            att_logits = self.att_weight_projection[etype](att_logits)
+            # get destination node indices
+            _, dst = g.edges(etype=etype)
+
+            # convert dst to indicies unique to that ntype
+            dst = dst + ntype_mins[dst_ntype]
+
+            logits_list.append(att_logits)
+            dst_list.append(dst)
+            lengths.append(att_logits.size(0))
+
+        # nothing to do if no logits collected
+        if not logits_list:
+            return
+        # flatten across all edge types
+        flat_logits = torch.cat(logits_list, dim=0)
+        flat_dst = torch.cat(dst_list, dim=0)
+        # normalize logits per destination node over all edge types
+        norm_flat = scatter_softmax(flat_logits, flat_dst, dim=0)
+        # split normalized logits back into original per-type segments
+        split_norms = torch.split(norm_flat, lengths, dim=0)
+        for etype, norms in zip(valid_etypes, split_norms):
+            # split into scalar and vector head weights
+            s_att, v_att = torch.split(norms, [self.n_heads, self.n_heads], dim=1)
+            # expand weights to full feature dimensions
+            s_weights = s_att.repeat_interleave(self.s_feats_per_head, dim=1)
+            v_weights = v_att.repeat_interleave(self.v_feats_per_head, dim=1)
+            # apply to scalar messages
+            scalar_msg = g.edges[etype].data["scalar_msg"][:, : self.s_message_dim]
+            g.edges[etype].data["scalar_msg"] = scalar_msg * s_weights
+            # apply to vector messages
+            vec_msg = g.edges[etype].data["vec_msg"]
+            g.edges[etype].data["vec_msg"] = vec_msg * v_weights.unsqueeze(-1)
+
+    def compute_att_weights_per_type(self, g: dgl.DGLHeteroGraph, passing_edges: List[str]):
+        """
+        Per-edge-type attention normalization: runs edge_softmax separately on each relation type.
+        """
+
+        # collect attention logits per type
+        per_type_logits = {}
+        for etype in passing_edges:
+            if etype not in g.etypes or g.num_edges(etype) == 0:
+                continue
+            # Split out raw attention logits
+            att_logits = g.edges[etype].data["scalar_msg"][:, self.s_message_dim:]
+            # Project logits
+            att_logits = self.att_weight_projection[etype](att_logits)
+            per_type_logits[etype] = att_logits
+
+        # normalize logits 
+        norm_logits_per_type = edge_softmax(g, per_type_logits)
+
+        # multiply messages by their logits
+        for etype in passing_edges:
+            canonical_etype = to_canonical_etype(etype)
+
+            # Split head weights and expand to feature dimensions
+            s_att, v_att = torch.split(norm_logits_per_type[canonical_etype], [self.n_heads, self.n_heads], dim=1)
+            s_att_weights = s_att.repeat_interleave(self.s_feats_per_head, dim=1)
+            v_att_weights = v_att.repeat_interleave(self.v_feats_per_head, dim=1)
+
+            # Apply to scalar and vector messages
+            scalar_msg = g.edges[etype].data["scalar_msg"][:, : self.s_message_dim]
+            g.edges[etype].data["scalar_msg"] = scalar_msg * s_att_weights
+            orig_vec = g.edges[etype].data["vec_msg"]
+            g.edges[etype].data["vec_msg"] = orig_vec * v_att_weights.unsqueeze(-1)
 
     def message(self, edges, etype):
         # concatenate x_diff and v on every edge to produce vector features

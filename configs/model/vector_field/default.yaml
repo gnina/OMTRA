@@ -18,6 +18,7 @@ rbf_dim:                       32
 time_embedding_dim:            64
 token_dim:                     64
 attention:                     false
+att_type:                      "crosstype"
 n_heads:                       1
 s_message_dim:                 null
 v_message_dim:                 null
