@@ -3,18 +3,22 @@ from pathlib import Path
 import traceback
 from tqdm import tqdm
 import time
+import os
 
-from multiprocessing import Pool, Queue, Manager
-from queue import Empty
+from multiprocessing import Pool
+from functools import partial
 
 from omtra.load.quick import datamodule_from_config
 import omtra.load.quick as quick_load
 
 from omtra_pipelines.ligand_properties.phase2 import *
 
+import multiprocessing
+multiprocessing.set_start_method('spawn', force=True)
+
 
 def parse_args():
-    p = argparse.ArgumentParser(description='Generate embarassingly parallel processing commands for phase2_1.py')
+    p = argparse.ArgumentParser(description='Compute new ligand features in parallel and save to Pharmit Zarr store.')
 
     p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/pharmit_dev')   # /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train.zarr')
@@ -25,29 +29,113 @@ def parse_args():
 
     return p.parse_args()
 
-def worker_initializer(pharmit_path):
+
+pharmit_dataset = None
+
+
+def process_pharmit_block(block_start_idx: int, block_size: int):
+    """ 
+    Parameters:
+        block_start_idx (int): Index of the first ligand in the block
+        block_size (int): Number of ligands in the block
+
+    Returns:
+        new_feats (List[np.ndarray]): Feature arrays per contiguous atom block.
+        contig_idxs (List[Tuple[int, int]]): Start/end atom indices for each contiguous block.
+        failed_idxs (List[int]): Indices of ligands that failed processing.
+    """
+    
     global pharmit_dataset
+
+    n_mols = len(pharmit_dataset)
+    block_end_idx = min(block_start_idx + block_size, n_mols)
+
+    contig_idxs = []
+    new_feats = []
+    failed_idxs = []
+
+    cur_contig_feats = []
+    contig_start_idx = None
+    contig_end_idx = None
+
+    for idx in range(block_start_idx, block_end_idx):
+        
+        start_idx, end_idx = pharmit_dataset.retrieve_atom_idxs(idx)
+
+        try:
+            g = pharmit_dataset[('denovo_ligand', idx)]
+            mol = dgl_to_rdkit(g)
+            Chem.SanitizeMol(mol)
+
+            atom_props = ligand_properties(mol)                         # (n_atoms, 5)
+            fragments = fragment_molecule(mol)                          # (n_atoms, 1)
+            atom_props = np.concatenate((atom_props, fragments), axis=1)# (n_atoms, 6)
+
+            assert atom_props.shape[0] == (end_idx - start_idx), f"Mismatch in atom counts: computed properties for {atom_props.shape[0]} atoms but expected {(end_idx - start_idx)}"
+
+            if contig_start_idx is None:
+                contig_start_idx = start_idx
+
+            cur_contig_feats.append(atom_props)
+            contig_end_idx = end_idx  # always update with latest good molecule
+
+        except Exception as e:
+            print(f"Failed to compute features for molecule {idx}: {e}. Creating new contig from {contig_start_idx}-{contig_end_idx}")
+            failed_idxs.append(idx)
+
+            # Close current contiguous chunk (if any)
+            if cur_contig_feats:
+                feat_array = np.vstack(cur_contig_feats)
+                contig_idxs.append((contig_start_idx, contig_end_idx))
+                new_feats.append(feat_array)
+
+                # Reset
+                cur_contig_feats = []
+                contig_start_idx = None
+                contig_end_idx = None
+
+    # After final molecule, flush last chunk if present
+    if cur_contig_feats:
+        atom_props = np.vstack(cur_contig_feats)
+        contig_idxs.append((contig_start_idx, contig_end_idx))
+        new_feats.append(atom_props)
+
+    return new_feats, contig_idxs, failed_idxs
+
+
+
+def worker_initializer(pharmit_path):
+    """ Sets pharmit dataset instance as a global variable """
+    global pharmit_dataset
+
     cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
     train_dataset = datamodule.load_dataset("val")
     pharmit_dataset = train_dataset.datasets['pharmit']
+
     
 
-def worker_task(block_start_idx: int, block_size: int, pharmit_dataset):
-    """ Task done by each worker: Get new features for the given block """
+def save_and_update(result, block_writer, pbar, output_dir):
+    """ Callback to new features for a block and update progress """
+
+    new_feats, contig_idxs, failed_idxs = result
+
     try:
-        start_time = time.time()
-        new_feats, contig_idxs, failed_idxs = process_pharmit_block(block_start_idx, block_size)
-        processing_time = time.time() - start_time
-        return (new_feats, contig_idxs, failed_idxs, processing_time)
-    
+        block_writer.save_chunk(contig_idxs, new_feats)
     except Exception as e:
-        print(f"Worker error at block starting {block_start_idx}: {e}")
-        e.traceback = traceback.format_exc()
-        raise e
-    
+        print(f"Error during save_chunk: {e}")
+        raise
 
-def error_and_update(error, pbar, error_counter):
+    if failed_idxs:
+        failed_path = Path(output_dir) / "failed_ligands.txt"
+        with open(failed_path, 'a') as f:
+            for fid in failed_idxs:
+                f.write(f"{fid}\n")
+
+    pbar.update(1)
+
+
+def error_and_update(error, pbar, error_counter, output_dir):
     """ Handle errors, update error counter and the progress bar """
 
     print(f"Error: {error}")
@@ -55,22 +143,27 @@ def error_and_update(error, pbar, error_counter):
     
     error_counter[0] += 1
     pbar.set_postfix({'errors': error_counter[0]})
-    pbar.update(1)
     
-    with open('error_log.txt', 'a') as f:
+    error_log_path = output_dir / 'error_log.txt'
+    with open(error_log_path, 'a') as f:
         f.write(f"Error:\n{error}\n")
         if hasattr(error, "traceback"):
             f.write(error.traceback)
         else:
             traceback.print_exception(type(error), error, error.__traceback__, file=f)
+    
+    pbar.update(1)
 
 
 def run_parallel(pharmit_path: Path,
-                 array_name: str,
                  block_size: int,
                  n_cpus: int,
                  block_writer: BlockWriter,
-                 output_dir: Path):
+                 output_dir: Path,
+                 max_pending: int = None):
+    
+    if max_pending is None:
+        max_pending = n_cpus * 2 
 
     # Load Pharmit dataset (also needed for number of ligands)
     cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
@@ -80,88 +173,58 @@ def run_parallel(pharmit_path: Path,
 
     n_mols = len(pharmit_dataset)
     n_blocks = (n_mols + block_size - 1) // block_size
-    print(f"Pharmit zarr store will be processed in {n_blocks} blocks.")
+    print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
 
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
-    manager = Manager()
-    error_counter = manager.list([0])   # Track errors
+ 
+    error_counter = [0]
 
-    # Queue for worker results
-    write_queue = Queue(maxsize=n_cpus * 2) # maxsize = # of returns from worker that are stored in queue
+    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(pharmit_path,)) as pool:
+        pending = []
 
-    # Start Pool
-    pool = Pool(processes=n_cpus, initializer=worker_initializer, initargs=(pharmit_path,), maxtasksperchild=2)
+        for block_idx in range(n_blocks):
 
-    # Submit all worker jobs
-    for block_idx in range(n_blocks):
-        block_start_idx = block_idx * block_size
-        pool.apply_async(worker_task,
-                         args=(block_start_idx, block_size),
-                         callback=lambda res: write_queue.put(('success', res)),    # put stalls if queue is full
-                         error_callback=lambda err: write_queue.put(('error', err)))
-
-    pool.close()
-
-    # Main loop: consume results and write them safely
-    finished_blocks = 0
-    start_time = time.time()
-    pending_blocks = n_blocks
-
-    print("Starting result collection loop...")
-
-    while finished_blocks < pending_blocks:
-        try:
+            while len(pending) >= max_pending:
+                # Filter out jobs that have finished
+                pending = [r for r in pending if not r.ready()]
+                if len(pending) >= max_pending:
+                    time.sleep(0.1)
             
-            status, payload = write_queue.get(timeout=120)  # Timeout in case of deadlocks or unresponsive workers
+            callback_fn = partial(save_and_update,
+                              block_writer=block_writer,
+                              pbar=pbar,
+                              output_dir=output_dir)
 
-            if status == 'success':
-                new_feats, contig_idxs, failed_idxs, processing_time = payload
-                try:
-                    write_start = time.time()
-                    block_writer.save_chunk(array_name, contig_idxs, new_feats)
-                    write_time = time.time() - write_start
+            error_callback_fn = partial(error_and_update, 
+                                    pbar=pbar,
+                                    error_counter=error_counter)
+                               
+            block_start_idx = block_idx * block_size
 
-                    print(f"[Block {finished_blocks}] "
-                        f"Worker time: {processing_time:.2f}s | "
-                        f"Write time: {write_time:.2f}s | "
-                        f"Queue size: {write_queue.qsize()}/{write_queue._maxsize}")
+            result = pool.apply_async(process_pharmit_block,
+                                      args=(block_start_idx, block_size),
+                                      callback=callback_fn,
+                                      error_callback=error_callback_fn)   
+            pending.append(result)
 
-                    pbar.update(1)
+        for result in pending:
+            result.wait() 
 
-                    if failed_idxs:
-                        with open(f"{output_dir}/failed_ligands.txt", 'a') as f:
-                            for fid in failed_idxs:
-                                f.write(f"{fid}\n")
+        pool.close()
+        pool.join()
 
-                except Exception as e:
-                    error_and_update(e, pbar, error_counter)
-
-                finished_blocks += 1
-
-            elif status == 'error':
-                error = payload
-                error_and_update(error, pbar, error_counter)
-                finished_blocks += 1
-
-        except Empty:
-            print(f"Timeout waiting for worker result. {finished_blocks}/{pending_blocks} blocks finished.")
-            break  # or continue, or retry failed block
-
-    pool.join()
-    pbar.close()
-
-    total_time = time.time() - start_time
-    print(f"Finished {finished_blocks}/{pending_blocks} blocks in {total_time:.1f} seconds")
+    print(f"Processing completed with {error_counter[0]} errors.")
 
 
 
 def run_single(pharmit_path: Path,
-                 array_name: str,
                  block_size: int,
                  block_writer: BlockWriter,
                  output_dir: Path):
 
     # Load Pharmit dataset (also needed for number of ligands)
+    global pharmit_dataset
+
     cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
     train_dataset = datamodule.load_dataset("val")
@@ -178,11 +241,11 @@ def run_single(pharmit_path: Path,
         block_start_idx = block_idx * block_size        
         try:
             start_time = time.time()
-            new_feats, contig_idxs, failed_idxs = process_pharmit_block(block_start_idx, block_size, pharmit_dataset)
+            new_feats, contig_idxs, failed_idxs = process_pharmit_block(block_start_idx, block_size)
             processing_time = time.time() - start_time
             
             write_start = time.time()
-            block_writer.save_chunk(array_name, contig_idxs, new_feats)
+            block_writer.save_chunk(contig_idxs, new_feats)
             write_time = time.time() - write_start
 
             print(f"[Block {block_idx}] "
@@ -190,7 +253,8 @@ def run_single(pharmit_path: Path,
                   f"Write time: {write_time:.2f}s \n")
 
             if failed_idxs:
-                with open(f"{output_dir}/failed_ligands.txt", 'a') as f:
+                failed_path = Path(output_dir) / 'failed_ligands.txt'
+                with open(failed_path, 'a') as f:
                     for fid in failed_idxs:
                         f.write(f"{fid}\n")
 
@@ -208,12 +272,19 @@ def run_single(pharmit_path: Path,
 if __name__ == '__main__':
     args = parse_args()
 
+    # Ensure output directory exists
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
     store_path = args.pharmit_path+'/'+args.store_name
-    block_writer = BlockWriter(store_path)
+    block_writer = BlockWriter(store_path, args.array_name)
 
     start_time = time.time()
-    #run_parallel(args.pharmit_path, args.array_name, args.block_size, args.n_cpus, block_writer, args.output_dir)
-    run_single(args.pharmit_path, args.array_name, args.block_size, block_writer, args.output_dir)
+
+    if args.n_cpus == 1:
+        run_single(args.pharmit_path, args.block_size, block_writer, args.output_dir)
+    else:
+        run_parallel(args.pharmit_path, args.block_size, args.n_cpus, block_writer, args.output_dir)
+
     end_time = time.time()
 
     print(f"Total time: {end_time - start_time:.1f} seconds")

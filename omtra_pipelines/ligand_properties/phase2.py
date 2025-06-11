@@ -8,6 +8,8 @@ import zarr
 from rdkit import Chem
 from rdkit.Chem import BRICS
 
+from omtra.load.quick import datamodule_from_config
+import omtra.load.quick as quick_load
 from omtra.tasks.register import task_name_to_class
 from omtra.eval.system import SampledSystem
 
@@ -112,92 +114,25 @@ def dgl_to_rdkit(g):
     return rdkit_ligand
 
 
-def process_pharmit_block(block_start_idx: int, block_size: int, pharmit_dataset):
-    """ 
-    Parameters:
-        block_start_idx (int): Index of the first ligand in the block
-        block_size (int): Number of ligands in the block
-
-    Returns:
-        new_feats (List[np.ndarray]): Feature arrays per contiguous atom block.
-        contig_idxs (List[Tuple[int, int]]): Start/end atom indices for each contiguous block.
-        failed_idxs (List[int]): Indices of ligands that failed processing.
-    """
-
-    # Load Pharmit dataset object
-    n_mols = len(pharmit_dataset)
-    block_end_idx = min(block_start_idx + block_size, n_mols)
-
-    contig_idxs = []
-    new_feats = []
-    failed_idxs = []
-
-    cur_contig_feats = []
-    contig_start_idx = None
-    contig_end_idx = None
-
-    for idx in range(block_start_idx, block_end_idx):
-        
-        start_idx, end_idx = pharmit_dataset.retrieve_atom_idxs(idx)
-
-        try:
-            g = pharmit_dataset[('denovo_ligand', idx)]
-            mol = dgl_to_rdkit(g)
-            Chem.SanitizeMol(mol)
-
-            atom_props = ligand_properties(mol)                         # (n_atoms, 5)
-            fragments = fragment_molecule(mol)                          # (n_atoms, 1)
-            atom_props = np.concatenate((atom_props, fragments), axis=1)# (n_atoms, 6)
-
-            assert atom_props.shape[0] == (end_idx - start_idx), f"Mismatch in atom counts: computed properties for {atom_props.shape[0]} atoms but expected {(end_idx - start_idx)}"
-
-            if contig_start_idx is None:
-                contig_start_idx = start_idx
-
-            cur_contig_feats.append(atom_props)
-            contig_end_idx = end_idx  # always update with latest good molecule
-
-        except Exception as e:
-            print(f"Failed to compute features for molecule {idx}: {e}. Creating new contig from {contig_start_idx}-{contig_end_idx}")
-            failed_idxs.append(idx)
-
-            # Close current contiguous chunk (if any)
-            if cur_contig_feats:
-                feat_array = np.vstack(cur_contig_feats)
-                contig_idxs.append((contig_start_idx, contig_end_idx))
-                new_feats.append(feat_array)
-
-                # Reset
-                cur_contig_feats = []
-                contig_start_idx = None
-                contig_end_idx = None
-
-    # After final molecule, flush last chunk if present
-    if cur_contig_feats:
-        atom_props = np.vstack(cur_contig_feats)
-        contig_idxs.append((contig_start_idx, contig_end_idx))
-        new_feats.append(atom_props)
-
-    return new_feats, contig_idxs, failed_idxs
-
         
 class BlockWriter:
-    def __init__(self, store_path: str):
+    def __init__(self, store_path: str, array_name: str):
+
         # Open Pharmit Zarr store
         self.root = zarr.open(store_path, mode='r+')
         self.lig_node_group = self.root['lig/node']
-
-    def save_chunk(self, array_name: str, contig_idxs: np.ndarray, new_feats: np.ndarray):
 
         # Check that Zarr array was correctly made
         if array_name not in self.lig_node_group:
             raise KeyError(f"Zarr array '{array_name}' not found in 'lig/node' group.")
 
+        self.new_feats_array = self.lig_node_group[array_name]
+
+
+    def save_chunk(self, contig_idxs: np.ndarray, new_feats: np.ndarray):
         for i, atom_props in enumerate(new_feats):
             start_idx = contig_idxs[i][0]
             end_idx = contig_idxs[i][1]
 
-            print(f"Writing from {start_idx} to {end_idx}")
-
             # write features to zarr store
-            self.lig_node_group[array_name][start_idx:end_idx] = atom_props
+            self.new_feats_array[start_idx:end_idx] = atom_props
