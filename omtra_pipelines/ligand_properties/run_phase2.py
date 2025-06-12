@@ -20,8 +20,8 @@ multiprocessing.set_start_method('spawn', force=True)
 def parse_args():
     p = argparse.ArgumentParser(description='Compute new ligand features in parallel and save to Pharmit Zarr store.')
 
-    p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/pharmit_dev')   # /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit
-    p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train.zarr')
+    p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/pharmit_dev')
+    p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
     p.add_argument('--block_size', type=int, default=10000, help='Number of ligands to process in a block.')
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
@@ -104,13 +104,13 @@ def process_pharmit_block(block_start_idx: int, block_size: int):
 
 
 
-def worker_initializer(pharmit_path):
+def worker_initializer(pharmit_path, store_name):
     """ Sets pharmit dataset instance as a global variable """
     global pharmit_dataset
 
     cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
-    train_dataset = datamodule.load_dataset("val")
+    train_dataset = datamodule.load_dataset(store_name)
     pharmit_dataset = train_dataset.datasets['pharmit']
 
     
@@ -156,6 +156,7 @@ def error_and_update(error, pbar, error_counter, output_dir):
 
 
 def run_parallel(pharmit_path: Path,
+                 store_name: str,
                  block_size: int,
                  n_cpus: int,
                  block_writer: BlockWriter,
@@ -168,7 +169,7 @@ def run_parallel(pharmit_path: Path,
     # Load Pharmit dataset (also needed for number of ligands)
     cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
-    train_dataset = datamodule.load_dataset("val")
+    train_dataset = datamodule.load_dataset(store_name)
     pharmit_dataset = train_dataset.datasets['pharmit']
 
     n_mols = len(pharmit_dataset)
@@ -179,7 +180,7 @@ def run_parallel(pharmit_path: Path,
  
     error_counter = [0]
 
-    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(pharmit_path,)) as pool:
+    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(pharmit_path, store_name), maxtasksperchild=5) as pool:
         pending = []
 
         for block_idx in range(n_blocks):
@@ -218,16 +219,17 @@ def run_parallel(pharmit_path: Path,
 
 
 def run_single(pharmit_path: Path,
-                 block_size: int,
-                 block_writer: BlockWriter,
-                 output_dir: Path):
+               store_name: str,
+               block_size: int,
+               block_writer: BlockWriter,
+               output_dir: Path):
 
     # Load Pharmit dataset (also needed for number of ligands)
     global pharmit_dataset
 
     cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
-    train_dataset = datamodule.load_dataset("val")
+    train_dataset = datamodule.load_dataset(store_name)
     pharmit_dataset = train_dataset.datasets['pharmit']
 
     n_mols = len(pharmit_dataset)
@@ -275,15 +277,15 @@ if __name__ == '__main__':
     # Ensure output directory exists
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    store_path = args.pharmit_path+'/'+args.store_name
+    store_path = args.pharmit_path+'/'+args.store_name+'.zarr'
     block_writer = BlockWriter(store_path, args.array_name)
 
     start_time = time.time()
 
     if args.n_cpus == 1:
-        run_single(args.pharmit_path, args.block_size, block_writer, args.output_dir)
+        run_single(args.pharmit_path, args.store_name, args.block_size, block_writer, args.output_dir)
     else:
-        run_parallel(args.pharmit_path, args.block_size, args.n_cpus, block_writer, args.output_dir)
+        run_parallel(args.pharmit_path, args.store_name, args.block_size, args.n_cpus, block_writer, args.output_dir)
 
     end_time = time.time()
 

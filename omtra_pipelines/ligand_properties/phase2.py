@@ -8,8 +8,6 @@ import zarr
 from rdkit import Chem
 from rdkit.Chem import BRICS
 
-from omtra.load.quick import datamodule_from_config
-import omtra.load.quick as quick_load
 from omtra.tasks.register import task_name_to_class
 from omtra.eval.system import SampledSystem
 
@@ -63,8 +61,6 @@ def fragment_molecule(mol: Chem.Mol) -> np.ndarray:
     """
 
     broken = BRICS.BreakBRICSBonds(mol) # cut molecule at BRICS bonds and replace with dummy atoms labeled [*]
-
-    # TODO: Check for errors in fragment generation
 
     # find connected components
     comps = Chem.GetMolFrags(broken, asMols=False)     # returns tuple of tuples. each tuple is a connected component
