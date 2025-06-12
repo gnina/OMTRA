@@ -1,4 +1,3 @@
-# predict.py
 import os
 from omegaconf import OmegaConf
 import hydra
@@ -6,14 +5,13 @@ from hydra.utils import instantiate
 import pytorch_lightning as pl
 import omtra.load.quick as quick_load
 import torch
+from typing import List
 
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.eval.register import get_eval
-from omtra.scripts.visualize_pharms import pharm_to_xyz, type_idx_to_elem
+from omtra.eval.system import write_mols_to_sdf, write_arrays_to_cif
 import json
-from biotite.structure.io.pdbx import CIFFile
-import biotite.structure as struc
 
 from omtra.utils import omtra_root
 from pathlib import Path
@@ -114,19 +112,22 @@ def write_mols_to_sdf(mols, filename):
             writer.write(mol)
     writer.close()
 
-def write_arrays_to_cif(arrays, filename):
-    cif_file = CIFFile()
-    arr_stack = struc.stack(arrays)
-    struc.io.pdbx.set_structure(cif_file, arr_stack)
-    cif_file.write(filename)
+def generate_sample_names(n_systems: int, n_replicates: int) -> List[str]:
+    """
+    Generate names of the form 'sys_{system_idx}_rep_{rep_idx}'.
 
-def save_pharmacophore_xyz(sampled_systems, output_dir, task_name):
-    pharm_file = output_dir / f"{task_name}_pharmacophores.xyz"
-    with open(pharm_file, 'w') as f:
-        for sample in sampled_systems:
-            coords, types, _ = sample.extract_pharm_from_graph()
-            xyz_content = pharm_to_xyz(coords, types, type_idx_to_elem)
-            f.write(xyz_content)
+    Args:
+        n_systems: Number of unique systems.
+        n_replicates: Number of replicate samples per system.
+
+    Returns:
+        A list of strings like ['sys_0_rep_0', 'sys_0_rep_1', ..., 'sys_{n_systems-1}_rep_{n_replicates-1}'].
+    """
+    return [
+        f"sys_{i}_rep_{j}"
+        for i in range(n_systems)
+        for j in range(n_replicates)
+    ]
 
 def main(args):
     # 1) resolve checkpoint path
@@ -200,8 +201,41 @@ def main(args):
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving samples to {output_dir}")
 
-    if task_name == "denovo_ligand_from_pharmacophore":
-        save_pharmacophore_xyz(sampled_systems, output_dir, task_name)
+    if task.unconditional and not args.visualize:
+        lig_samples = [ s.get_rdkit_ligand() for s in sampled_systems ]
+        output_file = output_dir / f"{task_name}_lig.sdf"
+        write_mols_to_sdf(lig_samples, output_file)
+    elif task.unconditional and args.visualize:
+        for i, sys in enumerate(sampled_systems):
+            lig_xt_file = output_dir / f"{task_name}_sys{i}_xt.sdf"
+            lig_xhat_file = output_dir / f"{task_name}_sys{i}_xhat.sdf"
+            sys.write_ligand(lig_xt_file, trajectory=True, endpoint=False)
+            sys.write_ligand(lig_xhat_file, trajectory=True, endpoint=True)
+    elif not task.unconditional and not args.visualize:
+        # write ground truth for everything in the system, once per system
+        for cond_idx in range(len(g_list)):
+
+            # get an example system containing the ground truth information of interest
+            sys_idx = cond_idx*n_replicates
+            sys = sampled_systems[sys_idx]
+
+            # directory for writing ground truth
+            sys_gt_dir = output_dir / f"{task_name}_sys_{cond_idx}_gt"
+            sys_gt_dir.mkdir(parents=True, exist_ok=True)
+
+            # write the ground truth ligand
+            gt_lig_file = sys_gt_dir / "ligand.sdf"
+            sys.write_ligand(gt_lig_file, ground_truth=True)
+
+            # write the ground truth protein if present
+            if 'protein_identity' in task.groups_present:
+                gt_prot_file = sys_gt_dir / "protein.cif"
+                sys.write_protein(gt_prot_file, ground_truth=True)
+
+            # write the ground truth pharmacophore
+
+
+
 
     if args.visualize:
         for i, sys in enumerate(sampled_systems):

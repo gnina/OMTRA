@@ -12,6 +12,8 @@ from omtra.utils import omtra_root
 import yaml
 from collections import defaultdict
 import numpy as np
+from omtra.tasks.register import task_name_to_class
+import dgl
 
 
 # adapted from flowmol metrics.py
@@ -261,3 +263,24 @@ def add_task_prefix(metrics: Dict[str, Any], task_name: str) -> Dict[str, Any]:
         new_key = f"{task_name}/{key}"
         new_metrics[new_key] = value
     return new_metrics
+
+def move_feats_to_t1(task_name: str, g: dgl.DGLHeteroGraph, t: str = '0'):
+    task = task_name_to_class(task_name)
+    for m in task.modalities_present:
+
+        num_entries = g.num_nodes(m.entity_name) if m.is_node else g.num_edges(m.entity_name)
+        if num_entries == 0:
+            continue
+
+        data_src = g.nodes if m.is_node else g.edges
+        dk = m.data_key
+        en = m.entity_name
+
+        if t == '0' and m in task.modalities_fixed:
+            data_to_copy = data_src[en].data[f'{dk}_1_true']
+        else:
+            data_to_copy = data_src[en].data[f'{dk}_{t}']
+
+        data_src[en].data[f'{dk}_1'] = data_to_copy
+
+    return g

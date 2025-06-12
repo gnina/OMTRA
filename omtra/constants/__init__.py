@@ -9,6 +9,8 @@ ph_idx_to_type = [
     "Hydrophobic",
     "Halogen",
 ]
+ph_idx_to_elem = ['P', 'S', 'F', 'N', 'O', 'C', 'Cl']
+
 charge_map = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6]
 
 ph_type_to_idx = {val: idx for idx, val in enumerate(ph_idx_to_type)}

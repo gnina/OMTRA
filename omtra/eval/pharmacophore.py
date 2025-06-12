@@ -25,7 +25,12 @@ def compute_pharmacophore_match(sampled_systems: List[SampledSystem], threshold=
             error_counts[error_type] += 1
             continue
 
-        true_coords, true_types, _ = sample.get_gt_pharmacophore()
+        # get gt pharmacophore
+        true_pharm = sample.get_pharmacophore_from_graph(kind='gt')
+        true_coords = true_pharm['coords']
+        true_types = true_pharm['types_idx']
+
+        # convert to numpy arrays
         true_coords = np.array(true_coords) # has shape (n_true_pharms, 3)
         true_types = np.array(true_types) # has shape (n_true_pharms)
 

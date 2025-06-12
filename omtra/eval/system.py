@@ -1,6 +1,8 @@
 import dgl
 import torch
 from typing import Tuple, List, Union, Dict
+from pathlib import Path
+import omtra.constants as constants
 from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
@@ -22,6 +24,10 @@ from omtra.data.graph.utils import (
     copy_graph,
     get_upper_edge_mask,
 )
+from omtra.eval.utils import move_feats_to_t1
+
+from biotite.structure.io.pdbx import CIFFile
+import biotite.structure as struc
 
 
 class SampledSystem:
@@ -333,6 +339,13 @@ class SampledSystem:
         ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol)
         rdkit_mol = self.build_molecule(*ligdata)
         return rdkit_mol
+    
+    def get_gt_ligand(self):
+        g_dummy = self.g.clone()
+        g_dummy = move_feats_to_t1('denovo_ligand', g_dummy, t="1_true")
+        ligdata = self.extract_ligdata_from_graph(g=g_dummy, ctmc_mol=self.ctmc_mol)
+        rdkit_mol = self.build_molecule(*ligdata)
+        return rdkit_mol
 
     def convert_ligdata_to_biotite(
         self,
@@ -479,17 +492,6 @@ class SampledSystem:
         hetero = np.full_like(atom_names, False, dtype=bool)
         return coords, atom_names, elements, res_ids, res_names, chain_ids, hetero
 
-    def get_gt_pharmacophore(self, g=None):
-        """Returns the ground-truth pharmacophore."""
-        if g is None:
-            g = self.g
-
-        coords = g.nodes["pharm"].data["x_1_true"].numpy()
-        pharm_types = g.nodes["pharm"].data["a_1_true"].numpy()
-        pharm_vecs = g.nodes["pharm"].data["v_1_true"].numpy()
-
-        return coords, pharm_types, pharm_vecs
-
     def build_molecule(
         self,
         positions,
@@ -534,13 +536,6 @@ class SampledSystem:
     def build_traj(self, ep_traj=False, lig=True, prot=False, pharm=False):
         if self.traj is None:
             raise ValueError("No trajectory data available.")
-
-        if pharm:
-            raise NotImplementedError(
-                "Pharmacophore trajectory building not implemented yet."
-            )
-        if prot:
-            print("warning: protein trajectory building being tested")
 
         if not any([lig, prot, pharm]):
             raise ValueError("at least one of lig, prot, or pharm must be True.")
@@ -592,8 +587,90 @@ class SampledSystem:
             if prot:
                 bt_arr = self.get_protein_array(g=g_dummy)
                 traj_mols["prot"].append(bt_arr)
+
+            if pharm:
+                traj_mols['pharm'].append(self.get_pharmacophore_from_graph(g=g_dummy, kind="predicted"))
                 
         return traj_mols
+    
+    def get_pharmacophore_from_graph(self, g=None, kind="predicted", xyz=False):
+        if g is None:
+            g = self.g
+
+        if kind == "predicted":
+            suffix = "1"
+        elif kind == 'gt':
+            suffix = "1_true"
+        else:
+            raise ValueError("kind must be either 'predicted' or 'gt'.")
+
+        coords = g.nodes['pharm'].data[f'x_{suffix}'].numpy()
+        pharm_types_idx = g.nodes['pharm'].data[f'a_{suffix}'].numpy().tolist()
+        pharm_types = [ constants.ph_idx_to_type[idx] for idx in pharm_types_idx ]
+        pharm_types_elems = [ constants.ph_idx_to_elem[idx] for idx in pharm_types_idx ] 
+
+        if xyz:
+            return pharm_to_xyz(coords, pharm_types_elems)
+        else:
+            return {
+                'coords': coords,
+                'types': pharm_types,
+                'types_idx': pharm_types_idx,
+                'types_elems': pharm_types_elems,
+            }
+    
+    def write_ligand(self, output_file: str, 
+                     trajectory: bool = False, 
+                     endpoint: bool = False, 
+                     ground_truth: bool = True):
+        """Write a ligand or a ligand trajectory to an sdf file."""
+        output_file = Path(output_file)
+        if not output_file.suffix == ".sdf":
+            raise ValueError("Output file must have .sdf extension.")
+        if trajectory:
+            mols = self.build_traj(ep_traj=endpoint, lig=True)['lig']
+        elif ground_truth:
+            mols = [self.get_gt_ligand()]
+        else:
+            mols = [self.get_rdkit_ligand()]
+        write_mols_to_sdf(mols, str(output_file))
+
+    def write_protein(self, 
+            output_file: str, 
+            trajectory: bool = False, 
+            endpoint: bool = False,
+            ground_truth: bool = False
+        ):
+        """Write a protein or a protein trajectory to a cif file."""
+        output_file = Path(output_file)
+        if not output_file.suffix == ".cif":
+            raise ValueError("Output file must have .cif extension.")
+        if trajectory:
+            arrs = self.build_traj(ep_traj=endpoint, prot=True)['prot']
+        else:
+            arrs = [self.get_protein_array(reference=ground_truth)]
+        write_arrays_to_cif(arrs, str(output_file))
+
+    def write_pharmacophore(self, 
+        output_file, 
+        trajectory: bool = False, 
+        endpoint: bool = False,
+        ground_truth: bool = False):
+
+        output_file = Path(output_file)
+        if not output_file.suffix == ".xyz":
+            raise ValueError("Output file must have .xyz extension.")
+        
+        if trajectory:
+            pharms = self.build_traj(ep_traj=endpoint, pharm=True)['pharm']
+            pharms = [ pharm_to_xyz(pharm['coords'], pharm['types_elems']) for pharm in pharms ]
+        else:
+            kind = 'gt' if ground_truth else 'predicted'
+            pharms = [self.get_pharmacophore_from_graph(kind='predicted', xyz=True)]
+
+        xyz_content = sum(pharms)
+        with open(output_file, 'w') as f:
+            f.write(xyz_content)
 
     def compute_valencies(self):
         """Compute the valencies of every atom in the molecule. Returns a tensor of shape (num_atoms,)."""
@@ -609,3 +686,30 @@ class SampledSystem:
         adj[bond_dst_idxs, bond_src_idxs] = adjusted_bond_types
         valencies = torch.sum(adj, dim=-1).long()
         return valencies
+
+def write_arrays_to_cif(arrays, filename):
+    cif_file = CIFFile()
+    arr_stack = struc.stack(arrays)
+    struc.io.pdbx.set_structure(cif_file, arr_stack)
+    cif_file.write(filename)
+
+
+def pharm_to_xyz(pos: torch.Tensor, pharm_elements: List[str]):
+    out = f'{len(pos)}\n'
+    for i in range(len(pos)):
+        elem = pharm_elements[i]
+        out += f"{elem} {pos[i, 0]:.3f} {pos[i, 1]:.3f} {pos[i, 2]:.3f}\n"
+    return out
+
+
+def write_mols_to_sdf(mols: List[Chem.Mol], filename: Union[str, Path]):
+    """Write a list of rdkit molecules to an sdf file."""
+    filename = Path(filename)
+    if not filename.suffix == ".sdf":
+        raise ValueError("Output file must have .sdf extension.")
+    sdwriter = Chem.SDWriter(str(filename))
+    sdwriter.SetKekulize(False)
+    for mol in mols:
+        if mol is not None:
+            sdwriter.write(mol)
+    sdwriter.close()
