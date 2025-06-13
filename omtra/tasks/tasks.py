@@ -70,6 +70,14 @@ class Task:
         """Returns True if the task is fully unconditional, i.e., all groups are generated and none are fixed."""
         return set(self.groups_generated) == set(self.groups_present)
 
+    @classproperty
+    def has_protein(self) -> bool:
+        return 'protein_identity' in self.groups_present
+    
+    @classproperty
+    def has_pharmacophore(self) -> bool:
+        return 'pharmacophore' in self.groups_present
+
 ##
 # tasks with ligand only
 ##

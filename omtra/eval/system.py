@@ -19,12 +19,12 @@ import biotite.structure as struc
 from copy import deepcopy
 from omtra.tasks.modalities import name_to_modality
 from collections import defaultdict
+from omtra.tasks.register import task_name_to_class
 
 from omtra.data.graph.utils import (
     copy_graph,
     get_upper_edge_mask,
 )
-from omtra.eval.utils import move_feats_to_t1
 
 from biotite.structure.io.pdbx import CIFFile
 import biotite.structure as struc
@@ -340,8 +340,11 @@ class SampledSystem:
         rdkit_mol = self.build_molecule(*ligdata)
         return rdkit_mol
     
-    def get_gt_ligand(self):
-        g_dummy = self.g.clone()
+    def get_gt_ligand(self, g=None):
+        if g is None:
+            g_dummy = self.g.clone()
+        else:
+            g_dummy = g.clone()
         g_dummy = move_feats_to_t1('denovo_ligand', g_dummy, t="1_true")
         ligdata = self.extract_ligdata_from_graph(g=g_dummy, ctmc_mol=self.ctmc_mol)
         rdkit_mol = self.build_molecule(*ligdata)
@@ -622,7 +625,8 @@ class SampledSystem:
     def write_ligand(self, output_file: str, 
                      trajectory: bool = False, 
                      endpoint: bool = False, 
-                     ground_truth: bool = True):
+                     ground_truth: bool = True,
+                     g = None):
         """Write a ligand or a ligand trajectory to an sdf file."""
         output_file = Path(output_file)
         if not output_file.suffix == ".sdf":
@@ -630,7 +634,7 @@ class SampledSystem:
         if trajectory:
             mols = self.build_traj(ep_traj=endpoint, lig=True)['lig']
         elif ground_truth:
-            mols = [self.get_gt_ligand()]
+            mols = [self.get_gt_ligand(g=g)]
         else:
             mols = [self.get_rdkit_ligand()]
         write_mols_to_sdf(mols, str(output_file))
@@ -655,7 +659,8 @@ class SampledSystem:
         output_file, 
         trajectory: bool = False, 
         endpoint: bool = False,
-        ground_truth: bool = False):
+        ground_truth: bool = False,
+        g=None):
 
         output_file = Path(output_file)
         if not output_file.suffix == ".xyz":
@@ -666,9 +671,9 @@ class SampledSystem:
             pharms = [ pharm_to_xyz(pharm['coords'], pharm['types_elems']) for pharm in pharms ]
         else:
             kind = 'gt' if ground_truth else 'predicted'
-            pharms = [self.get_pharmacophore_from_graph(kind='predicted', xyz=True)]
+            pharms = [self.get_pharmacophore_from_graph(g=g, kind=kind, xyz=True)]
 
-        xyz_content = sum(pharms)
+        xyz_content =''.join(pharms)
         with open(output_file, 'w') as f:
             f.write(xyz_content)
 
@@ -713,3 +718,24 @@ def write_mols_to_sdf(mols: List[Chem.Mol], filename: Union[str, Path]):
         if mol is not None:
             sdwriter.write(mol)
     sdwriter.close()
+
+def move_feats_to_t1(task_name: str, g: dgl.DGLHeteroGraph, t: str = '0'):
+    task = task_name_to_class(task_name)
+    for m in task.modalities_present:
+
+        num_entries = g.num_nodes(m.entity_name) if m.is_node else g.num_edges(m.entity_name)
+        if num_entries == 0:
+            continue
+
+        data_src = g.nodes if m.is_node else g.edges
+        dk = m.data_key
+        en = m.entity_name
+
+        if t == '0' and m in task.modalities_fixed:
+            data_to_copy = data_src[en].data[f'{dk}_1_true']
+        else:
+            data_to_copy = data_src[en].data[f'{dk}_{t}']
+
+        data_src[en].data[f'{dk}_1'] = data_to_copy
+
+    return g
