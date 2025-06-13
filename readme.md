@@ -23,27 +23,21 @@ chmod +x build_env.sh
 - [ ] methods for evaluating conformer quality? - PB gen?
 - [ ] scoring PL-interaction on denovo designs
 - [ ] alternative time sampling methods for training (semlaflow, foldflow2)
+- [ ] filter private library pharmit compounds
 - [ ] harmonic prior
 - [ ] scale OT (https://arxiv.org/abs/2406.07266) - playing with variance of prior
-- [ ] explicit/implicit hydrogens
-- [ ] aromaticity labels
-- [ ] fragmentation while computing additional labels
-- [ ] filter private library pharmit compounds
-- [ ] experiment what standard deviation of priors
+- [ ] experiment with standard deviation of priors
 - [ ] learned, task-dependent normalization for message passing
 - [ ] why does going 4->6 layers break the model?
 - [ ] test resume functionality
 - [ ] aux losses; interaction loss
-- [ ] re-run pharm conditioning with rebuild_edges=True
-- [ ] re-run pharm conditioning with better edge building parameters
 - [ ] each conv can be a self-conv followed by interacton conv
 - [ ] sampling method should be aware of replicates/ground truths/fixed features. conditioning structures (pharm, prot) should be written once per system; ground truth should be written if available.
 - [ ] add shape-color similarity for docking evaluation
-- [ ] if doing docking or conformational sampling, do more replicates for one system?
 - [ ] use sc-rdkit for denovo evals: https://github.com/oxpig/DeLinker/blob/master/analysis/calc_SC_RDKit.py
 - [ ] reproduce loss weightings from flowmol
-- [ ] test fake atoms
-- [ ] implement new GVPConv that does attention similar to https://arxiv.org/abs/2003.01332
+- [ ] add vpa: https://arxiv.org/abs/2403.04747
+
 
 # Essetial things
 
@@ -53,7 +47,7 @@ Yes and you should remind me to write them down here.
 
 ## Where is the data on the cluster? How do I tell omtra where the datasets are?
 
-### If using `routines/trian.py`
+### If using `routines/train.py`
 
 By default, the script will look in `data/pharmit` and `data/plinder` (paths relative to your omtra repository), for the pharmit and plinder datasets, respectively. Now these datasets are big and moving them around is difficult and we don't want to have too many duplciates floating around. You should point your script to an existing copy of the dataset. Currently, you can use these on the CSB cluster:
 
