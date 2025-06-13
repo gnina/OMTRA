@@ -7,6 +7,7 @@ from typing import List, Tuple, Union, Dict, Optional, Set
 from functools import partial
 import math
 from torch_scatter import scatter_softmax
+from omtra.utils.graph import g_local_scope
 
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 
@@ -564,7 +565,7 @@ class HeteroGVPConv(nn.Module):
             for ntype in self.node_types:
                 self.message_expansion[ntype] = nn.Identity()
 
-    # @profile
+    @g_local_scope
     def forward(
         self,
         g: dgl.DGLGraph,
@@ -576,157 +577,155 @@ class HeteroGVPConv(nn.Module):
         d: Optional[Dict[str, torch.Tensor]] = None,
         passing_edges: Optional[List[str]] = None,
     ):
-        # vec_feat has shape (n_nodes, n_vectors, 3)
+        # vec_feat has shape (n_nodes, n_vectors, 3)å
+        for ntype in self.node_types:
+            if g.num_nodes(ntype) == 0:
+                continue
+            # TODO: make sure node attributes are safe across tasks/ntypes e.g. pharm nodes have a 'v', 'x' vs 'x_0' vs 'x_1_true'
+            g.nodes[ntype].data["s"] = scalar_feats[ntype]
+            g.nodes[ntype].data["x"] = coord_feats[ntype]
+            g.nodes[ntype].data["v"] = vec_feats[ntype]
 
-        with g.local_scope():
+        # edge feature
+        for etype in self.edge_types:
+            if etype not in g.etypes or g.num_edges(etype) == 0:
+                continue
+            if self.edge_feat_size[etype] > 0:
+                assert edge_feats.get(etype) is not None, (
+                    "Edge features must be provided."
+                )
+                g.edges[etype].data["ef"] = edge_feats[etype]
+
+        # normalize x_diff and compute rbf embedding of edge distance
+        # dij = torch.norm(g.edges[self.edge_type].data['x_diff'], dim=-1, keepdim=True)
+        for etype in self.edge_types:
+            if etype not in g.etypes or g.num_edges(etype) == 0:
+                continue
+            if x_diff is not None and d is not None:
+                g.edges[etype].data["x_diff"] = x_diff[etype]
+                g.edges[etype].data["d"] = d[etype]
+            if "x_diff" not in g.edges[etype].data:
+                # get vectors between node positions
+                g.apply_edges(fn.u_sub_v("x", "x", "x_diff"), etype=etype)
+                dij = (
+                    _norm_no_nan(g.edges[etype].data["x_diff"], keepdims=True)
+                    + 1e-8
+                )
+                g.edges[etype].data["x_diff"] = g.edges[etype].data["x_diff"] / dij
+                g.edges[etype].data["d"] = _rbf(
+                    dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim
+                )
+
+        # apply node compression
+        for ntype in self.node_types:
+            if g.num_nodes(ntype) == 0:
+                continue
+            g.nodes[ntype].data["s"], g.nodes[ntype].data["v"] = (
+                self.node_compression[ntype](
+                    (g.nodes[ntype].data["s"], g.nodes[ntype].data["v"])
+                )
+            )
+
+        if self.use_dst_feats:
             for ntype in self.node_types:
-                if g.num_nodes(ntype) == 0:
-                    continue
-                # TODO: make sure node attributes are safe across tasks/ntypes e.g. pharm nodes have a 'v', 'x' vs 'x_0' vs 'x_1_true'
-                g.nodes[ntype].data["s"] = scalar_feats[ntype]
-                g.nodes[ntype].data["x"] = coord_feats[ntype]
-                g.nodes[ntype].data["v"] = vec_feats[ntype]
-
-            # edge feature
-            for etype in self.edge_types:
-                if etype not in g.etypes or g.num_edges(etype) == 0:
-                    continue
-                if self.edge_feat_size[etype] > 0:
-                    assert edge_feats.get(etype) is not None, (
-                        "Edge features must be provided."
-                    )
-                    g.edges[etype].data["ef"] = edge_feats[etype]
-
-            # normalize x_diff and compute rbf embedding of edge distance
-            # dij = torch.norm(g.edges[self.edge_type].data['x_diff'], dim=-1, keepdim=True)
-            for etype in self.edge_types:
-                if etype not in g.etypes or g.num_edges(etype) == 0:
-                    continue
-                if x_diff is not None and d is not None:
-                    g.edges[etype].data["x_diff"] = x_diff[etype]
-                    g.edges[etype].data["d"] = d[etype]
-                if "x_diff" not in g.edges[etype].data:
-                    # get vectors between node positions
-                    g.apply_edges(fn.u_sub_v("x", "x", "x_diff"), etype=etype)
-                    dij = (
-                        _norm_no_nan(g.edges[etype].data["x_diff"], keepdims=True)
-                        + 1e-8
-                    )
-                    g.edges[etype].data["x_diff"] = g.edges[etype].data["x_diff"] / dij
-                    g.edges[etype].data["d"] = _rbf(
-                        dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim
-                    )
-
-            # apply node compression
-            for ntype in self.node_types:
-                if g.num_nodes(ntype) == 0:
-                    continue
-                g.nodes[ntype].data["s"], g.nodes[ntype].data["v"] = (
-                    self.node_compression[ntype](
-                        (g.nodes[ntype].data["s"], g.nodes[ntype].data["v"])
-                    )
+                (
+                    g.nodes[ntype].data["s_dst_msg"],
+                    g.nodes[ntype].data["v_dst_msg"],
+                ) = self.dst_feat_msg_projection[ntype](
+                    (g.nodes[ntype].data["s"], g.nodes[ntype].data["v"])
                 )
 
-            if self.use_dst_feats:
-                for ntype in self.node_types:
-                    (
-                        g.nodes[ntype].data["s_dst_msg"],
-                        g.nodes[ntype].data["v_dst_msg"],
-                    ) = self.dst_feat_msg_projection[ntype](
-                        (g.nodes[ntype].data["s"], g.nodes[ntype].data["v"])
-                    )
+        # compute messages on passing_edges etypes or all
+        if not passing_edges:
+            passing_edges = self.edge_types
 
-            # compute messages on passing_edges etypes or all
-            if not passing_edges:
-                passing_edges = self.edge_types
+        for etype in passing_edges:
+            if etype not in g.etypes or g.num_edges(etype) == 0:
+                continue
+            etype_message = partial(self.message, etype=etype)
+            g.apply_edges(etype_message, etype=etype)
 
-            for etype in passing_edges:
-                if etype not in g.etypes or g.num_edges(etype) == 0:
-                    continue
-                etype_message = partial(self.message, etype=etype)
-                g.apply_edges(etype_message, etype=etype)
+        # if self.attenion, multiple messages by attention weights
+        if self.attention:
+            self.att_func(g, passing_edges)
 
-            # if self.attenion, multiple messages by attention weights
-            if self.attention:
-                self.att_func(g, passing_edges)
+        scalar_agg_fns = {}
+        vector_agg_fns = {}
+        for etype in passing_edges:
+            if etype not in g.etypes or g.num_edges(etype) == 0:
+                continue
+            """
+            g.update_all(
+                fn.copy_e("scalar_msg", "m"),
+                self.agg_func("m", "scalar_msg"),
+                etype=etype,
+            )
+            g.update_all(
+                fn.copy_e("vec_msg", "m"),
+                self.agg_func("m", "vec_msg"),
+                etype=etype,
+            )
+            """
+            
+            
+            scalar_agg_fns[etype] = (
+                fn.copy_e("scalar_msg", "m"),
+                self.agg_func("m", "scalar_msg"),
+            )
+            vector_agg_fns[etype] = (
+                fn.copy_e("vec_msg", "m"),
+                self.agg_func("m", "vec_msg"),
+            )
 
-            scalar_agg_fns = {}
-            vector_agg_fns = {}
-            for etype in passing_edges:
-                if etype not in g.etypes or g.num_edges(etype) == 0:
-                    continue
-                """
-                g.update_all(
-                    fn.copy_e("scalar_msg", "m"),
-                    self.agg_func("m", "scalar_msg"),
-                    etype=etype,
-                )
-                g.update_all(
-                    fn.copy_e("vec_msg", "m"),
-                    self.agg_func("m", "vec_msg"),
-                    etype=etype,
-                )
-                """
-                
-                
-                scalar_agg_fns[etype] = (
-                    fn.copy_e("scalar_msg", "m"),
-                    self.agg_func("m", "scalar_msg"),
-                )
-                vector_agg_fns[etype] = (
-                    fn.copy_e("vec_msg", "m"),
-                    self.agg_func("m", "vec_msg"),
-                )
+        g.multi_update_all(scalar_agg_fns, cross_reducer=self.cross_reducer)
+        g.multi_update_all(vector_agg_fns, cross_reducer=self.cross_reducer)
 
-            g.multi_update_all(scalar_agg_fns, cross_reducer=self.cross_reducer)
-            g.multi_update_all(vector_agg_fns, cross_reducer=self.cross_reducer)
+        # get aggregated scalar and vector messages
+        if isinstance(self.message_norm, str):
+            z = 1
+        else:
+            z = self.message_norm
 
-            # get aggregated scalar and vector messages
-            if isinstance(self.message_norm, str):
-                z = 1
-            else:
-                z = self.message_norm
+        updated_scalar_feats = {}
+        updated_vec_feats = {}
+        for ntype in self.node_types:
+            if g.num_nodes(ntype) == 0:
+                continue
+            scalar_msg = g.nodes[ntype].data["scalar_msg"] / z
+            vec_msg = g.nodes[ntype].data["vec_msg"] / z
 
-            updated_scalar_feats = {}
-            updated_vec_feats = {}
-            for ntype in self.node_types:
-                if g.num_nodes(ntype) == 0:
-                    continue
-                scalar_msg = g.nodes[ntype].data["scalar_msg"] / z
-                vec_msg = g.nodes[ntype].data["vec_msg"] / z
+            # apply projection (expansion) to aggregated messages
+            scalar_msg, vec_msg = self.message_expansion[ntype](
+                (scalar_msg, vec_msg)
+            )
 
-                # apply projection (expansion) to aggregated messages
-                scalar_msg, vec_msg = self.message_expansion[ntype](
-                    (scalar_msg, vec_msg)
-                )
+            # dropout scalar and vector messages
+            scalar_msg, vec_msg = self.dropout_layers[ntype](scalar_msg, vec_msg)
 
-                # dropout scalar and vector messages
-                scalar_msg, vec_msg = self.dropout_layers[ntype](scalar_msg, vec_msg)
+            # update scalar and vector features, apply layernorm
+            scalar_feat = g.nodes[ntype].data["s"] + scalar_msg
+            vec_feat = g.nodes[ntype].data["v"] + vec_msg
+            scalar_feat, vec_feat = self.message_layer_norms[ntype](
+                (scalar_feat, vec_feat)
+            )
 
-                # update scalar and vector features, apply layernorm
-                scalar_feat = g.nodes[ntype].data["s"] + scalar_msg
-                vec_feat = g.nodes[ntype].data["v"] + vec_msg
-                scalar_feat, vec_feat = self.message_layer_norms[ntype](
-                    (scalar_feat, vec_feat)
-                )
+            # apply node update function, apply dropout to residuals, apply layernorm
+            scalar_residual, vec_residual = self.node_update_fns[ntype](
+                (scalar_feat, vec_feat)
+            )
+            scalar_residual, vec_residual = self.dropout_layers[ntype](
+                scalar_residual, vec_residual
+            )
+            scalar_feat = scalar_feat + scalar_residual
+            vec_feat = vec_feat + vec_residual
+            scalar_feat, vec_feat = self.update_layer_norms[ntype](
+                (scalar_feat, vec_feat)
+            )
 
-                # apply node update function, apply dropout to residuals, apply layernorm
-                scalar_residual, vec_residual = self.node_update_fns[ntype](
-                    (scalar_feat, vec_feat)
-                )
-                scalar_residual, vec_residual = self.dropout_layers[ntype](
-                    scalar_residual, vec_residual
-                )
-                scalar_feat = scalar_feat + scalar_residual
-                vec_feat = vec_feat + vec_residual
-                scalar_feat, vec_feat = self.update_layer_norms[ntype](
-                    (scalar_feat, vec_feat)
-                )
+            updated_scalar_feats[ntype] = scalar_feat
+            updated_vec_feats[ntype] = vec_feat
 
-                updated_scalar_feats[ntype] = scalar_feat
-                updated_vec_feats[ntype] = vec_feat
-
-            return updated_scalar_feats, updated_vec_feats
+        return updated_scalar_feats, updated_vec_feats
 
     def compute_att_weights_crosstype(self, g: dgl.DGLHeteroGraph, passing_edges: List[str]):
 
