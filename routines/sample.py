@@ -328,22 +328,23 @@ def main(args):
             n_replicates=n_replicates
             )
         ):
+            sys_gt_dir = output_dir / f"sys_{sys_id}_gt"
 
             # write all ligands
             if 'ligand_structure' in task.groups_generated:
                 ligands = [s.get_rdkit_ligand() for s in replicates]
-                output_file = output_dir / f"sysid_{sys_id}.sdf"
+                output_file = sys_gt_dir / f"gen_ligands.sdf"
                 write_mols_to_sdf(ligands, output_file)
 
             if 'protein_structure' in task.groups_generated:
                 # write all proteins
                 proteins = [s.get_protein_array() for s in replicates]
-                prot_file = output_dir / f"sysid_{sys_id}_prot.cif"
+                prot_file = sys_gt_dir / f"gen_prot.cif"
                 write_arrays_to_cif(proteins, prot_file)
 
             if 'pharmacophore' in task.groups_generated:
                 pharms = [s.get_pharmacaphore_from_graph(xyz=True) for s in replicates]
-                pharm_file = output_dir / f"sysid_{sys_id}_pharm.cif"
+                pharm_file = sys_gt_dir / f"gen_pharm.cif"
                 with open(pharm_file, 'w') as f:
                     f.write(sum(pharms))
 
@@ -362,26 +363,28 @@ def main(args):
             n_systems=len(g_list), 
             n_replicates=n_replicates
         )
-        for sample_name, system in zip(
+        for sample_idx, (sample_name, system) in enumerate(zip(
             sample_names, sampled_systems
-        ):
+        )):
+            base_system_idx = sample_idx // n_replicates
+            sys_gt_dir = output_dir / f"sys_{base_system_idx}_gt"
             
 
             if 'ligand_structure' in task.groups_generated:
-                lig_xt_file = output_dir / f"{sample_name}_lig_xt.sdf"
-                lig_xhat_file = output_dir / f"{sample_name}_lig_xhat.sdf"
+                lig_xt_file = sys_gt_dir / f"{sample_name}_lig_xt.sdf"
+                lig_xhat_file = sys_gt_dir / f"{sample_name}_lig_xhat.sdf"
                 system.write_ligand(lig_xt_file, trajectory=True, endpoint=False)
                 system.write_ligand(lig_xhat_file, trajectory=True, endpoint=True)
 
             if 'protein_structure' in task.groups_generated:
-                prot_xt_file = output_dir / f"{sample_name}_prot_xt.cif"
-                prot_xhat_file = output_dir / f"{sample_name}_prot_xhat.cif"
+                prot_xt_file = sys_gt_dir / f"{sample_name}_prot_xt.cif"
+                prot_xhat_file = sys_gt_dir / f"{sample_name}_prot_xhat.cif"
                 system.write_protein(prot_xt_file, trajectory=True, endpoint=False)
                 system.write_protein(prot_xhat_file, trajectory=True, endpoint=True)
 
             if 'pharmacophore' in task.groups_generated:
-                pharm_xt_file = output_dir / f"{sample_name}_pharm_xt.cif"
-                pharm_xhat_file = output_dir / f"{sample_name}_pharm_xhat.cif"
+                pharm_xt_file = sys_gt_dir / f"{sample_name}_pharm_xt.cif"
+                pharm_xhat_file = sys_gt_dir / f"{sample_name}_pharm_xhat.cif"
                 system.write_pharmacophore(pharm_xt_file, trajectory=True, endpoint=False)
                 system.write_pharmacophore(pharm_xhat_file, trajectory=True, endpoint=True)
 

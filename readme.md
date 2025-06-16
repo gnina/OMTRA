@@ -37,6 +37,7 @@ chmod +x build_env.sh
 - [ ] use sc-rdkit for denovo evals: https://github.com/oxpig/DeLinker/blob/master/analysis/calc_SC_RDKit.py
 - [ ] reproduce loss weightings from flowmol
 - [ ] add vpa: https://arxiv.org/abs/2403.04747
+- [ ] where are node dists generated in plinder pipeline? where to put them for crossdocked?
 
 
 # Essetial things
