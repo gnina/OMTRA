@@ -33,7 +33,7 @@ def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
 '''
 
 
-def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
+def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: Union[str, None]):
     src, dst = g.edges(etype=etype)
     return src < dst
 

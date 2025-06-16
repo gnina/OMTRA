@@ -14,7 +14,8 @@ from posebusters.modules.flatness import check_flatness
 from posebusters.modules.intermolecular_distance import check_intermolecular_distance
 from posebusters.modules.rmsd import check_rmsd
 from posebusters.modules.volume_overlap import check_volume_overlap
-from omtra.data.graph.utils import SampledSystem
+from omtra.eval.pharmacophore import compute_pharmacophore_match
+from omtra.eval.system import SampledSystem
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
 import numpy as np

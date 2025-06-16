@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 import hydra
 import os
+import functools
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
@@ -21,8 +22,8 @@ from omtra.data.graph.utils import (
     get_upper_edge_mask,
     copy_graph,
     build_lig_edge_idxs,
-    SampledSystem,
 )
+from omtra.eval.system import SampledSystem
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
@@ -64,6 +65,7 @@ class OMTRA(pl.LightningModule):
         k_checkpoints: int = 20,
         checkpoint_interval: int = 1000,
         og_run_dir: Optional[str] = None,
+        fake_atom_p: float = 0.0,
         eval_config: Optional[DictConfig] = None,
     ):
         super().__init__()
@@ -79,6 +81,7 @@ class OMTRA(pl.LightningModule):
         self.prior_config = prior_config
         self.eval_config = eval_config
         self.og_run_dir = og_run_dir
+        self.fake_atom_p = fake_atom_p
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -126,6 +129,7 @@ class OMTRA(pl.LightningModule):
             td_coupling=self.td_coupling,
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
+            fake_atoms=self.fake_atom_p>0.0,
         )
 
         if not ligand_encoder.is_empty():
@@ -276,9 +280,15 @@ class OMTRA(pl.LightningModule):
             g_list = dgl.unbatch(g)
             n_replicates = 2
 
+        if 'ligand_identity' in task.groups_present and 'protein_identity' in task.groups_present:
+            coms = dgl.readout_nodes(g, feat='x_1_true', op='mean', ntype='lig')
+            coms = [ coms[i] for i in range(g.batch_size) ]
+        else:
+            coms = None
+
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device)
+        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device, coms=coms)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         if not self.eval_config:
@@ -459,7 +469,7 @@ class OMTRA(pl.LightningModule):
         coms: Optional[
             torch.Tensor
         ] = None,  # center of mass for adding ligands/pharms to systems
-        unconditional_n_atoms_dist: str = "plinder",  # distribution to use for sampling number of atoms in unconditional tasks
+        unconditional_n_atoms_dist: str = None,  # distribution to use for sampling number of atoms in unconditional tasks
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
         visualize=False,
@@ -471,11 +481,14 @@ class OMTRA(pl.LightningModule):
 
         # TODO: user-supplied n_atoms dict?
 
-
+        # set device
         if device is None and g_list is not None:
             device = g_list[0].device
         elif device is None:
             device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
+        if unconditional_n_atoms_dist is None:
+            unconditional_n_atoms_dist = self.infer_n_atoms_dist(task)
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
@@ -550,6 +563,14 @@ class OMTRA(pl.LightningModule):
             # in this case, the distrbution could come from pharmit or plinder dataset..user-chosen option?
 
         if add_ligand:
+
+            if self.fake_atom_p > 0.0:
+                n_real_atoms = n_lig_atoms
+                max_num_fake_atoms = torch.ceil(n_real_atoms*self.fake_atom_p).float()
+                frac = torch.rand_like(max_num_fake_atoms)
+                num_fake_atoms = torch.floor(frac*(max_num_fake_atoms+1)).long()
+                n_real_atoms = n_real_atoms + num_fake_atoms
+
             for g_idx, g_i in enumerate(g_flat):
                 # clear ligand nodes (and edges) if they exist
                 if g_i.num_nodes("lig") > 0:
@@ -683,7 +704,25 @@ class OMTRA(pl.LightningModule):
                 ss_kwargs = dict()
             sampled_system = SampledSystem(
                 g=g_i,
+                fake_atoms=self.fake_atom_p>0.0,
                 **ss_kwargs,
             )
             sampled_systems.append(sampled_system)
         return sampled_systems
+    
+
+    @functools.lru_cache()
+    def infer_n_atoms_dist(self, task):
+        # infer n_atoms_dist if none
+        trained_on_pharmit = 'pharmit' in self.td_coupling.dataset_space
+        trained_on_plinder = 'plinder' in self.td_coupling.dataset_space
+        has_protein = 'protein_identity' in task.groups_present
+        if trained_on_pharmit and not trained_on_plinder:
+            unconditional_n_atoms_dist = 'pharmit'
+        elif trained_on_plinder and not trained_on_pharmit:
+            unconditional_n_atoms_dist = 'plinder'
+        elif has_protein:
+            unconditional_n_atoms_dist = 'plinder'
+        elif not has_protein:
+            unconditional_n_atoms_dist = 'pharmit'
+        return unconditional_n_atoms_dist

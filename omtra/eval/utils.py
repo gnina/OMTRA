@@ -1,4 +1,4 @@
-from omtra.data.graph.utils import SampledSystem
+from omtra.eval.system import SampledSystem
 from omtra.eval.reos import REOS
 from omtra.eval.ring_systems import RingSystemCounter, ring_counts_to_df
 from collections import Counter
@@ -15,30 +15,9 @@ from omtra.utils import omtra_root
 import yaml
 from collections import defaultdict
 from posebusters import PoseBusters
-
-allowed_bonds = {
-    "H": {0: 1, 1: 0, -1: 0},
-    "C": {0: [3, 4], 1: 3, -1: 3},
-    "N": {
-        0: [2, 3],
-        1: [2, 3, 4],
-        -1: 2,
-    },  # In QM9, N+ seems to be present in the form NH+ and NH2+
-    "O": {0: 2, 1: 3, -1: 1},
-    "F": {0: 1, -1: 0},
-    "B": 3,
-    "Al": 3,
-    "Si": 4,
-    "P": {0: [3, 5], 1: 4},
-    "S": {0: [2, 6], 1: [2, 3], 2: 4, 3: 5, -1: 3},
-    "Cl": 1,
-    "As": 3,
-    "Br": {0: 1, 1: 2},
-    "I": 1,
-    "Hg": [1, 2],
-    "Bi": [3, 5],
-    "Se": [2, 4, 6],
-}
+import numpy as np
+from omtra.tasks.register import task_name_to_class
+import dgl
 
 
 # adapted from flowmol metrics.py
@@ -82,7 +61,7 @@ def compute_validity(
             except Chem.rdchem.KekulizeException:
                 error_messages['Kekulize'] += 1
                 # print("Can't kekulize molecule")
-            except Chem.rdchem.AtomKekulizeException or ValueError:
+            except Exception as e:
                 error_messages['other'] += 1
     
     error_messages['total'] = len(sampled_systems)
@@ -139,6 +118,7 @@ def compute_stability(sampled_systems: List[SampledSystem]):
         "frac_mols_stable_valence": frac_mols_stable_valence,
     }
     return metrics
+
 
 @functools.lru_cache()
 def get_valid_valency_table() -> dict:

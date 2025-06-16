@@ -26,6 +26,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         distributed: bool = False,
         max_steps: int = None, 
         pin_memory: bool = True,
+        fake_atom_p: float = 0.0,
     ):
         super().__init__()
         self.dataset_config = dataset_config
@@ -36,6 +37,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self.graph_config = graph_config
         self.max_steps = max_steps
         self.pin_memory = pin_memory
+        self.fake_atom_p = fake_atom_p
 
 
         self.td_coupling: TaskDatasetCoupling = build_td_coupling(task_phases, dataset_task_coupling)
@@ -78,10 +80,14 @@ class MultiTaskDataModule(pl.LightningDataModule):
             )
 
     def load_dataset(self, split: str):
+        # TODO: should val dataset toss in fake atoms? need to consider implications for sampling conditonal tasks
+        # well, only ligand denovo tasks need fake atoms, so that logic can be done in the dataset
+        # which is aware of the task for which it is serving data
         return MultitaskDataSet(split, 
                              td_coupling=self.td_coupling,
                              graph_config=self.graph_config,
                              prior_config=self.prior_config,
+                             fake_atom_p=self.fake_atom_p,
                              **self.dataset_config)
     
     def train_dataloader(self):

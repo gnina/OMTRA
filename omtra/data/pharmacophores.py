@@ -118,7 +118,7 @@ def check_interaction(all_ligand_positions, receptor, feature):
 
     return interaction, updated_vectors
 
-def get_pharmacophore_dict(ligand, receptor=None):
+def get_pharmacophore_dict(ligand, receptor=None, build_vec=False):
     """Extract pharmacophores and direction vectors from RDKit molecule.
         
     Returns
@@ -133,6 +133,7 @@ def get_pharmacophore_dict(ligand, receptor=None):
     
     pharmacophores = {feature: {'P': [], 'V': [], 'I': []} for feature in smarts_patterns}
     
+    Chem.SanitizeMol(ligand)
     ligand = Chem.AddHs(ligand, addCoords=True)
     if receptor: receptor = Chem.AddHs(receptor, addCoords=True)
 
@@ -142,9 +143,11 @@ def get_pharmacophore_dict(ligand, receptor=None):
         
         for pattern in patterns:
             atom_idxs, atom_positions, feature_positions = get_smarts_matches(ligand, pattern)
-            if feature_positions:
+            if not feature_positions:
+                continue
+            all_ligand_positions.extend(feature_positions)
+            if build_vec:
                 vectors = get_vectors(ligand, feature, atom_idxs, atom_positions, feature_positions)
-                all_ligand_positions.extend(feature_positions)
                 all_ligand_vectors.extend(vectors)
         
         if all_ligand_positions:
@@ -165,8 +168,12 @@ def get_pharmacophore_dict(ligand, receptor=None):
                 
     return pharmacophores
 
-def get_pharmacophores(mol, rec=None):
-    pharmacophores_dict = get_pharmacophore_dict(mol, rec) if rec else get_pharmacophore_dict(mol)
+def get_pharmacophores(mol, rec=None, build_vec=False):
+
+    if rec:
+        pharmacophores_dict = get_pharmacophore_dict(mol, rec, build_vec=build_vec)
+    else:
+        pharmacophores_dict = get_pharmacophore_dict(mol, build_vec=build_vec)
         
     X, P, V, I = [], [], [], []
     for ptype in pharmacophores_dict:
