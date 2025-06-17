@@ -6,11 +6,15 @@ from rdkit import Chem
 from typing import List, Dict, Any, Optional, Tuple
 import peppr
 from biotite import structure as struc
+from biotite.interface import rdkit as bt_rdkit
+import pandas as pd
+import numpy as np
 import functools
 from pathlib import Path
 from omtra.utils import omtra_root
 import yaml
 from collections import defaultdict
+from posebusters import PoseBusters
 import numpy as np
 from omtra.tasks.register import task_name_to_class
 import dgl
@@ -255,6 +259,67 @@ def compute_peppr_metrics_ref(sampled_systems: List[SampledSystem]):
     metrics = evaluator.summarize_metrics()
     return metrics
 
+# redock is for ligands docked into cognate receptor
+def bust_redock(sampled_systems: List[SampledSystem]):
+    buster = PoseBusters(config="redock")
+    metrics_to_log = ["mol_pred_energy", "aromatic_ring_maximum_distance_from_plane", "non-aromatic_ring_maximum_distance_from_plane", "double_bond_maximum_distance_from_plane", "volume_overlap_protein", "rmsd"]
+    collected_values = {metric: [] for metric in metrics_to_log}
+    for i, sys in enumerate(sampled_systems):
+        prot_arr = sys.get_protein_array()
+        prot_mol = bt_rdkit.to_mol(prot_arr)
+        lig_mol = sys.get_rdkit_ligand()
+        ref_mol = sys.get_rdkit_ref_ligand()
+        try:
+            res = buster.bust([lig_mol], ref_mol, prot_mol, full_report=True)
+        except:
+            continue
+        for metric in metrics_to_log:
+            value = res.iloc[0][metric] if metric in res.columns else None
+            if not pd.isna(value):
+                collected_values[metric].append(value)
+    metrics = {
+        metric: np.mean(values) if values else -1
+        for metric, values in collected_values.items()
+    }
+    return metrics
+
+# dock is for de novo ligand or docking into non-cognate receptor       
+def bust_dock(sampled_systems: List[SampledSystem]):
+    buster = PoseBusters(config="dock")
+    metrics_to_log = ["mol_pred_energy", "aromatic_ring_maximum_distance_from_plane", "non-aromatic_ring_maximum_distance_from_plane", "double_bond_maximum_distance_from_plane", "volume_overlap_protein"]
+    collected_values = {metric: [] for metric in metrics_to_log}
+    for i, sys in enumerate(sampled_systems):
+        prot_arr = sys.get_protein_array()
+        prot_mol = bt_rdkit.to_mol(prot_arr)
+        lig_mol = sys.get_rdkit_ligand()
+        try:
+            res = buster.bust([lig_mol], None, prot_mol, full_report=True)
+        except:
+            continue
+        for metric in metrics_to_log:
+            value = res.iloc[0][metric] if metric in res.columns else None
+            if not pd.isna(value):
+                collected_values[metric].append(value)
+    metrics = {
+        metric: np.mean(values) if values else -1
+        for metric, values in collected_values.items()
+    }
+    return metrics
+        
+
+def bust_mol(sampled_systems: List[SampledSystem]):
+    buster = PoseBusters(config="mol")
+    lig_mols = [sys.get_rdkit_ligand() for sys in sampled_systems]
+    res = buster.bust(lig_mols, None, None, full_report=True)
+    metrics_to_log = ["mol_pred_energy", "aromatic_ring_maximum_distance_from_plane", "non-aromatic_ring_maximum_distance_from_plane", "double_bond_maximum_distance_from_plane"]
+    
+    metrics = {
+        metric: res[metric].dropna().mean() if metric in res.columns else -1
+        for metric in metrics_to_log
+    }
+
+    return metrics
+
 
 def add_task_prefix(metrics: Dict[str, Any], task_name: str) -> Dict[str, Any]:
     """Add the task name as a prefix to the metric names."""
@@ -263,3 +328,4 @@ def add_task_prefix(metrics: Dict[str, Any], task_name: str) -> Dict[str, Any]:
         new_key = f"{task_name}/{key}"
         new_metrics[new_key] = value
     return new_metrics
+

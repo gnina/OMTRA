@@ -90,6 +90,7 @@ def omtra_from_config(cfg: DictConfig) -> OMTRA:
         _recursive_=False,
         prior_config=cfg.prior,
         og_run_dir=log_dir,
+        eval_config=cfg.eval,
     )
 
     return model
@@ -143,8 +144,17 @@ def omtra_from_partial_checkpoint(cfg: DictConfig, ckpt_path: str, secondary_ckp
 
     excluded_keys = {"vector_field.task_embedding.weight"}
     state_dict1 = {k: v for k, v in state_dict1.items() if k not in excluded_keys}
-
-    missing_keys, unexpected_keys = model.load_state_dict(state_dict1, strict=False)
+    missing_keys, unexpected_keys = [], []
+    
+    for k, v in state_dict1.items():
+        try:
+            missing_key, unexpected_key = model.load_state_dict({k: v}, strict=False)
+            missing_keys.extend(missing_key)
+            unexpected_keys.extend(unexpected_key)
+        except Exception as e:
+            print(f"Error loading key {k}: {e}")
+            missing_keys.append(k)
+            continue
     
     print(f"Loaded from primary checkpoint: {ckpt_path}")
     print(f"Missing keys: {len(missing_keys)}")
@@ -157,10 +167,11 @@ def omtra_from_partial_checkpoint(cfg: DictConfig, ckpt_path: str, secondary_ckp
             k: v for k, v in state_dict2.items()
             if k in missing_keys and k not in excluded_keys
         }
-
-        still_missing, still_unexpected = model.load_state_dict(supplemental_state_dict, strict=False)
-
-        print(f"Loaded from secondary checkpoint: {secondary_ckpt_path}")
-        print(f"Remaining missing keys: {len(still_missing)}")
+        
+        for k, v in supplemental_state_dict.items():
+            try:
+                model.load_state_dict({k: v}, strict=False)
+            except Exception as e:
+                continue
 
     return model

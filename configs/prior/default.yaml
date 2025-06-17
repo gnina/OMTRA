@@ -15,3 +15,29 @@
 # just uncomment then next two lines for it to take effect
 # denovo_ligand:
 #   lig_x: {type: gaussian, params: {ot: True}}
+
+
+expapo_conditioned_ligand_docking:
+  prot_atom_x:
+    type: apo_exp
+    params: {std: 2.5}
+predapo_conditioned_ligand_docking:
+  prot_atom_x:
+    type: apo_pred
+    params: {std: 2.5}
+exp_apo_conditioned_denovo_ligand:
+  prot_atom_x:
+    type: apo_exp
+    params: {std: 2.5}
+pred_apo_conditioned_denovo_ligand:
+  prot_atom_x:
+    type: apo_pred
+    params: {std: 2.5}
+protein_ligand_denovo:
+  prot_atom_x:
+    type: target_dependent_gaussian
+    params: {std: 2.5}
+flexible_docking:
+  prot_atom_x:
+    type: target_dependent_gaussian
+    params: {std: 2.5}

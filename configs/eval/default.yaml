@@ -1,0 +1,144 @@
+denovo_ligand:
+  - validity:
+      params: {}
+  - stability:
+      params: {}
+  - reos_and_rings:
+      params: {}
+  - geometry:
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      params:
+        threshold_flatness: 0.1
+ligand_conformer:
+  - stability:
+      params: {}
+  - reos_and_rings:
+      params: {}
+  - geometry:
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      params:
+        threshold_flatness: 0.1
+  - ligand_rmsd:
+      params:
+        rmsd_threshold: 2.0
+expapo_conditioned_ligand_docking:
+  - stability:
+      params: {}
+  - reos_and_rings:
+      params: {}
+  - geometry:
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      params:
+        clash_cutoff: 0.05
+predapo_conditioned_ligand_docking:
+  - stability:
+      params: {}
+  - reos_and_rings:
+      params: {}
+  - geometry:
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      params:
+        clash_cutoff: 0.05
+exp_apo_conditioned_denovo_ligand:
+  - validity:
+      params: {}
+  - stability:
+      params: {}
+  - reos_and_rings:
+      params: {}
+  - geometry:
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      params:
+        clash_cutoff: 0.05
+pred_apo_conditioned_denovo_ligand:
+  - validity:
+      params: {}
+  - stability:
+      params: {}
+  - reos_and_rings:
+      params: {}
+  - geometry:
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      params:
+        clash_cutoff: 0.05
+fixed_protein_ligand_denovo:
+  - validity:
+      params: {}
+  - stability:
+      params: {}
+  - reos_and_rings:
+      params: {}
+  - geometry:
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      params:
+        clash_cutoff: 0.05
+rigid_docking:
+  - stability:
+      params: {}
+  - reos_and_rings:
+      params: {}
+  - geometry:
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      params:
+        clash_cutoff: 0.05

@@ -167,14 +167,18 @@ class VectorField(nn.Module):
         # self.edge_types = set()
         for task in task_classes:
             self.edge_types.update(get_edges_for_task(task, graph_config))
-
+            
+        
         missing_inv_edges = set()
         for etype in self.edge_types:
             inv_etype = get_inv_edge_type(etype)
             if inv_etype not in self.edge_types:
                 missing_inv_edges.add(inv_etype)
-        self.edge_types.update(missing_inv_edges)
-
+        if len(missing_inv_edges) > 0:
+            print(f"missing inverse edges: {missing_inv_edges}")       
+        # self.edge_types.update(missing_inv_edges)
+        
+        
         self.edge_types = sorted(list(self.edge_types))
 
         # create a task embedding

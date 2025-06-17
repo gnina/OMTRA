@@ -69,16 +69,18 @@ def target_dependent_gaussian_prior(x1: torch.Tensor, std: float = 1.0):
 
 @register_train_prior("apo_exp")
 @register_inference_prior("apo_exp")
-def exp_prior(x0: torch.Tensor):
+def exp_prior(x0: torch.Tensor, std: float = 1.0):
     """
     Generate a prior from unbound experimental structure
     """
-    return x0.clone()
+    x_0 = x0.clone() + torch.randn_like(x0) * std
+    return x_0
 
 @register_train_prior("apo_pred")
 @register_inference_prior("apo_pred")
-def pred_prior(x0: torch.Tensor):
+def pred_prior(x0: torch.Tensor, std: float = 1.0):
     """
     Generate a prior from AlphaFold predicted unbound structure
     """
-    return x0.clone()
+    x_0 = x0.clone() + torch.randn_like(x0) * std
+    return x_0
