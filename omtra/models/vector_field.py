@@ -882,6 +882,28 @@ class VectorField(nn.Module):
                 chemspace_vector = chemspace_vector,
                 **kwargs,
             )
+            
+            # g_uncond, dst_dict_uncond = self.step(
+                # g=g,
+                # task=task,
+                # s_i=s_i,
+                # t_i=t_i,
+                # alpha_t_i=alpha_t_i,
+                # alpha_s_i=alpha_s_i,
+                # alpha_t_prime_i=alpha_t_prime_i,
+                # beta_t_i=beta_t_i,
+                # beta_s_i=beta_s_i,
+                # beta_t_prime_i=beta_t_prime_i,
+                # node_batch_idxs=node_batch_idxs,
+                # edge_batch_idxs=edge_batch_idxs,
+                # upper_edge_mask=upper_edge_mask,
+                # cat_temp_func=cat_temp_func,
+                # stochasticity=stochasticity,
+                # last_step=last_step,
+                # prev_dst_dict=dst_dict,
+                # **kwargs,
+            # )
+
 
             if visualize:
                 add_frame(g)
@@ -953,7 +975,7 @@ class VectorField(nn.Module):
             eta = stochasticity
 
         # predict the destination of the trajectory given the current timepoint
-        dst_dict = self(
+        dst_dict_cond = self(
             g,
             task,
             t=torch.full((g.batch_size,), t_i, device=device),
@@ -964,7 +986,20 @@ class VectorField(nn.Module):
             prev_dst_dict=prev_dst_dict,
             chemspace_vector = chemspace_vector,
         )
-
+        
+        
+        dst_dict_uncod = self(
+            g,
+            task,
+            t=torch.full((g.batch_size,), t_i, device=device),
+            node_batch_idx=node_batch_idxs,
+            upper_edge_mask=upper_edge_mask,
+            apply_softmax=True,
+            remove_com=False,  # TODO: is this ...should this be set to True?
+            prev_dst_dict=prev_dst_dict,
+        )
+        # print("####################")
+        # print(dst_dict)
         dt = s_i - t_i
 
         # get continuous and categorical modalities
@@ -975,6 +1010,17 @@ class VectorField(nn.Module):
                 categorical_modalities.append(m)
             else:
                 continuous_modalities.append(m)
+                
+        guided_dst = {}
+        for m in task.modalities_generated:
+            x_c = dst_dict_cond[m.name]
+            x_u = dst_dict_uncod[m.name]
+
+            if m.is_categorical:
+                logits_guided = x_u + self.cfg_scale * (x_c - x_u)
+                guided_dst[m.name] = torch.softmax(logits_guided, dim=-1)
+            else:
+                guided_dst[m.name] = x_u + 2 * (x_c - x_u)
 
         # iterate over continuous modalities and apply updates
         for m in continuous_modalities:
@@ -987,7 +1033,7 @@ class VectorField(nn.Module):
             if num_entries == 0:
                 continue
 
-            x_1 = dst_dict[m.name]
+            x_1 = guided_dst[m.name]
             x_t = data_src[m.entity_name].data[f"{m.data_key}_t"]
             vf = self.vector_field(x_t, x_1, alpha_t_i[m.name], alpha_t_prime_i[m.name], beta_t_i[m.name], beta_t_prime_i[m.name])
             data_src[m.entity_name].data[f"{m.data_key}_t"] = x_t + dt * vf
@@ -1008,7 +1054,7 @@ class VectorField(nn.Module):
             if not m.is_node:
                 xt = xt[upper_edge_mask[m.entity_name]]
 
-            p_s_1 = dst_dict[m.name]
+            p_s_1 = guided_dst[m.name]
             temperature = cat_temp_func(t_i)
             p_s_1 = nn.functional.softmax(
                 torch.log(p_s_1) / temperature, dim=-1
@@ -1055,7 +1101,7 @@ class VectorField(nn.Module):
             data_src[f"{m.data_key}_t"] = xt
             data_src[f"{m.data_key}_1_pred"] = x_1_sampled
 
-        return g, dst_dict
+        return g, guided_dst
 
     def campbell_step(
         self,

@@ -1,0 +1,41 @@
+[rank: 0] Seed set to 42
+wandb: Currently logged in as: jc200108 (koes-group). Use `wandb login --relogin` to force relogin
+wandb: Using wandb-core as the SDK backend.  Please refer to https://wandb.me/wandb-core for more information.
+wandb: Tracking run with wandb version 0.19.4
+wandb: Run data is saved locally in ./wandb/run-20250618_130527-mp5w62t0
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run partial_training_cond_all_sample_cond
+wandb: ⭐️ View project at https://wandb.ai/koes-group/omtra
+wandb: 🚀 View run at https://wandb.ai/koes-group/omtra/runs/mp5w62t0
+/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/lightning_fabric/plugins/environments/slurm.py:204: The `srun` command is available on your system but is not used. HINT: If your intention is to run Lightning on SLURM, prepend your python command with `srun` like so: srun python routines/train.py num_workers=16 name=partial_traini ...
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+HPU available: False, using: 0 HPUs
+Running in `fast_dev_run` mode: will run the requested loop using 1 batch(es). Logging and checkpointing is suppressed.
+You are using a CUDA device ('NVIDIA L40') that has Tensor Cores. To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+
+  | Name                  | Type                 | Params | Mode 
+-----------------------------------------------------------------------
+0 | interpolant_scheduler | InterpolantScheduler | 0      | train
+1 | vector_field          | VectorField          | 3.4 M  | train
+-----------------------------------------------------------------------
+3.4 M     Trainable params
+0         Non-trainable params
+3.4 M     Total params
+13.422    Total estimated model params size (MB)
+365       Modules in train mode
+0         Modules in eval mode
+⚛ Instantiating datamodule <omtra.dataset.data_module.MultiTaskDataModule>
+⚛ Instantiating model <omtra.models.omtra.OMTRA>
+Warning: no wandb run found. Setting previous sample counts to 0.
+Instantiating callback <pytorch_lightning.callbacks.TQDMProgressBar>
+Training: |          | 0/? [00:00<?, ?it/s]Training:   0%|          | 0/1 [00:00<?, ?it/s]Epoch 0:   0%|          | 0/1 [00:00<?, ?it/s] Epoch 0: 100%|██████████| 1/1 [00:00<00:00,  1.11it/s]Epoch 0: 100%|██████████| 1/1 [00:00<00:00,  1.11it/s, train_total_loss=7.660]
+Validation: |          | 0/? [00:00<?, ?it/s][A
+Validation:   0%|          | 0/1 [00:00<?, ?it/s][A
+Validation DataLoader 0:   0%|          | 0/1 [00:00<?, ?it/s][A
+Validation DataLoader 0: 100%|██████████| 1/1 [01:11<00:00,  0.01it/s][A
+                                                                      [AEpoch 0: 100%|██████████| 1/1 [01:20<00:00,  0.01it/s, train_total_loss=7.660]Epoch 0: 100%|██████████| 1/1 [01:20<00:00,  0.01it/s, train_total_loss=7.660]`Trainer.fit` stopped: `max_steps=1` reached.
+Epoch 0: 100%|██████████| 1/1 [01:20<00:00,  0.01it/s, train_total_loss=7.660]
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33mpartial_training_cond_all_sample_cond[0m at: [34mhttps://wandb.ai/koes-group/omtra/runs/mp5w62t0[0m

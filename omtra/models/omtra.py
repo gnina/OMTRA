@@ -236,6 +236,11 @@ class OMTRA(pl.LightningModule):
                 # commit=False
             )
 
+
+        if sys_data is not None and "pharmit_library" in sys_data:
+            p = torch.rand(1).item()
+            if p < 0.3:
+                sys_data["pharmit_library"] = None
         # forward pass
         losses = self(g, task_name, sys_data=sys_data)
 
@@ -717,6 +722,8 @@ class OMTRA(pl.LightningModule):
             chemspace_vector =  sys_data['pharmit_library'],
             **itg_kwargs
         )
+
+
 
         if visualize:
             g, per_graph_traj = itg_result
