@@ -142,7 +142,9 @@ def train(cfg: DictConfig):
         
     trainer = pl.Trainer(
         logger=wandb_logger,
+        fast_dev_run = False,
         **cfg.trainer,
+  
         callbacks=callbacks,
     )
     

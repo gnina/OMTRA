@@ -1,0 +1,161 @@
+[rank: 0] Seed set to 42
+wandb: Currently logged in as: jc200108 (koes-group). Use `wandb login --relogin` to force relogin
+wandb: Using wandb-core as the SDK backend.  Please refer to https://wandb.me/wandb-core for more information.
+wandb: Tracking run with wandb version 0.19.4
+wandb: Run data is saved locally in ./wandb/run-20250617_172928-10ytrvj6
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run ph5050_fullpharm_no_cond
+wandb: ⭐️ View project at https://wandb.ai/koes-group/omtra
+wandb: 🚀 View run at https://wandb.ai/koes-group/omtra/runs/10ytrvj6
+/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/lightning_fabric/plugins/environments/slurm.py:204: The `srun` command is available on your system but is not used. HINT: If your intention is to run Lightning on SLURM, prepend your python command with `srun` like so: srun python routines/train.py num_workers=4 name=ph5050_fullphar ...
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+HPU available: False, using: 0 HPUs
+You are using a CUDA device ('NVIDIA L40') that has Tensor Cores. To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+
+  | Name                  | Type                 | Params | Mode 
+-----------------------------------------------------------------------
+0 | interpolant_scheduler | InterpolantScheduler | 0      | train
+1 | vector_field          | VectorField          | 3.4 M  | train
+-----------------------------------------------------------------------
+3.4 M     Trainable params
+0         Non-trainable params
+3.4 M     Total params
+13.422    Total estimated model params size (MB)
+365       Modules in train mode
+0         Modules in eval mode
+⚛ Instantiating datamodule <omtra.dataset.data_module.MultiTaskDataModule>
+⚛ Instantiating model <omtra.models.omtra.OMTRA>
+Warning: no wandb run found. Setting previous sample counts to 0.
+Instantiating callback <pytorch_lightning.callbacks.TQDMProgressBar>
+Sanity Checking: |          | 0/? [00:00<?, ?it/s]Sanity Checking:   0%|          | 0/2 [00:00<?, ?it/s]Sanity Checking DataLoader 0:   0%|          | 0/2 [00:00<?, ?it/s]AtomValence: 759, disconnected: 876, no error: 117, total: 876
+Sanity Checking DataLoader 0: 100%|██████████| 2/2 [02:42<00:00,  0.01it/s]                                                                           Training: |          | 0/? [00:00<?, ?it/s]Training:   0%|          | 0/300000 [00:00<?, ?it/s]Epoch 0:   0%|          | 0/300000 [00:00<?, ?it/s] terminate called without an active exception
+terminate called without an active exception
+Error executing job with overrides: ['num_workers=4', 'name=ph5050_fullpharm_no_cond', 'task_group=pharmit5050', 'edges_per_batch=400000', 'trainer.val_check_interval=600', 'max_steps=300000', 'trainer.limit_val_batches=2', 'model.vector_field.convs_per_update=1', 'model.vector_field.n_molecule_updates=4', 'pharmit_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit', 'pharmit_library_conditioning=False', 'plinder_path=/net/galaxy/home/koes/tjkatz/OMTRA/data/plinder']
+Traceback (most recent call last):
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 47, in _call_and_handle_interrupt
+    return trainer_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 575, in _fit_impl
+    self._run(model, ckpt_path=ckpt_path)
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 982, in _run
+    results = self._run_stage()
+              ^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 1026, in _run_stage
+    self.fit_loop.run()
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/fit_loop.py", line 216, in run
+    self.advance()
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/fit_loop.py", line 455, in advance
+    self.epoch_loop.run(self._data_fetcher)
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/training_epoch_loop.py", line 150, in run
+    self.advance(data_fetcher)
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/training_epoch_loop.py", line 320, in advance
+    batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 192, in run
+    self._optimizer_step(batch_idx, closure)
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 270, in _optimizer_step
+    call._call_lightning_module_hook(
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 171, in _call_lightning_module_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/core/module.py", line 1302, in optimizer_step
+    optimizer.step(closure=optimizer_closure)
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/core/optimizer.py", line 154, in step
+    step_output = self._strategy.optimizer_step(self._optimizer, closure, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/strategies/strategy.py", line 239, in optimizer_step
+    return self.precision_plugin.optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/plugins/precision/precision.py", line 123, in optimizer_step
+    return optimizer.step(closure=closure, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/torch/optim/optimizer.py", line 484, in wrapper
+    out = func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/torch/optim/optimizer.py", line 89, in _use_grad
+    ret = func(self, *args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/torch/optim/adam.py", line 205, in step
+    loss = closure()
+           ^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/plugins/precision/precision.py", line 109, in _wrap_closure
+    closure_result = closure()
+                     ^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 146, in __call__
+    self._result = self.closure(*args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 131, in closure
+    step_output = self._step_fn()
+                  ^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 319, in _training_step
+    training_step_output = call._call_strategy_hook(trainer, "training_step", *kwargs.values())
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 323, in _call_strategy_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/strategies/strategy.py", line 391, in training_step
+    return self.lightning_module.training_step(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/dali/home/mscbio/jmc530/OMTRA/omtra/models/omtra.py", line 240, in training_step
+    losses = self(g, task_name, sys_data=sys_data)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/dali/home/mscbio/jmc530/OMTRA/omtra/models/omtra.py", line 340, in forward
+    chemspace_vector = sys_data['pharmit_library'],
+                       ~~~~~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'pharmit_library'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/net/galaxy/home/koes/jmc530/OMTRA/routines/train.py", line 183, in main
+    _ = train(cfg)
+        ^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/OMTRA/routines/train.py", line 151, in train
+    trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("checkpoint"))
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 539, in fit
+    call._call_and_handle_interrupt(
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 68, in _call_and_handle_interrupt
+    trainer._teardown()
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 1009, in _teardown
+    loop.teardown()
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/fit_loop.py", line 502, in teardown
+    self._data_fetcher.teardown()
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/loops/fetchers.py", line 82, in teardown
+    self._combined_loader.reset()
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/utilities/combined_loader.py", line 367, in reset
+    _shutdown_workers_and_reset_iterator(iterable)
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/pytorch_lightning/utilities/combined_loader.py", line 400, in _shutdown_workers_and_reset_iterator
+    dataloader._iterator._shutdown_workers()
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 1441, in _shutdown_workers
+    w.join(timeout=_utils.MP_STATUS_CHECK_INTERVAL)
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/multiprocessing/process.py", line 149, in join
+    res = self._popen.wait(timeout)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/multiprocessing/popen_fork.py", line 40, in wait
+    if not wait([self.sentinel], timeout):
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/multiprocessing/connection.py", line 947, in wait
+    ready = selector.select(timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/selectors.py", line 415, in select
+    fd_event_list = self._selector.poll(timeout)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/torch/utils/data/_utils/signal_handling.py", line 67, in handler
+    _error_if_any_worker_fails()
+RuntimeError: DataLoader worker (pid 948371) is killed by signal: Aborted. 
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33mph5050_fullpharm_no_cond[0m at: [34mhttps://wandb.ai/koes-group/omtra/runs/10ytrvj6[0m
+Epoch 0:   0%|          | 0/300000 [00:08<?, ?it/s]

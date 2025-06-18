@@ -19,6 +19,7 @@ from omtra.tasks.modalities import (
     Modality,
     name_to_modality,
 )
+from omtra.models.library_embedder import LibraryEmbedder
 from omtra.utils.ctmc import purity_sampling
 from omtra.utils.embedding import get_time_embedding
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
@@ -180,7 +181,8 @@ class VectorField(nn.Module):
         self.task_embedding = nn.Embedding(
             len(td_coupling.task_space), self.task_embedding_dim
         )
-
+        
+        self.library_embedder = LibraryEmbedder(num_libs = 14,emb_dim = n_hidden_scalars)
         # for each node type, create a function for initial node embeddings
         self.scalar_embedding = nn.ModuleDict()
         for ntype in self.node_types:
@@ -354,6 +356,7 @@ class VectorField(nn.Module):
         t: torch.Tensor,
         node_batch_idx: Dict[str, torch.Tensor],
         upper_edge_mask: Dict[str, torch.Tensor],
+        chemspace_vector = None,
         apply_softmax=False,
         remove_com=False,
         prev_dst_dict=None,
@@ -444,7 +447,9 @@ class VectorField(nn.Module):
             task_idx
         )  # tensor of shape (batch_size, token_dim)
 
-        # add time and task embedding to node scalar features
+        # add time and task embedding to node scalar features TODO 
+        
+        
         for ntype in node_scalar_features.keys():
             # add time embedding to node scalar features
             if self.time_embedding_dim == 1:
@@ -467,9 +472,32 @@ class VectorField(nn.Module):
             node_scalar_features[ntype] = self.scalar_embedding[ntype](
                 node_scalar_features[ntype]
             )
-
+        
+        ## Add the chemical space conditioning here TODO 
+        # if chem_space_vector TODO
+        
+        if chemspace_vector is not None:
+            
+            chemspace_embeddings = self.library_embedder(chemspace_vector)
+            for ntype in node_scalar_features.keys(): # shouldnt this outer loop loop over graph for n_graphs
+        
+                
+                # ─── add chemical‐space conditioning ───
+                
+                chem_emb_for_nodes = chemspace_embeddings[node_batch_idx[ntype]]
+                
+                # Add onto node features, ASK IAN, why indexing by ntype into node_batch_idx
+                node_scalar_features[ntype] = node_scalar_features[ntype] + chem_emb_for_nodes
+            
+        
         if self.self_conditioning and prev_dst_dict is None:
             train_self_condition = self.training and (torch.rand(1) > 0.5).item()
+            # debug prints
+           
+            # print(">>> time_embeddings.weight.shape:", self.time_embeddings.weight.shape)
+       
+            # print(">>> time_embeddings shape:", self.time_embeddings.shape)
+
             inference_first_step = not self.training and (t == 0).all().item()
 
             # TODO: actually at the first inference step we can just not apply self conditioning, need to test performance effect
@@ -747,6 +775,7 @@ class VectorField(nn.Module):
         g: dgl.DGLHeteroGraph,
         task: Task,
         upper_edge_mask: Dict[str, torch.Tensor],
+        chemspace_vector = None , #TODO add type insurance
         n_timesteps: int = 250,
         stochasticity: float = 30.0,
         cat_temp_func: Optional[Callable] = None,
@@ -773,6 +802,11 @@ class VectorField(nn.Module):
         alpha_t, beta_t = self.interpolant_scheduler.weights(t, task)
         alpha_t_prime, beta_t_prime = self.interpolant_scheduler.weight_derivative(t, task)
 
+
+
+                
+
+            
         if visualize:
             traj = defaultdict(list)
             def add_frame(g, traj=traj, task=task, first_frame=False):
@@ -806,6 +840,7 @@ class VectorField(nn.Module):
             add_frame(g, first_frame=True)
 
         node_batch_idxs, edge_batch_idxs = get_batch_idxs(g)
+        
 
         dst_dict = None
         for s_idx in range(1, t.shape[0]):
@@ -844,6 +879,7 @@ class VectorField(nn.Module):
                 stochasticity=stochasticity,
                 last_step=last_step,
                 prev_dst_dict=dst_dict,
+                chemspace_vector = chemspace_vector,
                 **kwargs,
             )
 
@@ -907,6 +943,7 @@ class VectorField(nn.Module):
         prev_dst_dict: Optional[Dict] = None,
         stochasticity: float = 8.0,
         last_step: bool = False,
+        chemspace_vector= None,
     ):
         device = g.device
 
@@ -925,6 +962,7 @@ class VectorField(nn.Module):
             apply_softmax=True,
             remove_com=False,  # TODO: is this ...should this be set to True?
             prev_dst_dict=prev_dst_dict,
+            chemspace_vector = chemspace_vector,
         )
 
         dt = s_i - t_i

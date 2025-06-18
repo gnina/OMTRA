@@ -294,7 +294,7 @@ class OMTRA(pl.LightningModule):
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device, coms=coms)
+        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device, coms=coms,sys_data=sys_data)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         # TODO: compute evals and log them / do we want to log them separately for each task?
@@ -317,10 +317,7 @@ class OMTRA(pl.LightningModule):
         # TODO: what are time sampling methods used in other papers?
         t = torch.rand(g.batch_size, device=g.device).float()
 
-        print("G")
-        print(g)
-        print("sys_data")
-        print(sys_data['pharmit_library'])
+        
         # maybe not necessary right now, perhaps after we add edges appropriately
         node_batch_idxs, edge_batch_idxs = get_batch_idxs(g)
         lig_ue_mask = get_upper_edge_mask(g, "lig_to_lig")
@@ -332,7 +329,12 @@ class OMTRA(pl.LightningModule):
         g = self.sample_conditional_path(
             g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask
         )
+        
+        chemspace_vector = None
 
+        
+        if sys_data is not None and "pharmit_library" in sys_data:
+            chemspace_vector = sys_data["pharmit_library"]
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
             g,
@@ -340,7 +342,8 @@ class OMTRA(pl.LightningModule):
             t,
             node_batch_idx=node_batch_idxs,
             upper_edge_mask=upper_edge_mask,
-        )
+            chemspace_vector = chemspace_vector,
+            )
 
         targets = {}
         for modality in task_class.modalities_generated:
@@ -473,6 +476,7 @@ class OMTRA(pl.LightningModule):
         coms: Optional[
             torch.Tensor
         ] = None,  # center of mass for adding ligands/pharms to systems
+        sys_data=None, # system data to carry conditioning flags
         unconditional_n_atoms_dist: str = "plinder",  # distribution to use for sampling number of atoms in unconditional tasks
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
@@ -528,6 +532,33 @@ class OMTRA(pl.LightningModule):
                     com_i = coms[idx]
 
                 coms_flat.extend([com_i] * n_replicates)
+                
+        #sys_data["chempace_conditioning"] i Tensor of shape (len(g_list), C)
+        
+        if sys_data is not None and "pharmit_library" in sys_data:
+            
+            chem_cond = sys_data["pharmit_library"]
+            if g_list is None:
+                
+                # fully unconditional: just repeat the single vector
+                chem_cond_flat = chem_cond.repeat(n_replicates, *([1] * (chem_cond.ndim - 1)))
+            else:
+                
+                # conditional: tile each row n_replicates times
+                # chem_cond:   [ G, C ]
+                # chem_cond_flat: [ G*n_replicates, C ]
+                chem_cond_flat = chem_cond.repeat_interleave(n_replicates, dim=0)
+        else:
+            
+            chem_cond_flat = None
+
+
+        # save it back into sys data
+        sys_data["pharmit_library"] = chem_cond_flat
+        # now you have:
+        #   len(g_flat) == len(coms_flat) == (len(g_list) or 1) * n_replicates
+        #   and if present, chem_cond_flat.shape[0] matches that same length
+
 
         # TODO: sample number of ligand atoms
         add_ligand = "ligand_identity" in groups_generated
@@ -683,6 +714,7 @@ class OMTRA(pl.LightningModule):
             g,
             task,
             upper_edge_mask=upper_edge_mask,
+            chemspace_vector =  sys_data['pharmit_library'],
             **itg_kwargs
         )
 

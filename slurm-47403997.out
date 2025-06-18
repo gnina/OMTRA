@@ -1,0 +1,33 @@
+[rank: 0] Seed set to 42
+wandb: Currently logged in as: jc200108 (koes-group). Use `wandb login --relogin` to force relogin
+wandb: Using wandb-core as the SDK backend.  Please refer to https://wandb.me/wandb-core for more information.
+wandb: Tracking run with wandb version 0.19.4
+wandb: Run data is saved locally in ./wandb/run-20250618_102152-og9zdmye
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run ph5050_fullpharm_no_cond
+wandb: ⭐️ View project at https://wandb.ai/koes-group/omtra
+wandb: 🚀 View run at https://wandb.ai/koes-group/omtra/runs/og9zdmye
+/net/galaxy/home/koes/jmc530/.conda/envs/omtra/lib/python3.11/site-packages/lightning_fabric/plugins/environments/slurm.py:204: The `srun` command is available on your system but is not used. HINT: If your intention is to run Lightning on SLURM, prepend your python command with `srun` like so: srun python routines/train.py num_workers=16 name=ph5050_fullpha ...
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+HPU available: False, using: 0 HPUs
+You are using a CUDA device ('NVIDIA L40') that has Tensor Cores. To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+
+  | Name                  | Type                 | Params | Mode 
+-----------------------------------------------------------------------
+0 | interpolant_scheduler | InterpolantScheduler | 0      | train
+1 | vector_field          | VectorField          | 3.4 M  | train
+-----------------------------------------------------------------------
+3.4 M     Trainable params
+0         Non-trainable params
+3.4 M     Total params
+13.422    Total estimated model params size (MB)
+365       Modules in train mode
+0         Modules in eval mode
+⚛ Instantiating datamodule <omtra.dataset.data_module.MultiTaskDataModule>
+⚛ Instantiating model <omtra.models.omtra.OMTRA>
+Warning: no wandb run found. Setting previous sample counts to 0.
+Instantiating callback <pytorch_lightning.callbacks.TQDMProgressBar>
+Sanity Checking: |          | 0/? [00:00<?, ?it/s]Sanity Checking:   0%|          | 0/2 [00:00<?, ?it/s]Sanity Checking DataLoader 0:   0%|          | 0/2 [00:00<?, ?it/s]AtomValence: 739, disconnected: 876, no error: 137, total: 876
+Sanity Checking DataLoader 0: 100%|██████████| 2/2 [02:42<00:00,  0.01it/s]                                                                           Training: |          | 0/? [00:00<?, ?it/s]Training:   0%|          | 0/300000 [00:00<?, ?it/s]Epoch 0:   0%|          | 0/300000 [00:00<?, ?it/s] Epoch 0:   0%|          | 20/300000 [00:15<66:13:30,  1.26it/s]Epoch 0:   0%|          | 20/300000 [00:15<66:14:50,  1.26it/s, v_num=dmye, train_total_loss=3.540]
