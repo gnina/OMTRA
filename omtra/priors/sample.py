@@ -18,11 +18,6 @@ def sample_priors(g: dgl.DGLHeteroGraph, task_class: Task, prior_fns: dict, trai
         elif not modality.is_node and g.num_edges(modality.entity_name) == 0:
             continue
 
-        # TODO: we implicity encode behavior based on the prior name here and in the target_depenednt case; something better than this?
-        if "apo" in prior_name:
-            # assume that apo structure data was already added to the graph and doesn't need to be sampled here
-            continue
-
         # fetch the target data from the graph object
         g_data_loc = g.nodes if modality.is_node else g.edges
 
@@ -41,7 +36,9 @@ def sample_priors(g: dgl.DGLHeteroGraph, task_class: Task, prior_fns: dict, trai
             raise ValueError(f'unaccounted for modality {modality.name}')
         
         # determine args for the prior function
-        if training or 'target_dependent' in prior_name:
+        if 'apo' in prior_name:
+            args = [g_data_loc[modality.entity_name].data[f'{modality.data_key}_0'], ]
+        elif training or 'target_dependent' in prior_name:
             target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
             args = [target_data, ]
             if modality.is_categorical:
