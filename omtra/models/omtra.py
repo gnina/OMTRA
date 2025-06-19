@@ -298,6 +298,8 @@ class OMTRA(pl.LightningModule):
         metrics = {}
         for eval in self.eval_config.get(task_name, []):
             for eval_name, config  in eval.items():
+                if not config.get("train", False):
+                    continue
                 eval_fn = get_eval(eval_name)
                 metrics.update(eval_fn(samples, config.get("params", {})))
         
