@@ -321,7 +321,9 @@ class SampledSystem:
             bond_list = self.build_bond_list(bond_src_idxs, bond_dst_idxs, bond_types, atom_array.array_length())
             atom_array.bonds = bond_list
         else:
-            atom_array.bonds = struc.connect_via_distances(atom_array)
+            atom_array.bonds = struc.connect_via_residue_names(atom_array)
+        
+        atom_array.set_annotation("atom_name", struc.create_atom_names(atom_array))
             
         return atom_array
 
