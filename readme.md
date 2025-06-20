@@ -31,8 +31,7 @@ chmod +x build_env.sh
 - [ ] why does going 4->6 layers break the model?
 - [ ] test resume functionality
 - [ ] aux losses; interaction loss
-- [ ] each conv can be a self-conv followed by interacton conv
-- [ ] sampling method should be aware of replicates/ground truths/fixed features. conditioning structures (pharm, prot) should be written once per system; ground truth should be written if available.
+- [ ] each conv can be a self-conv followed by interaction conv
 - [ ] add shape-color similarity for docking evaluation
 - [ ] use sc-rdkit for denovo evals: https://github.com/oxpig/DeLinker/blob/master/analysis/calc_SC_RDKit.py
 - [ ] reproduce loss weightings from flowmol
