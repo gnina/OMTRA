@@ -294,6 +294,7 @@ class SampledSystem:
         chain_id,
         hetero,
         charge=None,
+        include_bonds: bool = True,
         bond_src_idxs=None,
         bond_dst_idxs=None,
         bond_types=None,
@@ -313,6 +314,10 @@ class SampledSystem:
         if charge is not None:
             # TODO: why is this a generator object ?
             atom_array.set_annotation("charge", charge)
+        
+        if not include_bonds:
+            return atom_array
+        
         if (
             bond_src_idxs is not None
             and bond_dst_idxs is not None
@@ -321,13 +326,11 @@ class SampledSystem:
             bond_list = self.build_bond_list(bond_src_idxs, bond_dst_idxs, bond_types, atom_array.array_length())
             atom_array.bonds = bond_list
         else:
-            atom_array.bonds = struc.connect_via_residue_names(atom_array)
-        
-        atom_array.set_annotation("atom_name", struc.create_atom_names(atom_array))
+            atom_array.bonds = struc.connect_via_distances(self.get_protein_array(reference=True, include_bonds=False))
             
         return atom_array
 
-    def get_protein_array(self, g=None, reference: bool = False):
+    def get_protein_array(self, g=None, reference: bool = False, include_bonds: bool = True):
         coords, atom_names, elements, res_ids, res_names, chain_ids, hetero = (
             self.extract_protdata_from_graph(g=g, reference=reference)
         )
@@ -339,6 +342,7 @@ class SampledSystem:
             res_name=res_names,
             chain_id=chain_ids,
             hetero=hetero,
+            include_bonds=include_bonds,
         )
         return arr
 
