@@ -388,9 +388,13 @@ def main(args):
                 system.write_pharmacophore(pharm_xt_file, trajectory=True, endpoint=False)
                 system.write_pharmacophore(pharm_xhat_file, trajectory=True, endpoint=True)
 
-    if args.metrics:
-        eval_fn = get_eval(task_name)
-        metrics = eval_fn(sampled_systems)
+    if args.metrics and model.eval_config is not None:
+        metrics = {}
+        for eval in model.eval_config.get(task_name, []):
+            for eval_name, config  in eval.items():
+                eval_fn = get_eval(eval_name)
+                metrics.update(eval_fn(sampled_systems, config.get("params", {})))
+                
         metrics_file = output_dir / f"{task_name}_metrics.json"
         with open(metrics_file, 'w') as f:
             json.dump(metrics, f)

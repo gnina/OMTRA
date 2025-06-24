@@ -63,6 +63,7 @@ class SampledSystem:
         self.bond_type_map = bond_type_map
         self.charge_map = charge_map
         self.protein_element_map = protein_element_map
+        self._cached_protein_array = None
         
         self.rdkit_ligand = None
         self.rdkit_ref_ligand = None
@@ -294,6 +295,7 @@ class SampledSystem:
         chain_id,
         hetero,
         charge=None,
+        include_bonds: bool = True,
         bond_src_idxs=None,
         bond_dst_idxs=None,
         bond_types=None,
@@ -313,6 +315,10 @@ class SampledSystem:
         if charge is not None:
             # TODO: why is this a generator object ?
             atom_array.set_annotation("charge", charge)
+        
+        if not include_bonds:
+            return atom_array
+        
         if (
             bond_src_idxs is not None
             and bond_dst_idxs is not None
@@ -321,11 +327,14 @@ class SampledSystem:
             bond_list = self.build_bond_list(bond_src_idxs, bond_dst_idxs, bond_types, atom_array.array_length())
             atom_array.bonds = bond_list
         else:
-            atom_array.bonds = struc.connect_via_distances(atom_array)
+            atom_array.bonds = struc.connect_via_distances(self.get_protein_array(reference=True, include_bonds=False))
             
         return atom_array
 
-    def get_protein_array(self, g=None, reference: bool = False):
+    def get_protein_array(self, g=None, reference: bool = False, include_bonds: bool = True):
+        if g is None and reference and include_bonds:
+            if self._cached_protein_array is not None:
+                return self._cached_protein_array
         coords, atom_names, elements, res_ids, res_names, chain_ids, hetero = (
             self.extract_protdata_from_graph(g=g, reference=reference)
         )
@@ -337,7 +346,10 @@ class SampledSystem:
             res_name=res_names,
             chain_id=chain_ids,
             hetero=hetero,
+            include_bonds=include_bonds,
         )
+        if g is None and reference and include_bonds:
+            self._cached_protein_array = arr
         return arr
 
     def get_rdkit_ligand(self) -> Union[None, Chem.Mol]:
@@ -506,21 +518,21 @@ class SampledSystem:
         else:
             feat_suffix = "1"
 
-        coords = self.g.nodes["prot_atom"].data[f"x_{feat_suffix}"].numpy()
-        atypes = self.g.nodes["prot_atom"].data[f"a_1_true"].numpy()
+        coords = g.nodes["prot_atom"].data[f"x_{feat_suffix}"].numpy()
+        atypes = g.nodes["prot_atom"].data[f"a_1_true"].numpy()
         atom_type_map_array = np.array(self.protein_atom_type_map, dtype="U3")
         atom_names = atom_type_map_array[atypes]
 
-        eltypes = self.g.nodes["prot_atom"].data[f"e_1_true"].numpy()
+        eltypes = g.nodes["prot_atom"].data[f"e_1_true"].numpy()
         element_type_map_array = np.array(self.protein_element_map, dtype="U2")
         elements = element_type_map_array[eltypes]
 
-        res_ids = self.g.nodes["prot_atom"].data["res_id"].numpy()
-        res_types = self.g.nodes["prot_atom"].data["res_names"].numpy()
+        res_ids = g.nodes["prot_atom"].data["res_id"].numpy()
+        res_types = g.nodes["prot_atom"].data["res_names"].numpy()
         res_type_map_array = np.array(self.residue_map, dtype="U3")
         res_names = res_type_map_array[res_types]
 
-        chain_ids = self.g.nodes["prot_atom"].data["chain_id"].numpy()
+        chain_ids = g.nodes["prot_atom"].data["chain_id"].numpy()
         hetero = np.full_like(atom_names, False, dtype=bool)
         return coords, atom_names, elements, res_ids, res_names, chain_ids, hetero
 
