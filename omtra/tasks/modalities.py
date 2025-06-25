@@ -6,7 +6,7 @@ from omtra.constants import (
     charge_map,
     hybridization_map,
     max_impl_H,
-    max_frags,
+    extra_feats_map,
     npnde_atom_type_map,
     ph_idx_to_type,
     residue_map,
@@ -119,17 +119,6 @@ Modality.register(MODALITY_REGISTER,
     data_key='chiral',
     n_categories=2, 
 )
-
-
-Modality.register(MODALITY_REGISTER,
-    name='lig_frag',
-    group='ligand_identity_extra',
-    graph_entity='node',
-    entity_name='lig',
-    data_key='frag',
-    n_categories=max_frags,
-)
-
 
 Modality.register(MODALITY_REGISTER,
     name='lig_e',

@@ -132,3 +132,4 @@ class BlockWriter:
 
             # write features to zarr store
             self.new_feats_array[start_idx:end_idx] = atom_props
+            

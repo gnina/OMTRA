@@ -26,7 +26,7 @@ def parse_args():
     p.add_argument('--block_size', type=int, default=10000, help='Number of ligands to process in a block.')
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--output_dir', type=Path, help='Output directory for processed data.', default=Path('./outputs/phase2'))
-
+ 
     return p.parse_args()
 
 
@@ -80,7 +80,7 @@ def process_pharmit_block(block_start_idx: int, block_size: int):
             contig_end_idx = end_idx  # always update with latest good molecule
 
         except Exception as e:
-            print(f"Failed to compute features for molecule {idx}: {e}. Creating new contig from {contig_start_idx}-{contig_end_idx}")
+            print(f"Failed to compute features for molecule {idx}: {e}.")
             failed_idxs.append(idx)
 
             # Close current contiguous chunk (if any)
@@ -103,17 +103,15 @@ def process_pharmit_block(block_start_idx: int, block_size: int):
     return new_feats, contig_idxs, failed_idxs
 
 
-
 def worker_initializer(pharmit_path, store_name):
     """ Sets pharmit dataset instance as a global variable """
     global pharmit_dataset
 
     cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
-    train_dataset = datamodule.load_dataset(store_name)
-    pharmit_dataset = train_dataset.datasets['pharmit']
-
-    
+    dataset = datamodule.load_dataset(store_name)
+    pharmit_dataset = dataset.datasets['pharmit']
+ 
 
 def save_and_update(result, block_writer, pbar, output_dir):
     """ Callback to new features for a block and update progress """
@@ -127,19 +125,15 @@ def save_and_update(result, block_writer, pbar, output_dir):
         raise
 
     if failed_idxs:
-        failed_path = Path(output_dir) / "failed_ligands.txt"
+        failed_path = output_dir / "failed_ligands.txt"
         with open(failed_path, 'a') as f:
             for fid in failed_idxs:
                 f.write(f"{fid}\n")
-
     pbar.update(1)
 
 
 def error_and_update(error, pbar, error_counter, output_dir):
-    """ Handle errors, update error counter and the progress bar """
-
-    print(f"Error: {error}")
-    print(error.traceback if hasattr(error, "traceback") else traceback.format_exc())
+    """ Handle errors, update error counter, and the progress bar """
     
     error_counter[0] += 1
     pbar.set_postfix({'errors': error_counter[0]})
@@ -169,22 +163,23 @@ def run_parallel(pharmit_path: Path,
     # Load Pharmit dataset (also needed for number of ligands)
     cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
-    train_dataset = datamodule.load_dataset(store_name)
-    pharmit_dataset = train_dataset.datasets['pharmit']
+    dataset = datamodule.load_dataset(store_name)
+    pharmit_dataset = dataset.datasets['pharmit']
 
     n_mols = len(pharmit_dataset)
     n_blocks = (n_mols + block_size - 1) // block_size
     print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
 
-    pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
+    #pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
+    pbar = tqdm(total=n_blocks-48660, desc="Processing", unit="blocks")
  
     error_counter = [0]
 
     with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(pharmit_path, store_name), maxtasksperchild=5) as pool:
         pending = []
 
-        for block_idx in range(n_blocks):
-
+        for block_idx in range(48660, n_blocks):
+            
             while len(pending) >= max_pending:
                 # Filter out jobs that have finished
                 pending = [r for r in pending if not r.ready()]
@@ -229,8 +224,8 @@ def run_single(pharmit_path: Path,
 
     cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
-    train_dataset = datamodule.load_dataset(store_name)
-    pharmit_dataset = train_dataset.datasets['pharmit']
+    dataset = datamodule.load_dataset(store_name)
+    pharmit_dataset = dataset.datasets['pharmit']
 
     n_mols = len(pharmit_dataset)
     n_blocks = (n_mols + block_size - 1) // block_size
@@ -239,27 +234,21 @@ def run_single(pharmit_path: Path,
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
     error_counter = [0]   # simple error counter
 
-    for block_idx in range(n_blocks):
-        block_start_idx = block_idx * block_size        
+    for block_idx in [20109]:
+        #block_start_idx = block_idx * block_size      
+        block_start_idx  = 201097850
         try:
             start_time = time.time()
-            new_feats, contig_idxs, failed_idxs = process_pharmit_block(block_start_idx, block_size)
+            result = process_pharmit_block(block_start_idx, block_size)
             processing_time = time.time() - start_time
             
             write_start = time.time()
-            block_writer.save_chunk(contig_idxs, new_feats)
+            save_and_update(result, block_writer, pbar, output_dir)
             write_time = time.time() - write_start
 
             print(f"[Block {block_idx}] "
                   f"Processing time: {processing_time:.2f}s | "
                   f"Write time: {write_time:.2f}s \n")
-
-            if failed_idxs:
-                failed_path = Path(output_dir) / 'failed_ligands.txt'
-                with open(failed_path, 'a') as f:
-                    for fid in failed_idxs:
-                        f.write(f"{fid}\n")
-
         except Exception as e:
             print(f"Error processing block {block_idx}: {e}")
             error_counter[0] += 1

@@ -7,13 +7,13 @@ from torch import nn
 import torch.nn.functional as F
 import torch.optim as optim
 from omtra.models.gvp import HeteroGVPConv, _rbf, _norm_no_nan
-from omtra.constants import lig_atom_type_map, charge_map, bond_type_map
+from omtra.constants import lig_atom_type_map, charge_map, bond_type_map, extra_feats_map
 from omtra.data.graph.utils import get_upper_edge_mask
 import pytorch_lightning as pl
 import hydra
 from pathlib import Path
 from typing import Optional
-    
+
 
 
 class Encoder(nn.Module):
@@ -21,6 +21,7 @@ class Encoder(nn.Module):
             a_embed_dim: int = 16,
             c_embed_dim: int = 8,
             e_embed_dim: int = 8,
+            extra_feats_embed_dim: int = 4,
             scalar_size: int = 128, 
             vector_size: int = 4, 
             num_gvp_layers: int = 3, 
@@ -28,7 +29,7 @@ class Encoder(nn.Module):
             rbf_dim: int = 10, 
             rbf_dmax: int = 32,
             mask_prob: float = 0.0,
-            include_extra_feats: bool = True):
+            use_extra_feats: bool = False):
         super(Encoder, self).__init__()
 
         self.mask_prob = mask_prob
@@ -37,18 +38,33 @@ class Encoder(nn.Module):
         self.latent_dim = latent_dim
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
-        self.include_extra_feats = include_extra_feats
+        self.use_extra_feats = use_extra_feats
 
 
         self.a_embedding = nn.Embedding(num_embeddings=len(lig_atom_type_map)+int(mask_prob>0), embedding_dim=a_embed_dim)
         self.c_embedding = nn.Embedding(num_embeddings=len(charge_map)+int(mask_prob>0), embedding_dim=c_embed_dim)
         self.e_embedding = nn.Embedding(num_embeddings=len(bond_type_map), embedding_dim=e_embed_dim)
+        
+        
+        if use_extra_feats:
+            extra_feats_embedding = {}
+
+            for feat, n_categories in extra_feats_map.items():
+                extra_feats_embedding[feat] =  nn.Embedding(num_embeddings=n_categories+int(mask_prob>0), embedding_dim=extra_feats_embed_dim)
+            
+            self.extra_feats_embedding = nn.ModuleDict(extra_feats_embedding) 
 
 
-        self.to_node_scalars = nn.Sequential(
-            nn.Linear(a_embed_dim + c_embed_dim, scalar_size),
-            nn.ReLU(),
-        )
+            self.to_node_scalars = nn.Sequential(
+                nn.Linear(a_embed_dim + c_embed_dim + len(extra_feats_map)*extra_feats_embed_dim, scalar_size),
+                nn.ReLU(),
+            )
+
+        else:
+            self.to_node_scalars = nn.Sequential(
+                nn.Linear(a_embed_dim + c_embed_dim, scalar_size),
+                nn.ReLU(),
+            )
         
         edge_feat_size = {'lig_to_lig': e_embed_dim}
         self.gvps = nn.ModuleList([HeteroGVPConv(node_types=['lig'],
@@ -82,12 +98,15 @@ class Encoder(nn.Module):
         atom_types[mask] = len(lig_atom_type_map)  # Set masked atom types to the last index (masked atom type)
         atom_charges[mask] = len(charge_map)  # Set masked atom charges to the last index (masked atom charge)
 
-        if self.include_extra_feats:
-            atom_impl_H =  g.nodes['lig'].data['impl_H'].clone()
-            atom_impl_H =  g.nodes['lig'].data['impl_H'].clone()
-            
         # embed discrete data
         node_scalar_inputs = [self.a_embedding(atom_types), self.c_embedding(atom_charges)]  # (n_nodes, a_embed_dim + c_embed_dim)
+            
+        if self.use_extra_feats:
+            for feat in extra_feats_map.keys():
+                extra_atom_feat = g.nodes['lig'].data[feat+'_1_true'].clone()
+                extra_atom_feat[mask] = extra_feats_map[feat]
+                node_scalar_inputs.append(self.extra_feats_embedding[feat](extra_atom_feat))  # (n_nodes, a_embed_dim + c_embed_dim + n_extra_feats * extra_feats_embed_dim)
+        
         scalar_feats = {
             'lig': self.to_node_scalars(torch.cat(node_scalar_inputs, dim=1))  # (n_nodes, scalar_size)
         }
@@ -132,7 +151,10 @@ class Encoder(nn.Module):
 
 
 class VectorQuantizer(nn.Module):
-    def __init__(self, num_embeddings, embedding_dim, commitment_cost):
+    def __init__(self, 
+                 num_embeddings: int,
+                 embedding_dim: int,
+                 commitment_cost: float):
         super(VectorQuantizer, self).__init__()
         
         self.embedding_dim = embedding_dim
@@ -176,7 +198,12 @@ class VectorQuantizer(nn.Module):
     
 
 class VectorQuantizerEMA(nn.Module):
-    def __init__(self, num_embeddings, embedding_dim, commitment_cost, decay, epsilon):
+    def __init__(self,
+                 num_embeddings: int,
+                 embedding_dim: int, 
+                 commitment_cost: float,
+                 decay: float = 0.99,
+                 epsilon: float = 1e-5):
         super(VectorQuantizerEMA, self).__init__()
         
         self.embedding_dim = embedding_dim
@@ -222,12 +249,11 @@ class VectorQuantizerEMA(nn.Module):
             dw = torch.matmul(encodings.t(), z_e)
             self.ema_w = nn.Parameter(self.ema_w * self.decay + (1 - self.decay) * dw)
             
-            self.embedding.weight = nn.Parameter(self.ema_w / self.ema_cluster_size.unsqueeze(1))
-            
+            self.embedding.weight = nn.Parameter(self.ema_w / self.ema_cluster_size.unsqueeze(1))      
 
         # Loss
         commitment_loss = F.mse_loss(quantized.detach(), z_e)
-        loss = self.commitment_cost * commitment_loss
+        loss = self.commitment_cost * commitment_loss   # NOTE: no vector quantization loss when using EMA codebook updates
         
         # Straight through estimator
         quantized = z_e + (quantized - z_e).detach()
@@ -245,20 +271,23 @@ class VectorQuantizerEMA(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, 
-                 latent_dim, 
-                 num_decod_hiddens, 
-                 num_bond_decod_hiddens,
-                 num_hidden_layers, 
-                 rbf_dmax=10,
-                 rbf_dim=32,
+                 latent_dim: int, 
+                 num_decod_hiddens: int, 
+                 num_bond_decod_hiddens: int,
+                 num_hidden_layers: int, 
+                 rbf_dmax: int = 10,
+                 rbf_dim: int = 32,
+                 use_extra_feats: bool = False
                  ):
         super(Decoder, self).__init__()
 
         self.n_atom_types = len(lig_atom_type_map)
         self.n_atom_charges = len(charge_map)
         self.n_bond_orders = len(bond_type_map)
+
         self.rbf_dmax = rbf_dmax
         self.rbf_dim = rbf_dim
+        self.use_extra_feats = use_extra_feats
 
 
         # Atom type and charge decoder
@@ -269,10 +298,12 @@ class Decoder(nn.Module):
             atom_layers.append(nn.Linear(num_decod_hiddens, num_decod_hiddens))
             atom_layers.append(nn.ReLU())
 
-        atom_layers.append(nn.Linear(num_decod_hiddens, self.n_atom_types + self.n_atom_charges))   # Final layer
+        if use_extra_feats:
+            atom_layers.append(nn.Linear(num_decod_hiddens, self.n_atom_types + self.n_atom_charges + sum(extra_feats_map.values())))   # Final layer
+        else:
+            atom_layers.append(nn.Linear(num_decod_hiddens, self.n_atom_types + self.n_atom_charges))   # Final layer
+        
         self.atom_decoder = nn.Sequential(*atom_layers) # Use nn.Sequential to define the entire model
-
-
         
         # Bond order decoder
         bond_layers = [nn.Linear(latent_dim+rbf_dim, num_bond_decod_hiddens),   # Initial layer
@@ -284,10 +315,9 @@ class Decoder(nn.Module):
 
         bond_layers.append(nn.Linear(num_bond_decod_hiddens, self.n_bond_orders))   # Final layer
         self.bond_decoder = nn.Sequential(*bond_layers) # Use nn.Sequential to define the entire model
-
     
 
-    def forward(self, g:dgl.DGLHeteroGraph, quantized: torch.Tensor):
+    def forward(self, g: dgl.DGLHeteroGraph, quantized: torch.Tensor):
 
         upper_edge_mask = get_upper_edge_mask(g, 'lig_to_lig')  # (num_edges,)
 
@@ -305,16 +335,28 @@ class Decoder(nn.Module):
         dists = _rbf(dists, D_min=0, D_max=self.rbf_dmax, D_count=self.rbf_dim)  # (P, rbf_dim)
 
         # project latent atom types to atom types and charges
-        scalar_feats_logits = self.atom_decoder(quantized)  # (num_atoms, num_atom_types + num_atom_charges)
-        atom_type_logits = scalar_feats_logits[:, :self.n_atom_types]    # (num_atoms, num_atom_types)
-        atom_charge_logits = scalar_feats_logits[:, self.n_atom_types:]  # (num_atoms, num_atom_charges)
+        scalar_feats_logits = self.atom_decoder(quantized)  # (num_atoms, num_atom_types + num_atom_charges (+ num_extra_feats))
+        logits = {}
+        
+        logit_sizes = {'atom_type': self.n_atom_types,
+                        'atom_charge': self.n_atom_charges}
+        
+        if self.use_extra_feats:
+            logit_sizes.update(extra_feats_map)
+            
+        start_idx = 0
+        
+        for feat, size in logit_sizes.items():
+            end_idx = start_idx + size
+            logits[feat] = scalar_feats_logits[:, start_idx:end_idx]
+            start_idx = end_idx
 
         # predict bond orders for pairs of atoms
         pair_node_feats = quantized[pair_indices[:, 0]] + quantized[pair_indices[:, 1]]  # (P, latent_dim)
         combined_quantized_dists = torch.concat([pair_node_feats, dists], dim=1) # (P, rbf_dim + latent_dim)
-        bond_order_logits = self.bond_decoder(combined_quantized_dists)    # (P, num_bond_orders)
+        logits['bond_order'] = self.bond_decoder(combined_quantized_dists)    # (P, num_bond_orders)
        
-        return atom_type_logits, atom_charge_logits, bond_order_logits
+        return logits
     
 
 
@@ -322,24 +364,26 @@ class LigandVQVAE(pl.LightningModule):
     def __init__(self,
                  scalar_size: int, # scalar features for message passing
                  vector_size: int, # vector features for message passing
-                 num_gvp_layers,
-                 latent_dim, # size of latent atom types
-                 num_embeddings, # size of the codebook
-                 num_decod_hiddens, 
-                 num_bond_decod_hiddens,
-                 num_hidden_layers, 
-                 commitment_cost,
-                 mask_prob,
-                 a_embed_dim=16,
-                 c_embed_dim=8,
-                 e_embed_dim=8,
-                 rbf_dim=32,
-                 rbf_dmax=10,                 
+                 num_gvp_layers: int,
+                 latent_dim: int, # size of latent atom types
+                 num_embeddings: int, # size of the codebook
+                 num_decod_hiddens: int, 
+                 num_bond_decod_hiddens: int,
+                 num_hidden_layers: int, 
+                 commitment_cost: int,
+                 mask_prob: int,
+                 a_embed_dim: int = 16,
+                 c_embed_dim: int = 8,
+                 e_embed_dim: int = 8,
+                 extra_feats_embed_dim: int = 8,
+                 rbf_dim: int = 32,
+                 rbf_dmax: int = 10,                 
                  k_checkpoints: int = 20,
                  checkpoint_interval: int = 1000,
-                 use_ema=True,
-                 decay=0.99,
-                 epsilon=1e-5,
+                 use_ema: bool =True,
+                 decay: float = 0.99,
+                 epsilon: float = 1e-5,
+                 use_extra_feats: bool = False,
                  og_run_dir: Optional[str] = None,):
                  
         super().__init__()
@@ -356,51 +400,44 @@ class LigandVQVAE(pl.LightningModule):
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
         self.mask_prob = mask_prob
+        self.use_extra_feats = use_extra_feats
 
-        """
-        self.a_accuracy_train = torchmetrics.Accuracy(task='multiclass', num_classes=len(lig_atom_type_map))
-        self.c_accuracy_train = torchmetrics.Accuracy(task='multiclass', num_classes=len(charge_map))
-        self.e_accuracy_train = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
-        self.e_nonzero_accuracy_train = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
-
-        self.a_accuracy_val = torchmetrics.Accuracy(task='multiclass', num_classes=len(lig_atom_type_map))
-        self.c_accuracy_val = torchmetrics.Accuracy(task='multiclass', num_classes=len(charge_map))
-        self.e_accuracy_val = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
-        self.e_nonzero_accuracy_val = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
-        """
         
         self.encoder = Encoder(
                                scalar_size=scalar_size, 
-                               vector_size = vector_size,
+                               vector_size= vector_size,
                                a_embed_dim= a_embed_dim,
                                c_embed_dim= c_embed_dim,
                                e_embed_dim= e_embed_dim,
+                               extra_feats_embed_dim= extra_feats_embed_dim,
                                num_gvp_layers= num_gvp_layers, 
-                               latent_dim=latent_dim,
-                               rbf_dim = rbf_dim,
-                               rbf_dmax = rbf_dmax,
-                               mask_prob = mask_prob)
+                               latent_dim= latent_dim,
+                               rbf_dim= rbf_dim,
+                               rbf_dmax= rbf_dmax,
+                               mask_prob= mask_prob,
+                               use_extra_feats= use_extra_feats)
 
 
         if use_ema: # Exponential Moving Average codebook vector updates
-            self.vq_vae = VectorQuantizerEMA(num_embeddings = num_embeddings,
-                                      embedding_dim = latent_dim,
-                                      commitment_cost = commitment_cost,
-                                      decay = decay,
-                                      epsilon = epsilon)
+            self.vq_vae = VectorQuantizerEMA(num_embeddings= num_embeddings,
+                                             embedding_dim= latent_dim,
+                                             commitment_cost= commitment_cost,
+                                             decay= decay,
+                                             epsilon= epsilon)
         else:
-            self.vq_vae = VectorQuantizer(num_embeddings = num_embeddings,
-                                      embedding_dim = latent_dim,
-                                      commitment_cost = commitment_cost)
+            self.vq_vae = VectorQuantizer(num_embeddings= num_embeddings,
+                                          embedding_dim= latent_dim,
+                                          commitment_cost= commitment_cost)
             
         
-        self.decoder = Decoder(latent_dim = latent_dim,
-                            num_decod_hiddens = num_decod_hiddens,
-                            num_bond_decod_hiddens = num_bond_decod_hiddens,
-                            num_hidden_layers = num_hidden_layers,
-                            rbf_dim=self.rbf_dim,
-                            rbf_dmax=self.rbf_dmax
-                            )
+        self.decoder = Decoder(latent_dim= latent_dim,
+                               num_decod_hiddens= num_decod_hiddens,
+                               num_bond_decod_hiddens= num_bond_decod_hiddens,
+                               num_hidden_layers= num_hidden_layers,
+                               rbf_dim= rbf_dim,
+                               rbf_dmax= rbf_dmax,
+                               use_extra_feats= use_extra_feats
+                               )
         
         self.save_hyperparameters()
         self.configure_loss_fns()
@@ -430,53 +467,45 @@ class LigandVQVAE(pl.LightningModule):
         """ Define loss functions used in training """
         self.atom_type_loss_fn = torch.nn.CrossEntropyLoss()
         self.atom_charge_loss_fn = torch.nn.CrossEntropyLoss()
+
         self.bond_order_loss_fn = torch.nn.CrossEntropyLoss()
 
+        if self.use_extra_feats:
+            self.extra_feats_loss_fn = nn.ModuleDict({'impl_H':  torch.nn.CrossEntropyLoss(),
+                                                      'aro': torch.nn.BCEWithLogitsLoss(),
+                                                      'hyb':  torch.nn.CrossEntropyLoss(),
+                                                      'ring': torch.nn.BCEWithLogitsLoss(),
+                                                      'chiral': torch.nn.BCEWithLogitsLoss()})
 
-    def forward(self, g: dgl.DGLHeteroGraph, is_train, mask_prob=None): 
+
+    def forward(self, g: dgl.DGLHeteroGraph, mask_prob=None): 
         """ Get relevant features from batched graph """
 
         target_atom_types = g.nodes['lig'].data['a_1_true']  # (n_nodes,)
         target_atom_charges = g.nodes['lig'].data['c_1_true']  # (n_nodes,)
         upper_edge_mask = get_upper_edge_mask(g, 'lig_to_lig')  # (n_edges,)
-        target_bond_orders = g.edges['lig_to_lig'].data['e_1_true'][upper_edge_mask]  # (n_edges,)
+        target_bond_orders = g.edges['lig_to_lig'].data['e_1_true'][upper_edge_mask]  # (n_edges,)   
 
-
-        """ Pass to VQ-VAE model """
+        ####
+        # Pass to VQ-VAE model
+        ####
         z_e, _ = self.encoder(g, mask_prob=mask_prob)   # Encoding
-
         loss, z_d, _, perplexity, num_unique_codes = self.vq_vae(z_e)    # Vector Quantization
-        
-        atom_type_logits, atom_charge_logits, bond_order_logits = self.decoder(g, z_d)    # Decoding
+        logits = self.decoder(g, z_d)    # Decoding
 
-        atom_type_loss = self.atom_type_loss_fn(atom_type_logits, target_atom_types)
-        atom_charge_loss = self.atom_charge_loss_fn(atom_charge_logits, target_atom_charges)
-        bond_order_loss = self.bond_order_loss_fn(bond_order_logits, target_bond_orders)
+        ####
+        # Compute losses and accuracies
+        ####
+        atom_type_loss = self.atom_type_loss_fn(logits['atom_type'], target_atom_types)
+        atom_charge_loss = self.atom_charge_loss_fn(logits['atom_charge'], target_atom_charges)
+        bond_order_loss = self.bond_order_loss_fn(logits['bond_order'], target_bond_orders)
 
         # Accuracy
-        pred_atom_types = torch.argmax(atom_type_logits, dim=1)
-        pred_atom_charges = torch.argmax(atom_charge_logits, dim=1)
-        pred_bond_orders = torch.argmax(bond_order_logits, dim=1)
+        a_accuracy = (torch.argmax(logits['atom_type'], dim=1) == target_atom_types).float().mean()
+        c_accuracy = (torch.argmax(logits['atom_charge'], dim=1) == target_atom_charges).float().mean()
+        e_accuracy = (torch.argmax(logits['bond_order'], dim=1) == target_bond_orders).float().mean()
         nonzero_indices = torch.nonzero(target_bond_orders != 0, as_tuple=True)[0]
-
-        """
-        if is_train:
-            self.a_accuracy_train.update(pred_atom_types, target_atom_types)  
-            self.c_accuracy_train.update(pred_atom_charges, target_atom_charges)
-            self.e_accuracy_train.update(pred_bond_orders, target_bond_orders)
-            self.e_nonzero_accuracy_train.update(pred_bond_orders[nonzero_indices], target_bond_orders[nonzero_indices])
-        else:
-            self.a_accuracy_val.update(pred_atom_types, target_atom_types)  
-            self.c_accuracy_val.update(pred_atom_charges, target_atom_charges)
-            self.e_accuracy_val.update(pred_bond_orders, target_bond_orders)
-            self.e_nonzero_accuracy_val.update(pred_bond_orders[nonzero_indices], target_bond_orders[nonzero_indices])
-        """
-
-        a_accuracy = (pred_atom_types == target_atom_types).float().mean()
-        c_accuracy = (pred_atom_charges == target_atom_charges).float().mean()
-        e_accuracy = (pred_bond_orders == target_bond_orders).float().mean()
-        e_nonzero_accuracy = (pred_bond_orders[nonzero_indices] == target_bond_orders[nonzero_indices]).float().mean()
-
+        e_nonzero_accuracy = (torch.argmax(logits['bond_order'], dim=1)[nonzero_indices] == target_bond_orders[nonzero_indices]).float().mean()
 
         losses = {'vq+comittment_loss': loss,
                   'a_recon_loss': atom_type_loss,
@@ -489,6 +518,19 @@ class LigandVQVAE(pl.LightningModule):
                   'perplexity': perplexity,
                   'num_unique_codes': num_unique_codes}
 
+        if self.use_extra_feats:
+            extra_feats_losses = {}
+
+            for feat, loss_fn in self.extra_feats_loss_fn.items():
+                # predicted classes
+                target = g.nodes['lig'].data[feat+'_1_true']  # (n_nodes,)
+                # loss
+                extra_feats_losses[feat+'_recon_loss'] = loss_fn(logits['atom_'+feat], target)
+                # accuracy
+                extra_feats_losses[feat+'_accuracy'] = (torch.argmax(logits['atom_'+feat], dim=1) == target).float().mean()
+            
+            losses.update(extra_feats_losses)
+
         return losses
     
 
@@ -497,7 +539,7 @@ class LigandVQVAE(pl.LightningModule):
 
         self.manual_checkpoint(batch_idx)
         
-        losses = self.forward(g, is_train=True)
+        losses = self.forward(g)
 
         train_log_dict = {}
         for key, metric in losses.items():
@@ -511,14 +553,6 @@ class LigandVQVAE(pl.LightningModule):
         self.log_dict(train_log_dict, sync_dist=True)
         self.log("train_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True)
 
-        """
-        # Compute and log accuracy
-        self.log("a_accuracy_train", self.a_accuracy_train.compute(), on_step=True, sync_dist=True)
-        self.log("c_accuracy_train", self.c_accuracy_train.compute(), on_step=True, sync_dist=True)
-        self.log("e_accuracy_train", self.e_accuracy_train.compute(), on_step=True, sync_dist=True)
-        self.log("e_non_zero_accuracy_train", self.e_nonzero_accuracy_train.compute(), on_step=True, sync_dist=True)
-        """
-
         return total_loss
     
 
@@ -527,7 +561,7 @@ class LigandVQVAE(pl.LightningModule):
 
         self.manual_checkpoint(batch_idx)
     
-        losses = self.forward(g, is_train=False, mask_prob=0.0)
+        losses = self.forward(g, mask_prob=0.0)
 
         val_log_dict = {}
         for key, metric in losses.items():
@@ -541,31 +575,8 @@ class LigandVQVAE(pl.LightningModule):
         self.log_dict(val_log_dict, sync_dist=True, batch_size=g.batch_size)
         self.log("val_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True, batch_size=g.batch_size)
 
-        """
-        # Compute and log accuracy
-        # Instead of on_epoch=True, do on_step=True to see running accuracy per val batch
-        self.log("a_accuracy_val", self.a_accuracy_val.compute(), on_step=True, sync_dist=True, batch_size=g.batch_size)
-        self.log("c_accuracy_val", self.c_accuracy_val.compute(), on_step=True, sync_dist=True, batch_size=g.batch_size)
-        self.log("e_accuracy_val", self.e_accuracy_val.compute(), on_step=True, sync_dist=True, batch_size=g.batch_size)
-        self.log("e_non_zero_accuracy_val", self.e_nonzero_accuracy_val.compute(), on_step=True, sync_dist=True, batch_size=g.batch_size)
-        """
         return total_loss
 
-    """
-    def on_train_epoch_start(self):
-        # Reset training metrics at the start of each epoch
-        self.a_accuracy_train.reset()
-        self.c_accuracy_train.reset()
-        self.e_accuracy_train.reset()
-        self.e_nonzero_accuracy_train.reset()
-
-    def on_validation_epoch_start(self):
-        # Reset validation metrics at the start of each epoch
-        self.a_accuracy_val.reset()
-        self.c_accuracy_val.reset()
-        self.e_accuracy_val.reset()
-        self.e_nonzero_accuracy_val.reset()
-    """
 
     def configure_optimizers(self, lr=1e-4):
         optimizer = optim.Adam(self.parameters(), lr=lr)

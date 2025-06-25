@@ -97,6 +97,26 @@ class LigandConformer(Task):
     priors = pc.ligand_conformer
     conditional_paths = cpc.ligand_conformer
 
+
+# TODO: denovo_ligand with extra feats. groups generated + ligand_identity_extra
+# TODO: ligand_conformer with extra feats. groups fixed + ligand_identity_extra
+
+@register_task("denovo_ligand_extra_feats")
+class DeNovoLigandExtraFeats(Task):
+    groups_fixed = []
+    groups_generated = ['ligand_identity', 'ligand_structure', 'ligand_identity_extra']
+
+    priors = pc.denovo_ligand_extra_feats
+    conditional_paths = cpc.denovo_ligand_extra_feats
+
+@register_task("ligand_conformer_extra_feats")
+class LigandConformer(Task):
+    groups_fixed = ['ligand_identity', 'ligand_identity_extra']
+    groups_generated = ['ligand_structure']
+
+    priors = pc.ligand_conformer_extra_feats
+    conditional_paths = cpc.ligand_conformer_extra_feats
+
 ## 
 # tasks with ligand + pharmacophore
 ##

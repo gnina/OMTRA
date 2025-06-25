@@ -14,8 +14,13 @@ ph_idx_to_elem = ['P', 'S', 'F', 'N', 'O', 'C', 'Cl']
 charge_map = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6]
 
 hybridization_map = ['unspecified', 's', 'sp', 'sp2', 'sp3', 'sp3d', 'sp3d2', 'other']
-max_impl_H = 3  # TODO: cross-check value with Pharmit
-max_frags = 35  # TODO: cross-check value with Pharmit
+max_impl_H = 4
+
+extra_feats_map = {'impl_H': max_impl_H,
+                   'aro': 2,
+                   'hyb': len(hybridization_map),
+                   'ring': 2,
+                   'chiral': 2}
 
 ph_type_to_idx = {val: idx for idx, val in enumerate(ph_idx_to_type)}
 

@@ -48,7 +48,12 @@ class LigandData:
     atom_types: np.ndarray
     atom_charges: np.ndarray
 
-    atom_extra_feats: Dict
+    # extra feats
+    atom_impl_H: Optional[np.ndarray]
+    atom_aro: Optional[np.ndarray]
+    atom_hyb: Optional[np.ndarray]
+    atom_ring: Optional[np.ndarray]
+    atom_chiral: Optional[np.ndarray]
 
     bond_types: np.ndarray
     bond_indices: np.ndarray

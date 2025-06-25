@@ -15,12 +15,15 @@ commitment_cost: 0.25    # weight for commitment loss
 
 a_embed_dim: 16          # atom type embedding dim
 c_embed_dim: 8           # charge embedding dim
-e_embed_dim: 8           # edge type embedding dim
+e_embed_dim: 8           # bond order embedding dim
+extra_feats_embed_dim: 4  # extra atom feats embedding dim
 
 rbf_dim: 32              # number of RBF features
 rbf_dmax: 10             # max distance for RBF
 
-mask_prob: 0.99          # atom masking probability
+mask_prob: 0.0          # atom masking probability
 
 use_ema: True            # use EMA for codebook updates
 decay: 0.99              # decay for VQ-VAE with EMA
+
+use_extra_feats: False  # use extra atom features 

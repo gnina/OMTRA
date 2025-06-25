@@ -108,6 +108,7 @@ class PlinderDataset(ZarrDataset):
     def __len__(self):
         return self.system_lookup.shape[0]
 
+    # TODO: address LigandData change
     def get_npndes(self, npnde_idxs: List[int]) -> Dict[str, LigandData]:
         npndes = {}
         for idx in npnde_idxs:
@@ -335,8 +336,13 @@ class PlinderDataset(ZarrDataset):
             atom_charges=self.slice_array(
                 "ligand/atom_charges", lig_atom_start, lig_atom_end
             ),  # c
-
-            atom_extra_feats= lig_extra_feats_dict,
+            
+            # extra features
+            atom_impl_H=lig_extra_feats_dict['impl_H'],
+            atom_aro=lig_extra_feats_dict['aro'],
+            atom_hyb=lig_extra_feats_dict['hyb'],
+            atom_ring=lig_extra_feats_dict['ring'],
+            atom_chiral=lig_extra_feats_dict['chiral'],
 
             bond_types=self.slice_array(
                 "ligand/bond_types", lig_bond_start, lig_bond_end
@@ -634,7 +640,12 @@ class PlinderDataset(ZarrDataset):
                 "x_1_true": lig_xace.x,
                 "a_1_true": lig_xace.a,
                 "c_1_true": lig_c,
-            } | ligand.atom_extra_feats
+                "impl_H_1_true": ligand.atom_impl_H,
+                "aro_1_true": ligand.atom_aro,
+                "hyb_1_true": ligand.atom_hyb,
+                "ring_1_true": ligand.atom_ring,
+                "chiral_1_true": ligand.atom_chiral
+            }
         }
 
         edge_data = {

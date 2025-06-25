@@ -31,7 +31,8 @@ if __name__ == '__main__':
 
     # Create array if it doesn't exist
     if array_name not in lig_node_group:
-        lig_node_group.create_array(array_name, shape=(n_atoms, n_feats), chunks=(nodes_per_chunk, n_feats), dtype=np.int8, overwrite=False)
+        array = lig_node_group.create_array(array_name, shape=(n_atoms, n_feats), chunks=(nodes_per_chunk, n_feats), dtype=np.int8, overwrite=False)
+        array.attrs['features'] = ['impl_H', 'aro', 'hyb', 'ring', 'chiral', 'frag']    # add attribute
 
     print(f"Finished creating Zarr array {args.array_name}.")
     
