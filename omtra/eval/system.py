@@ -736,7 +736,7 @@ class SampledSystem:
 def write_arrays_to_cif(arrays, filename):
     cif_file = CIFFile()
     arr_stack = struc.stack(arrays)
-    struc.io.pdbx.set_structure(cif_file, arr_stack)
+    struc.io.pdbx.set_structure(cif_file, arr_stack, include_bonds=True)
     cif_file.write(filename)
 
 
