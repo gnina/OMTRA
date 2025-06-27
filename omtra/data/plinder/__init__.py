@@ -47,14 +47,6 @@ class LigandData:
     coords: np.ndarray
     atom_types: np.ndarray
     atom_charges: np.ndarray
-
-    # extra feats
-    atom_impl_H: Optional[np.ndarray]
-    atom_aro: Optional[np.ndarray]
-    atom_hyb: Optional[np.ndarray]
-    atom_ring: Optional[np.ndarray]
-    atom_chiral: Optional[np.ndarray]
-
     bond_types: np.ndarray
     bond_indices: np.ndarray
     is_covalent: bool
@@ -63,6 +55,12 @@ class LigandData:
     linkages: Optional[List[str]] = (
         None  # "{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}__{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}"
     )
+    # extra feats
+    atom_impl_H: Optional[np.ndarray] = None
+    atom_aro: Optional[np.ndarray] = None
+    atom_hyb: Optional[np.ndarray] = None
+    atom_ring: Optional[np.ndarray] = None
+    atom_chiral: Optional[np.ndarray] = None
     
     def to_atom_array(self, atom_type_map) -> struc.AtomArray:
         n_atoms = len(self.coords)

@@ -157,7 +157,7 @@ class PlinderDataset(ZarrDataset):
         return npndes
 
     def get_system(
-        self, index: int, include_pharmacophore: bool, include_protein: bool
+        self, index: int, include_pharmacophore: bool, include_protein: bool, include_extra_feats: bool
     ) -> SystemData:
         system_info = self.system_lookup[
             self.system_lookup["system_idx"] == index
@@ -316,14 +316,6 @@ class PlinderDataset(ZarrDataset):
         if system_info["linkages"]:
             is_covalent = True
 
-        # Get extra ligand atom features as a dictionary
-        lig_extra_feats = self.slice_array(f'ligand/extra_feats', lig_atom_start, lig_atom_end)
-        lig_extra_feats_dict = {}
-        for col_idx, feat in enumerate(self.root['ligand/extra_feats'].attrs.get('features', [])): 
-            col_data = lig_extra_feats[:, col_idx]         
-            lig_extra_feats_dict[feat] = torch.from_numpy(col_data).long()
-
-
         ligand = LigandData(
             sdf=system_info["lig_sdf"],
             ccd=system_info["ccd"],
@@ -336,14 +328,6 @@ class PlinderDataset(ZarrDataset):
             atom_charges=self.slice_array(
                 "ligand/atom_charges", lig_atom_start, lig_atom_end
             ),  # c
-            
-            # extra features
-            atom_impl_H=lig_extra_feats_dict['impl_H'],
-            atom_aro=lig_extra_feats_dict['aro'],
-            atom_hyb=lig_extra_feats_dict['hyb'],
-            atom_ring=lig_extra_feats_dict['ring'],
-            atom_chiral=lig_extra_feats_dict['chiral'],
-
             bond_types=self.slice_array(
                 "ligand/bond_types", lig_bond_start, lig_bond_end
             ),  # e
@@ -351,6 +335,21 @@ class PlinderDataset(ZarrDataset):
                 "ligand/bond_indices", lig_bond_start, lig_bond_end
             ),  # edge index
         )
+
+        if include_extra_feats:
+            # Get extra ligand atom features as a dictionary
+            lig_extra_feats = self.slice_array(f'ligand/extra_feats', lig_atom_start, lig_atom_end)
+            lig_extra_feats_dict = {}
+            for col_idx, feat in enumerate(self.root['ligand/extra_feats'].attrs.get('features', [])): 
+                col_data = lig_extra_feats[:, col_idx]         
+                lig_extra_feats_dict[feat] = torch.from_numpy(col_data).long()
+
+            # add extra features to ligand
+            ligand.atom_impl_H=lig_extra_feats_dict['impl_H']
+            ligand.atom_aro=lig_extra_feats_dict['aro']
+            ligand.atom_hyb=lig_extra_feats_dict['hyb']
+            ligand.atom_ring=lig_extra_feats_dict['ring']
+            ligand.atom_chiral=lig_extra_feats_dict['chiral']
 
         if include_pharmacophore:
             pharm_start, pharm_end = (
@@ -621,6 +620,7 @@ class PlinderDataset(ZarrDataset):
         ligand: LigandData,
         ligand_id: str,
         task: Task,
+        include_extra_feats: bool,
         pocket: Optional[StructureData] = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
@@ -639,14 +639,16 @@ class PlinderDataset(ZarrDataset):
             "lig": {
                 "x_1_true": lig_xace.x,
                 "a_1_true": lig_xace.a,
-                "c_1_true": lig_c,
-                "impl_H_1_true": ligand.atom_impl_H,
-                "aro_1_true": ligand.atom_aro,
-                "hyb_1_true": ligand.atom_hyb,
-                "ring_1_true": ligand.atom_ring,
-                "chiral_1_true": ligand.atom_chiral
+                "c_1_true": lig_c
             }
         }
+
+        if include_extra_feats:
+            node_data["lig"]["impl_H_1_true"] = ligand.atom_impl_H
+            node_data["lig"]["aro_1_true"] = ligand.atom_aro
+            node_data["lig"]["hyb_1_true"] = ligand.atom_hyb
+            node_data["lig"]["ring_1_true"] = ligand.atom_ring
+            node_data["lig"]["chiral_1_true"] = ligand.atom_chiral
 
         edge_data = {
             "lig_to_lig": {
@@ -842,7 +844,8 @@ class PlinderDataset(ZarrDataset):
         system: SystemData,
         task: Task, 
         include_pharmacophore: bool, 
-        include_protein: bool
+        include_protein: bool,
+        include_extra_feats: bool
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -883,6 +886,7 @@ class PlinderDataset(ZarrDataset):
             system.ligand, 
             system.ligand_id, 
             task=task,
+            include_extra_feats=include_extra_feats,
             pocket=system.pocket
         )
         node_data.update(lig_node_data)
@@ -904,6 +908,7 @@ class PlinderDataset(ZarrDataset):
         task_class: Task = task_name_to_class(task_name)
 
         include_pharmacophore = "pharmacophore" in task_class.groups_present
+        include_extra_feats = "ligand_identity_extra" in task_class.groups_present
 
         include_protein = (
             "protein_identity" in task_class.groups_present
@@ -914,6 +919,7 @@ class PlinderDataset(ZarrDataset):
             idx,
             include_pharmacophore=include_pharmacophore,
             include_protein=include_protein,
+            include_extra_feats=include_extra_feats
         )
 
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
@@ -922,6 +928,7 @@ class PlinderDataset(ZarrDataset):
                 task=task_class,
                 include_pharmacophore=include_pharmacophore,
                 include_protein=include_protein,
+                include_extra_feats=include_extra_feats
             )
         )
 
