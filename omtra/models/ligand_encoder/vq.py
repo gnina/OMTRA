@@ -134,13 +134,13 @@ class Encoder(nn.Module):
 
         # Sequentially pass through HeteroGVPConv layers
         for gvp_layer in self.gvps:
-            scalar_feats, vector_feats = gvp_layer(g=g,
-                               scalar_feats=scalar_feats,
-                               coord_feats=coord_feats,
-                               vec_feats= vector_feats,
-                               edge_feats= edge_feats,
-                               x_diff= x_diff,
-                               d= d
+            scalar_feats, vector_feats = gvp_layer(g,
+                               scalar_feats,
+                               coord_feats,
+                               vector_feats,
+                               edge_feats,
+                               x_diff,
+                               d
                                )
             
         # convert ligand scalar features to latent atom types
@@ -471,11 +471,7 @@ class LigandVQVAE(pl.LightningModule):
         self.bond_order_loss_fn = torch.nn.CrossEntropyLoss()
 
         if self.use_extra_feats:
-            self.extra_feats_loss_fn = nn.ModuleDict({'impl_H':  torch.nn.CrossEntropyLoss(),
-                                                      'aro': torch.nn.BCEWithLogitsLoss(),
-                                                      'hyb':  torch.nn.CrossEntropyLoss(),
-                                                      'ring': torch.nn.BCEWithLogitsLoss(),
-                                                      'chiral': torch.nn.BCEWithLogitsLoss()})
+            self.extra_feats_loss_fn = nn.ModuleDict({feat: torch.nn.CrossEntropyLoss() for feat in extra_feats_map.keys()})
 
 
     def forward(self, g: dgl.DGLHeteroGraph, mask_prob=None): 
@@ -525,9 +521,9 @@ class LigandVQVAE(pl.LightningModule):
                 # predicted classes
                 target = g.nodes['lig'].data[feat+'_1_true']  # (n_nodes,)
                 # loss
-                extra_feats_losses[feat+'_recon_loss'] = loss_fn(logits['atom_'+feat], target)
+                extra_feats_losses[feat+'_recon_loss'] = loss_fn(logits[feat], target)
                 # accuracy
-                extra_feats_losses[feat+'_accuracy'] = (torch.argmax(logits['atom_'+feat], dim=1) == target).float().mean()
+                extra_feats_losses[feat+'_accuracy'] = (torch.argmax(logits[feat], dim=1) == target).float().mean()
             
             losses.update(extra_feats_losses)
 
