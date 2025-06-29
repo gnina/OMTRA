@@ -478,6 +478,7 @@ class PlinderDataset(ZarrDataset):
             "e_1_true": prot_elements[pocket_mask],
             "res_id": prot_res_ids[pocket_mask],
             "res_names": prot_res_names[pocket_mask],
+            "res_names_1_true": prot_res_names[pocket_mask],
             "chain_id": prot_chain_ids[pocket_mask],
             "backbone_mask": prot_backbone_mask[pocket_mask],
         }
