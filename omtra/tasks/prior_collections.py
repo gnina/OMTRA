@@ -31,14 +31,6 @@ ligand_conformer = {
     }
 }
 
-# ligand conformer with extra atom features
-ligand_conformer_extra_feats = {
-    'lig_x': {
-        'type': 'gaussian',
-        'params': {'ot': True, 'permutation': False}
-    }
-}
-
 # typical prior setup for de novo pharmacophore
 denovo_pharmacophore = {
     'pharm_x': {

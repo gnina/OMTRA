@@ -54,7 +54,6 @@ class Encoder(nn.Module):
             
             self.extra_feats_embedding = nn.ModuleDict(extra_feats_embedding) 
 
-
             self.to_node_scalars = nn.Sequential(
                 nn.Linear(a_embed_dim + c_embed_dim + len(extra_feats_map)*extra_feats_embed_dim, scalar_size),
                 nn.ReLU(),
@@ -546,7 +545,7 @@ class LigandVQVAE(pl.LightningModule):
             if 'loss' in loss_name:
                 total_loss = total_loss + 1.0 * loss_val
 
-        self.log_dict(train_log_dict, sync_dist=True)
+        self.log_dict(train_log_dict, sync_dist=True, on_step=True, on_epoch=False)
         self.log("train_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True)
 
         return total_loss
@@ -568,7 +567,7 @@ class LigandVQVAE(pl.LightningModule):
             if 'loss' in loss_name:
                 total_loss = total_loss + 1.0 * loss_val
 
-        self.log_dict(val_log_dict, sync_dist=True, batch_size=g.batch_size)
+        self.log_dict(val_log_dict, sync_dist=True, on_step=False, on_epoch=True, batch_size=g.batch_size)
         self.log("val_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True, batch_size=g.batch_size)
 
         return total_loss
