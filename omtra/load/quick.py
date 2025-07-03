@@ -119,8 +119,11 @@ def lig_encoder_from_config(cfg: DictConfig):
 
     print(f"⚛ Instantiating Ligand Encoder <{cfg.ligand_encoder._target_}>")
 
+    hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
+    log_dir = hydra_cfg['runtime']['output_dir']
+
     # load model
-    lig_encoder = hydra.utils.instantiate(cfg.ligand_encoder)
+    lig_encoder = hydra.utils.instantiate(cfg.ligand_encoder, og_run_dir=log_dir)
 
     return lig_encoder
 

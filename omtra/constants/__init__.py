@@ -13,6 +13,15 @@ ph_idx_to_elem = ['P', 'S', 'F', 'N', 'O', 'C', 'Cl']
 
 charge_map = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6]
 
+hybridization_map = ['unspecified', 's', 'sp', 'sp2', 'sp3', 'sp3d', 'sp3d2', 'other']
+max_impl_H = 4
+
+extra_feats_map = {'impl_H': max_impl_H,
+                   'aro': 2,
+                   'hyb': len(hybridization_map),
+                   'ring': 2,
+                   'chiral': 2}
+
 ph_type_to_idx = {val: idx for idx, val in enumerate(ph_idx_to_type)}
 
 protein_element_map = [
@@ -406,3 +415,6 @@ DEFAULT_DISTANCE_RANGE = {
     ("SE", "SE"): (2.340 - 2 * 0.024, 2.340 + 2 * 0.024),
     ("SI", "SE"): (2.359 - 2 * 0.012, 2.359 + 2 * 0.012),
 }
+
+
+
