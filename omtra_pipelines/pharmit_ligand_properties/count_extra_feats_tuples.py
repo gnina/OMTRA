@@ -24,7 +24,7 @@ def parse_args():
     p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/pharmit_dev')
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
-    p.add_argument('--block_size', type=int, default=10000, help='Number of ligands to process in a block.')
+    p.add_argument('--block_size', type=int, default=100000, help='Number of ligands to process in a block.')
     p.add_argument('--n_cpus', type=int, default=1, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--output_dir', type=Path, help='Output directory for processed data.', default=Path('omtra_pipelines/pharmit_ligand_properties/outputs/count_lig_feats'))
  
@@ -66,14 +66,6 @@ def worker_initializer(store_path):
     atom_types = lig_node_group['a']
     atom_charges = lig_node_group['c']
     extra_feats = lig_node_group['extra_feats']
- 
-
-def save_and_update(block_unique_feats, pbar):
-    """ Callback to new features for a block and update progress """    
-    global global_unique_feats
-
-    global_unique_feats = torch.unique(torch.cat([global_unique_feats, block_unique_feats], dim=0), dim=0)
-    pbar.update(1)
 
 
 def error_and_update(error, block_idx, pbar, error_counter, output_dir):
@@ -95,6 +87,18 @@ def error_and_update(error, block_idx, pbar, error_counter, output_dir):
     pbar.update(1)
 
 
+class FeatureAggregator:
+    def __init__(self):
+        self.unique_atom_features = torch.zeros((0, 7))
+
+    def save_and_update(self, block_unique_feats, pbar):
+        try:
+            self.unique_atom_features = torch.unique(torch.cat([self.unique_atom_features, block_unique_feats], dim=0), dim=0)
+            pbar.update(1)
+        except Exception as e:
+            print(f"Callback error: {e}")
+            traceback.print_exc()
+
 def run_parallel(pharmit_path: Path,
                  store_name: str,
                  block_size: int,
@@ -114,6 +118,7 @@ def run_parallel(pharmit_path: Path,
     print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
     print(f"––––––––––––––––––––––––––––––––––")
 
+    aggregator = FeatureAggregator()
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
     error_counter = [0]
     
@@ -128,8 +133,7 @@ def run_parallel(pharmit_path: Path,
                 if len(pending) >= max_pending:
                     time.sleep(0.1)
             
-            callback_fn = partial(save_and_update,
-                                  pbar=pbar)
+            callback_fn = partial(aggregator.save_and_update, pbar=pbar)
 
             error_callback_fn = partial(error_and_update,
                                     block_idx=block_idx, 
@@ -152,7 +156,7 @@ def run_parallel(pharmit_path: Path,
         pool.join()
 
     print(f"Processing completed with {error_counter[0]} errors.")
-    return global_unique_feats
+    return aggregator.unique_atom_features
 
 
 
