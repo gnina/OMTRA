@@ -61,7 +61,7 @@ def worker_initializer(store_path):
     """ Sets pharmit dataset instance as a global variable """
     global atom_types, atom_charges, extra_feats
 
-    root = zarr.open(store_path, mode='r+')
+    root = zarr.open(store_path, mode='r')
     lig_node_group = root['lig/node']
     atom_types = lig_node_group['a']
     atom_charges = lig_node_group['c']
@@ -88,13 +88,14 @@ def error_and_update(error, block_idx, pbar, error_counter, output_dir):
 
 
 class FeatureAggregator:
-    def __init__(self):
+    def __init__(self, pbar):
         self.unique_atom_features = torch.zeros((0, 7))
+        self.pbar = pbar
 
-    def save_and_update(self, block_unique_feats, pbar):
+    def save_and_update(self, block_unique_feats):
         try:
             self.unique_atom_features = torch.unique(torch.cat([self.unique_atom_features, block_unique_feats], dim=0), dim=0)
-            pbar.update(1)
+            self.pbar.update(1)
         except Exception as e:
             print(f"Callback error: {e}")
             traceback.print_exc()
@@ -110,7 +111,7 @@ def run_parallel(pharmit_path: Path,
         max_pending = n_cpus * 2 
 
     store_path = pharmit_path+'/'+store_name+'.zarr'
-    root = zarr.open(store_path, mode='r+')
+    root = zarr.open(store_path, mode='r')
 
     n_atoms = root['lig/node/a'].shape[0]
     n_blocks = (n_atoms + block_size - 1) // block_size
@@ -118,8 +119,8 @@ def run_parallel(pharmit_path: Path,
     print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
     print(f"––––––––––––––––––––––––––––––––––")
 
-    aggregator = FeatureAggregator()
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
+    aggregator = FeatureAggregator(pbar)
     error_counter = [0]
     
     with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(store_path,), maxtasksperchild=5) as pool:
@@ -133,11 +134,8 @@ def run_parallel(pharmit_path: Path,
                 if len(pending) >= max_pending:
                     time.sleep(0.1)
             
-            callback_fn = partial(aggregator.save_and_update, pbar=pbar)
-
             error_callback_fn = partial(error_and_update,
                                     block_idx=block_idx, 
-                                    pbar=pbar,
                                     error_counter=error_counter,
                                     output_dir=output_dir)
                                
@@ -145,7 +143,7 @@ def run_parallel(pharmit_path: Path,
 
             result = pool.apply_async(process_pharmit_block,
                                       args=(block_start_idx, min(block_start_idx + block_size, n_atoms)),
-                                      callback=callback_fn,
+                                      callback=aggregator.save_and_update,
                                       error_callback=error_callback_fn)   
             pending.append(result)
 
@@ -169,7 +167,7 @@ def run_single(pharmit_path: Path,
     global global_unique_feats
 
     store_path = store_path = pharmit_path+'/'+store_name+'.zarr'
-    root = zarr.open(store_path, mode='r+')
+    root = zarr.open(store_path, mode='r')
     lig_node_group = root['lig/node']
     atom_types = lig_node_group['a']
     atom_charges = lig_node_group['c']
