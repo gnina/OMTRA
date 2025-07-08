@@ -17,9 +17,9 @@ def parse_args():
     p = argparse.ArgumentParser(description='Compute new ligand features in parallel and save to Pharmit Zarr store.')
 
     p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/pharmit_dev')
-    p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
+    p.add_argument('--split', type=str, help='Data split: train or val.', default='train')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
-    p.add_argument('--block_size', type=int, default=10000, help='Number of ligands to process in a block.')
+    p.add_argument('--block_size', type=int, default=5000000, help='Number of ligands to process in a block.')
     p.add_argument('--n_cpus', type=int, default=1, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--output_dir', type=Path, help='Output directory for processed data.', default=Path('omtra_pipelines/pharmit_ligand_properties/outputs/count_lig_feats'))
  
@@ -43,8 +43,6 @@ def process_pharmit_block(store_path: str, block_start_idx: int, block_end_idx: 
     atom_types = lig_node_group['a']
     atom_charges = lig_node_group['c']
     extra_feats = lig_node_group['extra_feats']
-
-    print(f"[PID {os.getpid()}] Reading atoms {block_start_idx}:{block_end_idx}")
 
     atom_feats = torch.cat([torch.tensor(atom_types[block_start_idx: block_end_idx].copy()).unsqueeze(1), 
                             torch.tensor(atom_charges[block_start_idx: block_end_idx].copy()).unsqueeze(1),
@@ -92,7 +90,7 @@ class FeatureAggregator:
 
     def save_and_update(self, block_unique_feats):
         try:
-            self.unique_atom_features = torch.cat([self.unique_atom_features, block_unique_feats], dim=0)
+            self.unique_atom_features = torch.unique(torch.cat([self.unique_atom_features, block_unique_feats], dim=0), dim=0)
             self.pbar.update(1)
 
         except Exception as error:
@@ -109,7 +107,7 @@ class FeatureAggregator:
 
 
 def run_parallel(pharmit_path: str,
-                 store_name: str,
+                 split: str,
                  block_size: int,
                  n_cpus: int,
                  output_dir: Path,
@@ -118,7 +116,7 @@ def run_parallel(pharmit_path: str,
     if max_pending is None:
         max_pending = n_cpus * 5 
 
-    store_path = pharmit_path+'/'+store_name+'.zarr'
+    store_path = pharmit_path+'/'+split+'.zarr'
     root = zarr.open(store_path, mode='r')
 
     n_atoms = root['lig/node/a'].shape[0]
@@ -153,25 +151,23 @@ def run_parallel(pharmit_path: str,
                                       args=(store_path, block_start_idx, block_end_idx),
                                       callback=aggregator.save_and_update,
                                       error_callback=error_callback_fn)   
+
             pending.append(result)
 
         # block main process until all async jobs have finished
         for result in pending:
-            result.wait() 
-
-        pool.close()
-        pool.join()
+            result.wait()
 
     print(f"Processing completed with {error_counter[0]} errors.")
     return aggregator.unique_atom_features
 
 
 def run_single(pharmit_path: str,
-               store_name: str,
+               split: str,
                block_size: int,
                output_dir: Path):
 
-    store_path = store_path = pharmit_path+'/'+store_name+'.zarr'
+    store_path = store_path = pharmit_path+'/'+split+'.zarr'
     root = zarr.open(store_path, mode='r')
 
     n_atoms = root['lig/node/a'].shape[0]
@@ -218,11 +214,11 @@ if __name__ == '__main__':
     start_time = time.time()
 
     if args.n_cpus == 1:
-        result = run_single(args.pharmit_path, args.store_name, args.block_size, args.output_dir)
+        result = run_single(args.pharmit_path, args.split, args.block_size, args.output_dir)
     else:
-        result = run_parallel(args.pharmit_path, args.store_name, args.block_size, args.n_cpus, args.output_dir)
+        result = run_parallel(args.pharmit_path, args.split, args.block_size, args.n_cpus, args.output_dir)
 
-    torch.save(result, args.output_dir / 'unique_feature_tuples.pt')
+    torch.save(result, args.output_dir / f'{args.split}_unique_feat_tuples.pt')
 
     end_time = time.time()
 
