@@ -136,8 +136,8 @@ def run_parallel(pharmit_path: str,
     aggregator = FeatureAggregator()
     error_counter = [0]
 
-    print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
-    print(f"––––––––––––––––––––––––––––––––––")
+    print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n", flush=True)
+    print(f"––––––––––––––––––––––––––––––––––", flush=True)
     
     with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(store_path,), maxtasksperchild=5) as pool:
         pending = []
@@ -145,8 +145,6 @@ def run_parallel(pharmit_path: str,
         for block_idx in range(n_blocks):
             
             # prevent adding more jobs until we are waiting for <max_pending jobs to complete
-            print(f"Num pending: {len(pending)}/{max_pending}", flush=True)
-
             while len(pending) >= max_pending:
                 pending = [r for r in pending if not r.ready()]
                 if len(pending) >= max_pending:
