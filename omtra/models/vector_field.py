@@ -1017,7 +1017,7 @@ class VectorField(nn.Module):
             x_u = dst_dict_uncod[m.name]
 
             if m.is_categorical:
-                logits_guided = x_u + self.cfg_scale * (x_c - x_u)
+                logits_guided = x_u + 2 * (x_c - x_u) # TODO not hard code in guidance scale
                 guided_dst[m.name] = torch.softmax(logits_guided, dim=-1)
             else:
                 guided_dst[m.name] = x_u + 2 * (x_c - x_u)
