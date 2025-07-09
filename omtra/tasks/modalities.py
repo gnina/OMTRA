@@ -4,6 +4,9 @@ from omtra.utils.misc import classproperty
 from omtra.constants import (
     lig_atom_type_map,
     charge_map,
+    hybridization_map,
+    max_impl_H,
+    extra_feats_map,
     npnde_atom_type_map,
     ph_idx_to_type,
     residue_map,
@@ -70,6 +73,51 @@ Modality.register(MODALITY_REGISTER,
     entity_name='lig',
     data_key='c',
     n_categories=len(charge_map)
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='lig_impl_H',
+    group='ligand_identity_extra',
+    graph_entity='node',
+    entity_name='lig',
+    data_key='impl_H',
+    n_categories=max_impl_H,
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='lig_aro',
+    group='ligand_identity_extra',
+    graph_entity='node',
+    entity_name='lig',
+    data_key='aro',
+    n_categories=2, 
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='lig_hyb',
+    group='ligand_identity_extra',
+    graph_entity='node',
+    entity_name='lig',
+    data_key='hyb',
+    n_categories=len(hybridization_map), 
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='lig_ring',
+    group='ligand_identity_extra',
+    graph_entity='node',
+    entity_name='lig',
+    data_key='ring',
+    n_categories=2, 
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='lig_chiral',
+    group='ligand_identity_extra',
+    graph_entity='node',
+    entity_name='lig',
+    data_key='chiral',
+    n_categories=2, 
 )
 
 Modality.register(MODALITY_REGISTER,

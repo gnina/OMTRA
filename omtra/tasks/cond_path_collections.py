@@ -9,6 +9,7 @@ denovo_ligand = {
 for modality in 'ace':
     denovo_ligand[f'lig_{modality}'] = dict(type='ctmc_mask')
 
+
 ligand_conformer = {
     'lig_x': {
         'type': 'continuous_interpolant',

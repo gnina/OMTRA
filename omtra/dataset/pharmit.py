@@ -70,13 +70,23 @@ class PharmitDataset(ZarrDataset):
         # warning: this will break if we mess with different forms of ligands identity
         lig_denovo = 'ligand_identity' in task_class.groups_generated
 
+        # check if this task includes extra ligand atom features
+        include_extra_feats = 'ligand_identity_extra' in task_class.groups_present
+
         # slice lig node data
         xace_dict = {}
         start_idx, end_idx = self.slice_array('lig/node/graph_lookup', idx)
         start_idx, end_idx = int(start_idx), int(end_idx)
         for nfeat in ['x', 'a', 'c']:
             xace_dict[nfeat] = self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
-    
+        
+        if include_extra_feats:
+            # Get extra ligand atom features as a dictionary
+            extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
+            extra_feats_dict = {}
+            for col_idx, feat in enumerate(self.root['lig/node/extra_feats'].attrs.get('features', [])): 
+                col_data = extra_feats[:, col_idx]         
+                extra_feats_dict[feat] = torch.from_numpy(col_data).long()
             
         # get slice indicies for ligand-ligand edges
         edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)
@@ -113,9 +123,17 @@ class PharmitDataset(ZarrDataset):
             'lig': {
                 'x_1_true': xace_ligand.x, 
                 'a_1_true': xace_ligand.a,
-                'c_1_true': lig_c,
+                'c_1_true': lig_c
                 },
         }
+
+        if include_extra_feats:
+            g_node_data['lig']['impl_H_1_true'] = extra_feats_dict['impl_H']
+            g_node_data['lig']['aro_1_true'] = extra_feats_dict['aro']
+            g_node_data['lig']['hyb_1_true'] = extra_feats_dict['hyb']
+            g_node_data['lig']['ring_1_true'] = extra_feats_dict['ring']
+            g_node_data['lig']['chiral_1_true'] = extra_feats_dict['chiral']
+
         g_edge_data = {
             'lig_to_lig': {
                 'e_1_true': xace_ligand.e,
@@ -157,6 +175,10 @@ class PharmitDataset(ZarrDataset):
 
         return g
     
+    def retrieve_atom_idxs(self, idx) -> tuple:
+        start_idx, end_idx = self.slice_array('lig/node/graph_lookup', idx)
+        return start_idx, end_idx
+
     def retrieve_graph_chunks(self, frac_start: float, frac_end: float):
         """
         This dataset contains len(self) examples. We divide all samples (or, graphs) into separate chunk. 
