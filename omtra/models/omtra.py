@@ -214,7 +214,7 @@ class OMTRA(pl.LightningModule):
                     weights = None
 
                 self.loss_fn_dict[modality.name] = nn.CrossEntropyLoss(
-                    weights=weights,
+                    weight=weights,
                     reduction=reduction, 
                     ignore_index=-100
                 )
