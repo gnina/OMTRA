@@ -9,3 +9,4 @@ defaults:
 k_checkpoints: 15
 checkpoint_interval: 5000
 fake_atom_p: ${fake_atom_p}
+zero_bo_loss_weight: 1.0
