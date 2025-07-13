@@ -73,8 +73,8 @@ class LatentDataset(ZarrDataset):
         
         # Convert resolved configs back to DictConfig
         datamodule_config = OmegaConf.create(saved_config['datamodule_config'])
-        graph_config = OmegaConf.create(saved_config['graph_config'])
-        prior_config = OmegaConf.create(saved_config['prior_config'])
+        graph_config = datamodule_config.graph_config
+        prior_config = datamodule_config.prior_config
 
         return saved_config, datamodule_config, graph_config, prior_config
 

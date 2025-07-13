@@ -69,13 +69,9 @@ root['metadata/graph_lookup'][:] = graph_lookup_table
 
 # resolve the configs of hydra and save a snapshot of it to read later
 resolved_datamodule_config = OmegaConf.to_container(hydra_cfg.task_group.datamodule, resolve=True)
-resolved_graph_config = OmegaConf.to_container(hydra_cfg.graph, resolve=True)
-resolved_prior_config = OmegaConf.to_container(hydra_cfg.prior, resolve=True)
 
 essential_config = {
     'datamodule_config': resolved_datamodule_config,
-    'graph_config': resolved_graph_config,
-    'prior_config': resolved_prior_config,
     'pharmit_path': str(hydra_cfg.pharmit_path),
     'fake_atom_p': float(hydra_cfg.fake_atom_p),
     'source_split': cfg['source_split'],

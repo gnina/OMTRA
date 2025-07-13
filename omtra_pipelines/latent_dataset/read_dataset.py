@@ -6,6 +6,7 @@ providing a complete graph suitable for training confidence models.
 """
 
 from omtra.dataset.latent import LatentDataset, omtra_collate_fn
+import torch
 from torch.utils.data import DataLoader
 
 # Configuration
@@ -70,4 +71,7 @@ def main():
     print(f"  - Quality metrics (rdkit_rmsd, kabsch_rmsd)")
 
 if __name__ == "__main__":
+    # set torch seed
+    torch.manual_seed(42)
+
     main()
