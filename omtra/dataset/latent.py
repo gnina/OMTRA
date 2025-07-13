@@ -108,37 +108,12 @@ class LatentDataset(ZarrDataset):
         coords_gt = self.slice_array('coordinates/coords_gt', atom_start, atom_end)
         coords_pred = self.slice_array('coordinates/coords_pred', atom_start, atom_end)
         
-        # construct inputs to graph building function
-        g_node_data = {
-            'lig': {
-                # copy keys and values of original graph
-                **{k: v for k, v in original_graph.nodes['lig'].data.items()},
-                # Add latent features
-                'scalar_latents': torch.from_numpy(scalar_features),
-                'vec_latents': torch.from_numpy(vec_features),
-                'pos_latents': torch.from_numpy(positions),
-                'coords_gt' : torch.from_numpy(coords_gt),
-                'coords_pred' : torch.from_numpy(coords_pred),
-            }
-        }
-        
-        # populate original edge data
-        g_edge_idxs = {
-            'lig_to_lig': original_graph.edges(etype='lig_to_lig')
-        }
-        
-        g_edge_data = {
-            'lig_to_lig': {
-                **{k: v for k, v in original_graph.edges['lig_to_lig'].data.items()}
-            }
-        }
-        
-        # build the graph (gives us the complete schema that works with batching)
-        g = build_complex_graph(
-            node_data=g_node_data,
-            edge_idxs=g_edge_idxs,
-            edge_data=g_edge_data,
-        )
+        # Add latent features directly to the original graph
+        original_graph.nodes['lig'].data['scalar_latents'] = torch.from_numpy(scalar_features)
+        original_graph.nodes['lig'].data['vec_latents'] = torch.from_numpy(vec_features)
+        original_graph.nodes['lig'].data['pos_latents'] = torch.from_numpy(positions)
+        original_graph.nodes['lig'].data['coords_gt'] = torch.from_numpy(coords_gt)
+        original_graph.nodes['lig'].data['coords_pred'] = torch.from_numpy(coords_pred)
         
         # store precomputed metrics (rmsd etc.) as system features
         system_features = {
@@ -147,7 +122,7 @@ class LatentDataset(ZarrDataset):
         }
 
         return_dict = {
-            'graph': g,
+            'graph': original_graph,
             'system_features': system_features,
             'task_name': 'confidence',
             'dataset_name': self.name,
