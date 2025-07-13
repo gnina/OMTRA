@@ -23,7 +23,7 @@ from utils import get_gt_as_rdkit_ligand, find_rigid_alignment
 
 cfg = {
     'source_split': 'val',
-    'task_name': 'ligand_conformer', 
+    'task_name': 'ligand_conformer',  # model will run inference on this task
     'dataset_name': 'pharmit',
     'generation': {
         'n_timesteps': 200,
@@ -71,10 +71,13 @@ root['metadata/graph_lookup'][:] = graph_lookup_table
 resolved_datamodule_config = OmegaConf.to_container(hydra_cfg.task_group.datamodule, resolve=True)
 
 essential_config = {
+    'task_name': cfg['task_name'],
+    'dataset_name': cfg['dataset_name'],
+
     'datamodule_config': resolved_datamodule_config,
     'fake_atom_p': float(hydra_cfg.fake_atom_p),
     'source_split': cfg['source_split'],
-    'task_name': cfg['task_name'],
+    
     'model_checkpoint': str(cfg['ckpt_path']),
     'generation_config': cfg['generation']
 }

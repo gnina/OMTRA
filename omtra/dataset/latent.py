@@ -47,10 +47,11 @@ class LatentDataset(ZarrDataset):
         # Extract dataset info from the saved datamodule config
         single_dataset_configs = datamodule_config.dataset_config.single_dataset_configs
         
-        # TODO: For now, assume pharmit (but we need to generalize this to single vs multiple)
-        dataset_name = 'pharmit'
-        dataset_class = dataset_name_to_class[dataset_name]
-        single_dataset_config = single_dataset_configs[dataset_name]
+        # Extract which dataset & task_name that was used to create this latent Zarr store
+        self.dataset_name = saved_config['dataset_name']
+        self.task_name    = saved_config['task_name']
+        dataset_class = dataset_name_to_class[self.dataset_name]
+        single_dataset_config = single_dataset_configs[self.dataset_name]
         
         # Initialize the original dataset with exact same config
         original_split = saved_config['source_split']  # e.g., "val"
@@ -90,7 +91,7 @@ class LatentDataset(ZarrDataset):
         return self.root['metadata/graph_lookup'].shape[0]
 
     def __getitem__(self, index) -> dict:
-        original_graph = self.original_dataset[('ligand_conformer', index)]
+        original_graph = self.original_dataset[(self.task_name, index)]
         
         # Get latent data
         atom_start, atom_end = self.slice_array('metadata/graph_lookup', index)
