@@ -31,7 +31,7 @@ cfg = {
         'unconditional_n_atoms_dist': 'pharmit'
     },
     'batch_size': 64,
-    'num_total_samples': 128,  # len(pharmit_dataset) for full dataset
+    'num_total_samples': "full",  # Use "full" for entire dataset 
     'ckpt_path': '../../models/batch_295000.ckpt',
     'output_zarr_path': Path("confidence_dataset.zarr"),
     'n_zarr_chunks': 2
@@ -43,6 +43,11 @@ train_dataset = datamodule.load_dataset(cfg['source_split'])
 pharmit_dataset = train_dataset.datasets[cfg['dataset_name']]
 
 model = quick_load.omtra_from_checkpoint(cfg['ckpt_path']).cuda().eval()
+
+# populate "full" dataset option
+if cfg['num_total_samples'] == "full":
+    cfg['num_total_samples'] = len(pharmit_dataset)
+    print(f"Using full dataset: {cfg['num_total_samples']} samples")
 
 # Get the total number of atoms in the dataset
 graph_lookup = pharmit_dataset.slice_array('lig/node/graph_lookup', 0, cfg['num_total_samples'])
