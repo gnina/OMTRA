@@ -270,7 +270,7 @@ def main(args):
         n_replicates = args.n_replicates
 
     # set coms if protein is present
-    if 'protein_identity' in task.groups_present and 'ligand_identity' in task.groups_present:
+    if 'protein_identity' in task.groups_present and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed'])):
         coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
     else:
         coms = None

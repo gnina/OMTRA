@@ -9,6 +9,7 @@ from omtra.eval.utils import (
     bust_mol,
     bust_redock,
 )
+import posebusters as pb
 from posebusters.modules.distance_geometry import check_geometry
 from posebusters.modules.flatness import check_flatness
 from posebusters.modules.intermolecular_distance import check_intermolecular_distance
@@ -19,6 +20,10 @@ from omtra.eval.system import SampledSystem
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
 import numpy as np
+from omtra.utils import omtra_root
+import yaml
+from rdkit import Chem
+
 
 
 @register_eval("validity")
@@ -183,4 +188,42 @@ def volume_overlap(
             metrics[metric] = np.nanmean(values)
         else:
             metrics[metric] = -1.0
+    return metrics
+
+
+@register_eval("pb_valid_unconditional")
+def pb_valid_unconditional(
+    sampled_systems: List[SampledSystem], params: Dict[str, Any]
+) -> Dict[str, Any]:
+    
+    metrics = {}
+    
+    pb_cfg_path = omtra_root()+'/configs/pb_config/default.yaml'
+
+    with open(pb_cfg_path, 'r') as f:
+        pb_cfg = yaml.safe_load(f)
+    
+    valid_rdmols = []
+    for i, sys in enumerate(sampled_systems):
+        mol_pred = sys.get_rdkit_ligand()
+       
+        try:
+            Chem.SanitizeMol(mol_pred)
+
+            if mol_pred.GetNumAtoms() > 0:
+                valid_rdmols.append(mol_pred)
+            else:
+                print("PoseBusters valid check: Found molecule with no atoms valid check.")
+        except Exception as e:
+            print("PoseBusters valid check: Molecule failed to sanitize.")
+    
+    if len(valid_rdmols) == 0:
+        metrics['pb_valid'] = 0.0
+
+    else:
+        buster = pb.PoseBusters(config=pb_cfg, **params)
+        df_pb = buster.bust(valid_rdmols, None, None)
+        n_pb_valid = df_pb[df_pb['sanitization'] == True].values.astype(bool).all(axis=1).sum()
+        metrics['pb_valid'] = n_pb_valid / len(sampled_systems) 
+    
     return metrics

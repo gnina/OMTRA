@@ -45,6 +45,7 @@ from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
 from omtra.eval.register import get_eval
 from omtra.eval.utils import add_task_prefix
+from omtra.data.condensed_atom_typing import CondensedAtomTyper
 
 # from line_profiler import profile
 
@@ -118,10 +119,13 @@ class OMTRA(pl.LightningModule):
         # number of categories for categoircal features
         # in our generative process
         # dists_dict = np.load(self.dists_file)
+        # TODO: update with extra feature sizes?
         self.n_categories_dict = {
             "lig_a": len(lig_atom_type_map),
             "lig_c": len(charge_map),
+            "lig_cond_a": 1,
             "lig_e": 4,  # hard-coded assumption of 4 bond types (none, single, double, triple)
+            "lig_e_condensed": 4,
             "pharm_a": len(ph_idx_to_type),
         }
         self.time_scaled_loss = False
@@ -147,6 +151,8 @@ class OMTRA(pl.LightningModule):
         self.configure_loss_fns()
 
         self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
+
+        self.cond_a_typer = CondensedAtomTyper(use_fake_atoms=self.fake_atom_p>0.0)
 
     # some code for debugging parameter consistency issues across multiple GPUs
     # def setup(self, stage=None):
@@ -207,7 +213,7 @@ class OMTRA(pl.LightningModule):
         for modality in modalities_generated:
             if modality.is_categorical:
 
-                if modality.name == 'lig_e' and self.zero_bo_loss_weight != 1.0:
+                if ('lig_e' in modality.name or 'lig_e_condensed' in modality.name) and self.zero_bo_loss_weight != 1.0:
                     weights = torch.ones(modality.n_categories, dtype=torch.float)
                     weights[0] = self.zero_bo_loss_weight
                 else:
@@ -291,7 +297,7 @@ class OMTRA(pl.LightningModule):
             g_list = dgl.unbatch(g)
             n_replicates = 2
 
-        if 'ligand_identity' in task.groups_present and 'protein_identity' in task.groups_present:
+        if (any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"])) and 'protein_identity' in task.groups_present:
             coms = dgl.readout_nodes(g, feat='x_1_true', op='mean', ntype='lig')
             coms = [ coms[i] for i in range(g.batch_size) ]
         else:
@@ -542,7 +548,7 @@ class OMTRA(pl.LightningModule):
                 coms_flat.extend([com_i] * n_replicates)
 
         # TODO: sample number of ligand atoms
-        add_ligand = "ligand_identity" in groups_generated
+        add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"])
         if protein_present and add_ligand:
             n_prot_atoms = torch.tensor([g.num_nodes("prot_atom") for g in g_flat])
             if "pharmacophore" in groups_fixed:
@@ -605,7 +611,7 @@ class OMTRA(pl.LightningModule):
         
         add_pharm = "pharmacophore" in groups_generated
         if protein_present and add_pharm:
-            if "ligand_identity" in groups_present:
+            if any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"]):
                 n_lig_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
             else:
                 n_lig_atoms = None
@@ -617,7 +623,7 @@ class OMTRA(pl.LightningModule):
             )
         elif not protein_present and add_pharm:
             # TODO sample pharm atoms given n_ligand_atoms, can use plinder or pharmit dataset distributions
-            if "ligand_identity" in groups_present:
+            if any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"]):
                 n_lig_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
             else:
                 raise ValueError(
@@ -718,6 +724,7 @@ class OMTRA(pl.LightningModule):
             sampled_system = SampledSystem(
                 g=g_i,
                 fake_atoms=self.fake_atom_p>0.0,
+                cond_a_typer=self.cond_a_typer,
                 **ss_kwargs,
             )
             sampled_systems.append(sampled_system)

@@ -21,6 +21,7 @@ from copy import deepcopy
 from omtra.tasks.modalities import name_to_modality
 from collections import defaultdict
 from omtra.tasks.register import task_name_to_class
+from omtra.data.condensed_atom_typing import CondensedAtomTyper
 
 from omtra.data.graph.utils import (
     copy_graph,
@@ -50,6 +51,7 @@ class SampledSystem:
         bond_type_map: List[str] = bond_type_map,
         charge_map: List[int] = charge_map,
         protein_element_map: List[str] = protein_element_map,
+        cond_a_typer: CondensedAtomTyper = None
     ):
         self.g = g
         self.traj = traj
@@ -68,7 +70,7 @@ class SampledSystem:
         self.rdkit_ligand = None
         self.rdkit_ref_ligand = None
         self.rdkit_protein = None
-
+        
         if self.fake_atoms:
             self.ligand_atom_type_map = deepcopy(self.ligand_atom_type_map)
             self.ligand_atom_type_map.append("Sn")  # fake atoms appear as Sn
@@ -76,6 +78,25 @@ class SampledSystem:
         if self.ctmc_mol:
             self.ligand_atom_type_map = deepcopy(self.ligand_atom_type_map)
             self.ligand_atom_type_map.append("Se")  # masked atoms appear as Se
+        
+
+        # Convert condensed atom type representation to explicit form 
+        self.cond_a_typer = cond_a_typer
+
+        # lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
+        # lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
+        
+        # if any('cond_a' in group for group in lig_ndata_feats):
+        #     cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
+
+        #     for cond_a_feat, suffix in cond_a_feats:
+        #         lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
+
+        #         for feat, val in lig_feats_dict.items():
+        #             self.g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
+                
+        #         del self.g.nodes["lig"].data[cond_a_feat]
+
 
     def to(self, device: str):
         self.g = self.g.to(device)
@@ -441,6 +462,20 @@ class SampledSystem:
             lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
             lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             lig_edata_feats = list(lig_g.edges["lig_to_lig"].data.keys())
+
+            if any('cond_a' in group for group in lig_ndata_feats):
+                cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
+
+                for cond_a_feat, suffix in cond_a_feats:
+                    lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
+
+                    for feat, val in lig_feats_dict.items():
+                        lig_g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
+                    
+                    del g.nodes["lig"].data[cond_a_feat]
+
+                lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
+            
         else:
             if g.num_nodes(ntype="npnde") == 0:
                 return None
@@ -451,6 +486,7 @@ class SampledSystem:
 
         lig_g = dgl.to_homogeneous(lig_g, ndata=lig_ndata_feats, edata=lig_edata_feats)
 
+        
         # if fake atoms are present, identify them
         if self.fake_atoms and not show_fake_atoms:
             # TODO: need to update atom map to include fake atoms

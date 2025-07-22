@@ -146,7 +146,7 @@ class VectorField(nn.Module):
                 continue
             # if the modality is being generated, there is an extra mask token
             is_generated = m.name in modality_generated_space
-            has_fake_atoms = (m.name == 'lig_a') and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
+            has_fake_atoms = (m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
             self.token_embeddings[m.name] = nn.Embedding(
                 m.n_categories + int(is_generated) + int(has_fake_atoms), token_dim
             )
@@ -304,7 +304,7 @@ class VectorField(nn.Module):
                 continue
             # if categorical, the output head is just a MLP on node scalar features
             if m.is_categorical:
-                has_fake_atoms = m.name == 'lig_a' and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
+                has_fake_atoms = (m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
                 self.node_output_heads[m.name] = nn.Sequential(
                     nn.Linear(n_hidden_scalars, n_hidden_scalars),
                     nn.SiLU(),

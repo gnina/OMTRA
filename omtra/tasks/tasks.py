@@ -123,6 +123,28 @@ class LigandConformer(Task):
     conditional_paths = cpc.ligand_conformer
 
 
+@register_task("denovo_ligand_condensed")
+class DeNovoLigandExtraFeats(Task):
+    groups_fixed = []
+    groups_generated = ['ligand_identity_condensed', 'ligand_structure']
+
+    priors = {'lig_x': {'type': 'gaussian', 'params': {'ot': True}},
+              'lig_e_condensed': dict(type='masked'),
+              'lig_cond_a': dict(type='masked')}
+    conditional_paths = {'lig_x': dict(type='continuous_interpolant'),
+                         'lig_e_condensed': dict(type='ctmc_mask'),
+                         'lig_cond_a': dict(type='ctmc_mask')}
+
+
+@register_task("ligand_conformer_condensed")
+class LigandConformer(Task):
+    groups_fixed = ['ligand_identity_condensed']
+    groups_generated = ['ligand_structure']
+
+    priors = pc.ligand_conformer
+    conditional_paths = cpc.ligand_conformer
+
+
 ## 
 # tasks with ligand + pharmacophore
 ##
