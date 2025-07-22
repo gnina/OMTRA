@@ -30,6 +30,7 @@ from omtra.data.plinder import (
     SystemData,
     BackboneData,
 )
+from omtra.data.distributions.utils import residue_sinusoidal_encoding
 from typing import List, Dict, Tuple, Any, Optional
 import pandas as pd
 import numpy as np
@@ -58,6 +59,7 @@ class PlinderDataset(ZarrDataset):
         prior_config: Optional[DictConfig] = None,
         fake_atom_p: float = 0.0,
         pskip_factor: float = 0.0, 
+        res_id_embed_dim: int = 64,
         # this is a parmaeter that controls whether/how we do weighted sampling of the the dataset
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
     ):
@@ -940,7 +942,16 @@ class PlinderDataset(ZarrDataset):
             task=task_class,
             graph_config=self.graph_config,
         )
-
+        '''
+        # standardize residue ids (ensure all residue ids start at 0 across chains)
+        # node_data contains chain_ds, and prot_res_ids
+        prot_res_ids = node_data["prot_atom"]["res_id"] #starting indices 
+        prot_chain_ids = node_data["prot_atom"]["chain_id"] # protein chain ids
+        residue_idxs = self.standardize_residue_ids(prot_res_ids, prot_chain_ids)
+``
+        # create protein position embeddings
+        protein_position_embeddings = residue_sinusoidal_encoding(residue_idxs, res_id_embed_dim)
+        '''
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)
 
@@ -1084,6 +1095,23 @@ class PlinderDataset(ZarrDataset):
             int(system_info["lig_atom_end"]),
         )
         return lig_atom_start, lig_atom_end
+    '''
+    def standardize_residue_ids(self, res_ids: torch.Tensor, chain_ids: torch.Tensor):
+        """
+        Standardize residue IDs to start at 0 within each chain, 
+        then create global consecutive indices across all chains.
+        """
+
+        global_idxs = torch.zeros_like(res_ids)
+        unique_chains = torch.unique(chain_ids, sorted=True)
+        current_offset = 0
+
+        for chain in unique_chains:
+
+            
+            current_offset += len(unique_residues)
+        return global_idxs
+    '''
 
 def compute_pskip(
     df: pd.DataFrame,

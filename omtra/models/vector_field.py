@@ -192,6 +192,11 @@ class VectorField(nn.Module):
             n_cat_feats = self.ntype_cat_feats[
                 ntype
             ]  # number of categorical features for this node type
+            '''
+            input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
+            if res_id_embedding_dim is not None and ntype == 'prot_atom':
+                input_dim += res_id_embedding_dim
+            '''
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
                     n_cat_feats * token_dim
