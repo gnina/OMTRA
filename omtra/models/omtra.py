@@ -378,7 +378,11 @@ class OMTRA(pl.LightningModule):
                 if modality.graph_entity == "edge":
                     xt_idxs = xt_idxs[upper_edge_mask[modality.entity_name]]
                 # set the target to ignore_index when the feature is already unmasked in xt
-                target[xt_idxs != modality.n_categories] = -100
+                
+                # Get masked atom index
+                fake_atoms = (self.fake_atom_p > 0.0) and ((modality.data_key == 'a') or ((modality.data_key == 'cond_a'))) # correction for atom type and fake atoms
+                n_categories = modality.n_categories + int(fake_atoms) 
+                target[xt_idxs != n_categories] = -100
             targets[modality.name] = target
 
         if self.time_scaled_loss:
