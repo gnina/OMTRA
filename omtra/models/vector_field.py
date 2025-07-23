@@ -37,6 +37,28 @@ from omtra.utils.graph import g_local_scope
 
 # from line_profiler import LineProfiler, profile
 
+# Path Planning helpers
+def _topk_lowest_masking(scores: torch.Tensor, num_to_mask: torch.Tensor):
+    """
+    scores:  (N,)  log‑confidence per token (higher = surer)
+    num_to_mask: (B,1) how many tokens to remask in each graph of the batch
+    Returns a boolean mask of shape (N,) indicating which positions to remask.
+    """
+    # each graph may have a different n_nodes, so work in mini-batches
+    sorted_scores, _ = scores.sort(dim=0)                      # ascending
+    threshold = sorted_scores.gather(0, num_to_mask.clamp(max=scores.size(0)-1))
+    return scores < threshold          # True on the lowest‑confidence tokens
+
+
+def _log_confidence(p_logits: torch.Tensor, tokens: torch.Tensor):
+    """
+    p_logits : (N, C)  logits from the (self‑)planner for each token
+    tokens   : (N,)    integer sample at those positions
+    Returns   : (N,)    log p_\theta(tokens | x_t)  = confidence score
+    """
+    return p_logits.log_softmax(-1).gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
+
+
 class VectorField(nn.Module):
     def __init__(
         self,
@@ -1024,66 +1046,88 @@ class VectorField(nn.Module):
             data_src[f"{m.data_key}_1_pred"] = x_1_sampled
 
         return g, dst_dict
-
+    
     def campbell_step(
         self,
         g: dgl.DGLHeteroGraph,
         m: Modality,
-        p_1_given_t: torch.Tensor,
-        xt: torch.Tensor,
-        stochasticity: float,
-        beta_t: torch.Tensor,
-        beta_t_prime: torch.Tensor,
-        dt,
+        p_1_given_t: torch.Tensor,  
+        xt: torch.Tensor,            
+        stochasticity: float,       
+        beta_t: torch.Tensor,        
+        beta_t_prime: torch.Tensor, 
+        dt,                          
         batch_size: int,
-        batch_num_nodes: torch.Tensor,
+        batch_num_nodes: torch.Tensor,  
         mask_index: int,
         last_step: bool,
         upper_edge_mask: Optional[torch.Tensor],
     ):
-        x1 = Categorical(p_1_given_t).sample()  # has shape (num_nodes,)
+        device = xt.device
+        N = xt.shape[0]
 
-        unmask_prob = dt * (beta_t_prime + stochasticity * beta_t) / (1 - beta_t)
-        mask_prob = dt * stochasticity
+        # sample proposed x1 from current model probs
+        sampler = Categorical(probs=p_1_given_t)
+        x1 = sampler.sample()                       # (N,)
 
-        unmask_prob = torch.clamp(unmask_prob, min=0, max=1)
-        mask_prob = torch.clamp(mask_prob, min=0, max=1)
+        last_mask = (xt == mask_index) # masked positions
+        remask_candidates = ~last_mask # currently visible → may re-mask
 
-        # sample which nodes will be unmasked
-        will_unmask = purity_sampling(
-            g,
-            m=m,
-            xt=xt,
-            x1_probs=p_1_given_t,
-            unmask_prob=unmask_prob,
-            mask_index=mask_index,
-            batch_size=batch_size,
-            batch_num_nodes=batch_num_nodes,
-            device=xt.device,
-            upper_edge_mask=upper_edge_mask,
-        )
+        # confidence scores for each token: logp
+        # numerical guard: add eps before log
+        eps = 1e-12
+        conf = (p_1_given_t.clamp_min(eps).log()
+                .gather(-1, x1.unsqueeze(-1))
+                .squeeze(-1))                       # (N,)
+        conf[remask_candidates] *= stochasticity
 
-        # This is without purity sampling
-        # # uniformly sample nodes to unmask
-        # will_unmask = torch.rand(xt.shape[0], device=xt.device) < unmask_prob
-        # will_unmask = will_unmask * (
-        #     xt == mask_index
-        # )  # only unmask nodes that are currently masked
+        # scheduler: linear
+        kappa_t = beta_t.item() if torch.is_tensor(beta_t) else float(beta_t)
+        kappa_t = max(0.0, min(1.0, kappa_t))
 
-        if not last_step:
-            # compute which nodes will be masked
-            will_mask = torch.rand(xt.shape[0], device=xt.device) < mask_prob
-            will_mask = will_mask * (
-                xt != mask_index
-            )  # only mask nodes that are currently unmasked
+        # counts per graph 
+        counts = batch_num_nodes.to(device=device, dtype=torch.long)  # (B,)
+        if last_step:
+            num_to_mask_per_graph = torch.zeros_like(counts)
+        else:
+            num_to_mask_per_graph = ((counts.float() * (1.0 - kappa_t)).round().to(torch.long))
+            # safety clamp
+            num_to_mask_per_graph = torch.minimum(num_to_mask_per_graph, counts - 1)
 
-            # mask the nodes
-            xt[will_mask] = mask_index
+        # build mask from each graph
+        will_mask = torch.zeros(N, dtype=torch.bool, device=device)
+        start = 0
+        for b, c in enumerate(counts.tolist()):
+            if c == 0:
+                continue
+            stop = start + c
+            scores_b = conf[start:stop]                 # (c,)
+            n_mask_b = num_to_mask_per_graph[b].item()
+            if n_mask_b > 0:
+                sorted_scores, idx = scores_b.sort()    # ascending
+                # choose lowest n_mask_b scores
+                sel = idx[:n_mask_b]
+                will_mask[start + sel] = True
+            start = stop
 
-        # unmask the nodes
-        xt[will_unmask] = x1[will_unmask]
+        if (upper_edge_mask is not None) and (upper_edge_mask.shape[0] == N):
+            will_mask &= upper_edge_mask
+
+        # apply decisions, mask+remask selected positions
+        xt = xt.clone()
+        xt[will_mask] = mask_index
+
+        # unmask
+        reveal = last_mask & ~will_mask
+        xt[reveal] = x1[reveal]
+
+        # ensure nothing remains masked on last step
+        if last_step:
+            remaining = (xt == mask_index)
+            xt[remaining] = x1[remaining]
 
         return xt, x1
+
 
     def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime, beta_t, beta_t_prime):
         term_1 = alpha_t_prime/alpha_t*x_t
