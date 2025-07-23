@@ -16,7 +16,7 @@ from omtra.utils.misc import classproperty
 from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
-from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
+from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map, num_condensed_atom_types
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
 
 # from line_profiler import LineProfiler
@@ -42,7 +42,9 @@ class PharmitDataset(ZarrDataset):
         self.n_categories_dict = {
             'lig_a': len(lig_atom_type_map),
             'lig_c': len(charge_map),
+            'lig_cond_a': num_condensed_atom_types,
             'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
+            'lig_e_condensed': 4,
             'pharm_a': len(ph_idx_to_type),
         }
 
@@ -99,7 +101,7 @@ class PharmitDataset(ZarrDataset):
             extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
             extra_feats = extra_feats[:, :-1]
             
-            cond_a_typer = CondensedAtomTyper(self.use_fake_atoms)
+            cond_a_typer = CondensedAtomTyper(fake_atoms=self.use_fake_atoms)
 
             xace_dict['cond_a'] = cond_a_typer.feats_to_cond_a(xace_dict['a'], xace_dict['c'], extra_feats)
             del xace_dict['a']

@@ -7,17 +7,17 @@ from omtra.constants import lig_atom_type_map
 
 class CondensedAtomTyper():
     def __init__(self,
-                 use_fake_atoms: bool):
+                 fake_atoms: bool):
         cond_a_path = omtra_root() + '/omtra/constants/pharmit_condensed_atom_types.pkl'
         
         with open(cond_a_path, 'rb') as f:
             cond_a_counts = pickle.load(f)    
         
         self.cond_a_list = sorted(list(cond_a_counts.keys()))
-        self.use_fake_atoms = use_fake_atoms
+        self.fake_atoms = fake_atoms
         self.lig_feats = ['a', 'c', 'impl_H', 'aro', 'hyb', 'ring', 'chiral']
 
-        if self.use_fake_atoms:
+        if self.fake_atoms:
             self.fake_atom_tuple = (len(lig_atom_type_map),) + (0,) * (len(self.cond_a_list[0])- 1)
             self.masked_atom_tuple = (len(lig_atom_type_map)+1,) + (0,) * (len(self.cond_a_list[0])- 1)
         else:
@@ -63,7 +63,7 @@ class CondensedAtomTyper():
         for idx in cond_a:
             try:
                 if idx == len(self.cond_a_list):    
-                    if self.use_fake_atoms:
+                    if self.fake_atoms:
                         lig_feat_tuples.append(self.fake_atom_tuple)    # fake atom
                     else:
                         lig_feat_tuples.append(self.masked_atom_tuple)  # no fake atoms, this is a masked atom

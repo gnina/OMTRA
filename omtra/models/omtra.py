@@ -67,6 +67,7 @@ class OMTRA(pl.LightningModule):
         checkpoint_interval: int = 1000,
         og_run_dir: Optional[str] = None,
         fake_atom_p: float = 0.0,
+        distort_p: float = 0.0,
         eval_config: Optional[DictConfig] = None,
         zero_bo_loss_weight: float = 1.0,
     ):
@@ -84,6 +85,7 @@ class OMTRA(pl.LightningModule):
         self.eval_config = eval_config
         self.og_run_dir = og_run_dir
         self.fake_atom_p = fake_atom_p
+        self.distort_p = distort_p
         self.zero_bo_loss_weight = zero_bo_loss_weight
 
         self.total_loss_weights = total_loss_weights
@@ -152,7 +154,7 @@ class OMTRA(pl.LightningModule):
 
         self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
 
-        self.cond_a_typer = CondensedAtomTyper(use_fake_atoms=self.fake_atom_p>0.0)
+        self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0)
 
     # some code for debugging parameter consistency issues across multiple GPUs
     # def setup(self, stage=None):
@@ -348,6 +350,12 @@ class OMTRA(pl.LightningModule):
             g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask
         )
 
+        if self.distort_p > 0.0:
+            t_mask = (t > 0.5)[node_batch_idxs["lig"]]
+            distort_mask = torch.rand(g.num_nodes(), 1, device=g.device) < self.distort_p
+            distort_mask = distort_mask & t_mask.unsqueeze(-1)
+            g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
+
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
             g,
@@ -451,8 +459,10 @@ class OMTRA(pl.LightningModule):
                 conditional_path_fn = partial(conditional_path_fn, ue_mask=lig_ue_mask)
 
             if modality.is_categorical:
+                fake_atoms = (self.fake_atom_p > 0.0) and ((modality.data_key == 'a') or ((modality.data_key == 'cond_a')))
+                n_categories = modality.n_categories + int(fake_atoms)  # correction for fake atoms
                 conditional_path_fn = partial(
-                    conditional_path_fn, n_categories=modality.n_categories
+                    conditional_path_fn, n_categories=n_categories
                 )
 
             # expand alpha_t and beta_t for the nodes/edges

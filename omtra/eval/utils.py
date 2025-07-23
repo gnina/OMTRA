@@ -69,8 +69,17 @@ def compute_validity(
     print(error_str)
 
     frac_valid_mols = n_valid / len(sampled_systems)
-    avg_frag_frac = sum(frag_fracs) / len(frag_fracs)
-    avg_num_components = sum(num_components) / len(num_components)
+
+    # TODO: often frag_fracs/num_components is empty because all atoms are fake. Maybe indicates an architecture issue and we don't need these checks
+    if frag_fracs:
+        avg_frag_frac = sum(frag_fracs) / len(frag_fracs)
+    else: 
+         avg_frag_frac = 0.0
+    
+    if num_components:
+        avg_num_components = sum(num_components) / len(num_components)
+    else:
+        avg_num_components = 0.0
 
     if return_counts:
         metrics = {

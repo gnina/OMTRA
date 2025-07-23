@@ -83,19 +83,19 @@ class SampledSystem:
         # Convert condensed atom type representation to explicit form 
         self.cond_a_typer = cond_a_typer
 
-        # lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
-        # lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
+        lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
+        lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
         
-        # if any('cond_a' in group for group in lig_ndata_feats):
-        #     cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
+        if any('cond_a' in group for group in lig_ndata_feats):
+            cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
 
-        #     for cond_a_feat, suffix in cond_a_feats:
-        #         lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
+            for cond_a_feat, suffix in cond_a_feats:
+                lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
 
-        #         for feat, val in lig_feats_dict.items():
-        #             self.g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
+                for feat, val in lig_feats_dict.items():
+                    self.g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
                 
-        #         del self.g.nodes["lig"].data[cond_a_feat]
+                del self.g.nodes["lig"].data[cond_a_feat]
 
 
     def to(self, device: str):
@@ -463,18 +463,18 @@ class SampledSystem:
             lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             lig_edata_feats = list(lig_g.edges["lig_to_lig"].data.keys())
 
-            if any('cond_a' in group for group in lig_ndata_feats):
-                cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
+            # if any('cond_a' in group for group in lig_ndata_feats):
+            #     cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
 
-                for cond_a_feat, suffix in cond_a_feats:
-                    lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
+            #     for cond_a_feat, suffix in cond_a_feats:
+            #         lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
 
-                    for feat, val in lig_feats_dict.items():
-                        lig_g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
+            #         for feat, val in lig_feats_dict.items():
+            #             lig_g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
                     
-                    del g.nodes["lig"].data[cond_a_feat]
+            #         del g.nodes["lig"].data[cond_a_feat]
 
-                lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
+            #     lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             
         else:
             if g.num_nodes(ntype="npnde") == 0:
