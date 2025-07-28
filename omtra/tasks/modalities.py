@@ -182,6 +182,15 @@ Modality.register(MODALITY_REGISTER,
 )
 
 Modality.register(MODALITY_REGISTER,
+    name='prot_atom_resnames',
+    group='protein_identity',
+    graph_entity='node',
+    entity_name='prot_atom',
+    data_key='res_names',
+    n_categories=len(residue_map)
+)
+
+Modality.register(MODALITY_REGISTER,
     name='prot_atom_element',
     group='protein_identity',
     graph_entity='node',

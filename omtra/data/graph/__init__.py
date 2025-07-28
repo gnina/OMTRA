@@ -7,6 +7,7 @@ import functools
 from omtra.utils import omtra_root
 from pathlib import Path
 from omtra.tasks.tasks import Task
+import torch_cluster as tc
 
 
 node_types = ['lig', 'prot_atom', 'prot_res', 'pharm', 'npnde']
@@ -116,6 +117,24 @@ def build_complex_graph(
             edge_construction_dict[canonical_etype] = (edge_idxs[etype][0], edge_idxs[etype][1])
         else:
             edge_construction_dict[canonical_etype] = ([], [])
+
+    # TODO: cleaner, more centralized way to inject protein covalent bonds into graph structure
+    if num_nodes['prot_atom'] > 0 and graph_config.get('cov_prot_edges', False):
+        cov_edges = tc.radius_graph(
+                node_data['prot_atom']['x_1_true'], 
+                r=2.1, # i've done some testing, this captures pretty much just covalent bonds and nothing else
+                # it may capture di-sulfide bridges too which may be a desireable feature..tbd
+            )
+    
+        # we create this edge type here but we don't include it in the standard definition of edges above
+        # because everything defiend in the edge types at the top of this file 
+        # will end up doing message passing on those edges, and that is not what we want to do with these
+        # during vector field forward pass, we will layer on radius/knn edges on top of these covlanet edges
+        # all under the prot_atom_to_prot_atom edge type
+        # for computational efficiency, we infer covalent bonds once (right now) and store it on the graph
+        # for future access
+        canonical_etype = to_canonical_etype('prot_atom_covalent_prot_atom')
+        edge_construction_dict[canonical_etype] = (cov_edges[0], cov_edges[1])
 
     # TODO: follow graph_config to construct other edges
     # examples: res-res fully connected? pharm-pharm fully connected?

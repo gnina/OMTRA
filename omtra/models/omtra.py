@@ -85,7 +85,6 @@ class OMTRA(pl.LightningModule):
         self.eval_config = eval_config
         self.og_run_dir = og_run_dir
         self.fake_atom_p = fake_atom_p
-        self.distort_p = distort_p
         self.zero_bo_loss_weight = zero_bo_loss_weight
 
         self.total_loss_weights = total_loss_weights
