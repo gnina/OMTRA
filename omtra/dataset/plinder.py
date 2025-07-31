@@ -952,7 +952,7 @@ class PlinderDataset(ZarrDataset):
         protein_position_encodings = residue_sinusoidal_encoding(residue_idxs, self.res_id_embed_dim)
         
         # Add the position embeddings to the graph's protein atom nodes
-        g.nodes["prot_atom"].data["pos_enc"] = protein_position_encodings
+        g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
 
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)
