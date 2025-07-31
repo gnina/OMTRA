@@ -422,6 +422,13 @@ class VectorField(nn.Module):
                         g.nodes[ntype].data[f"{modality.data_key}_t"]
                     )
                 )
+            # should be positional encodings
+            elif not modality.is_categorical:
+                if ntype not in node_scalar_features:
+                    node_scalar_features[ntype] = []
+                node_scalar_features[ntype].append(
+                    g.nodes[ntype].data[f"{modality.data_key}_t"]
+                )
 
         # loop back over node types, and anything without vector features should be given a zero vector
         for ntype in node_scalar_features.keys():
@@ -468,12 +475,6 @@ class VectorField(nn.Module):
             node_scalar_features[ntype].append(
                 task_embedding_batch[node_batch_idx[ntype]]
             )  # expand task embedding for each node in the batch
-
-            # Adding protein encodings if present
-            if ntype == "prot_atom" and "pos_enc" in g.nodes[ntype].data:
-                pos_enc = g.nodes[ntype].data["pos_enc"]
-                if pos_enc.numel() > 0:
-                    node_scalar_features[ntype].append(pos_enc)
 
             # concatenate all initial node scalar features and pass through the embedding layer
             node_scalar_features[ntype] = torch.cat(
