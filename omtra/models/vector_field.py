@@ -469,7 +469,11 @@ class VectorField(nn.Module):
                 task_embedding_batch[node_batch_idx[ntype]]
             )  # expand task embedding for each node in the batch
 
-            
+            # Adding protein encodings if present
+            if ntype == "prot_atom" and "pos_enc" in g.nodes[ntype].data:
+                pos_enc = g.nodes[ntype].data["pos_enc"]
+                if pos_enc.numel() > 0:
+                    node_scalar_features[ntype].append(pos_enc)
 
             # concatenate all initial node scalar features and pass through the embedding layer
             node_scalar_features[ntype] = torch.cat(
