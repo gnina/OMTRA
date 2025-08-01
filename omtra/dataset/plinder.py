@@ -654,11 +654,12 @@ class PlinderDataset(ZarrDataset):
 
         lig_xace = ligand.to_xace_mol(dense=True)
 
-        denovo_ligand = 'ligand_identity' in task.groups_generated
+        denovo_ligand = any(group in task.groups_generated for group in ['ligand_identity',  'ligand_identity_condensed'])
+
         if self.fake_atom_p > 0 and denovo_ligand:
             if condensed_atom_typing:
                 cond_a_typer = self.get_condensed_atom_typer()
-                xace_ligand = add_fake_atoms(xace_ligand, self.fake_atom_p, cond_a_typer)
+                lig_xace = add_fake_atoms(lig_xace, self.fake_atom_p, cond_a_typer)
             else:
                 lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
         
@@ -669,7 +670,7 @@ class PlinderDataset(ZarrDataset):
         }
 
         if condensed_atom_typing:
-            node_data["lig"]["cond_a_1_true"] = ligand.atom_cond_a
+            node_data["lig"]["cond_a_1_true"] = lig_xace.cond_a
         
         else:
             lig_c = self.encode_charges(lig_xace.c)
@@ -677,11 +678,11 @@ class PlinderDataset(ZarrDataset):
             node_data["lig"]["c_1_true"] = lig_c
 
             if include_extra_feats:
-                node_data["lig"]["impl_H_1_true"] = ligand.atom_impl_H
-                node_data["lig"]["aro_1_true"] = ligand.atom_aro
-                node_data["lig"]["hyb_1_true"] = ligand.atom_hyb
-                node_data["lig"]["ring_1_true"] = ligand.atom_ring
-                node_data["lig"]["chiral_1_true"] = ligand.atom_chiral
+                node_data["lig"]["impl_H_1_true"] = lig_xace.impl_H
+                node_data["lig"]["aro_1_true"] = lig_xace.aro
+                node_data["lig"]["hyb_1_true"] = lig_xace.hyb
+                node_data["lig"]["ring_1_true"] = lig_xace.ring
+                node_data["lig"]["chiral_1_true"] = lig_xace.chiral
 
         edge_data = {
             "lig_to_lig": {

@@ -45,10 +45,10 @@ class MolXACE:
             raise ValueError("bond_idxs and bond_types must be set to convert to dense representation.")
         
         # Create a dense adjacency matrix
-        if self.a is not None:
-            n_atoms = self.a.shape[0]
-        else:
+        if self.cond_a is not None:
             n_atoms = self.cond_a.shape[0]
+        else:
+            n_atoms = self.a.shape[0]
             
         adj = torch.zeros((n_atoms, n_atoms), dtype=self.e.dtype)
         adj[self.edge_idxs[:, 0], self.edge_idxs[:, 1]] = self.e
