@@ -4,7 +4,7 @@ scalar_size: 128         # scalar features for message passing
 vector_size: 4           # vector features for message passing
 num_gvp_layers: 3        # number of GVP layers
 
-latent_dim: 8           # size of latent atom types
+latent_dim: 8            # size of latent atom types
 num_embeddings: 100      # size of the codebook
 
 num_decod_hiddens: 128    # hidden layer size for atom decoder
@@ -16,14 +16,17 @@ commitment_cost: 0.25    # weight for commitment loss
 a_embed_dim: 16          # atom type embedding dim
 c_embed_dim: 8           # charge embedding dim
 e_embed_dim: 8           # bond order embedding dim
-extra_feats_embed_dim: 4  # extra atom feats embedding dim
+extra_feats_embed_dim: 4 # extra atom feats embedding dim
 
 rbf_dim: 32              # number of RBF features
 rbf_dmax: 10             # max distance for RBF
 
-mask_prob: 0.0          # atom masking probability
+mask_prob: 0.0           # atom masking probability
 
 use_ema: True            # use EMA for codebook updates
 decay: 0.99              # decay for VQ-VAE with EMA
 
-use_extra_feats: False  # use extra atom features 
+use_extra_feats: False   # use extra atom features 
+extra_feats_cost: 1.0    # scaling of losses on extra features
+
+e_zero_cost: 1.0         # scaling of losses on zero-order bonds

@@ -12,7 +12,8 @@ from omtra.constants import (
     residue_map,
     protein_element_map,
     protein_atom_map,
-    bond_type_map
+    bond_type_map,
+    num_condensed_atom_types
 )
 
 
@@ -121,8 +122,26 @@ Modality.register(MODALITY_REGISTER,
 )
 
 Modality.register(MODALITY_REGISTER,
+    name='lig_cond_a',
+    group='ligand_identity_condensed',
+    graph_entity='node',
+    entity_name='lig',
+    data_key='cond_a',
+    n_categories=num_condensed_atom_types, 
+)
+
+Modality.register(MODALITY_REGISTER,
     name='lig_e',
     group='ligand_identity',
+    graph_entity='edge',
+    entity_name='lig_to_lig',
+    data_key='e',
+    n_categories=len(bond_type_map),
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='lig_e_condensed',
+    group='ligand_identity_condensed',
     graph_entity='edge',
     entity_name='lig_to_lig',
     data_key='e',

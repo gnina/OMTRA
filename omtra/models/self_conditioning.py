@@ -50,7 +50,7 @@ class SelfConditioningResidualLayer(nn.Module):
             ntype = modality.entity_name
             if modality.is_categorical:
                 self.node_generated_dims[ntype] += modality.n_categories
-                if modality.name == 'lig_a' and self.fake_atoms:
+                if (modality.name == 'lig_a' or modality.name == 'lig_cond_a') and self.fake_atoms:
                     # if we are using fake atoms, we need to add an extra dimension for the fake atom type
                     self.node_generated_dims[ntype] += 1
             elif modality.data_key == 'x': # positions
@@ -138,7 +138,7 @@ class SelfConditioningResidualLayer(nn.Module):
                     node_res_input = dst_dict[m.name] # if we generating this feature, just use predicted logits
                 else:
                     # if we are not generating this feature (it is fixed), use the current state
-                    extra_dim = int(m.name == 'lig_a' and self.fake_atoms)
+                    extra_dim = int((m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms)
                     node_res_input = tfn.one_hot(g.nodes[ntype].data[f'{m.data_key}_t'], m.n_categories+extra_dim)
             else:
                 raise ValueError(f"Unexpected modality: {m.name}")
@@ -160,10 +160,13 @@ class SelfConditioningResidualLayer(nn.Module):
             d_edge_1 = self.edge_distances(g, etype, node_positions=dst_dict["lig_x"])
             d_input = (d_edge_1 - d_edge_t)[upper_edge_mask['lig_to_lig']]
 
-            if 'lig_e' in dst_dict:
+            if 'lig_e' in dst_dict: 
                 last_pred_state = dst_dict["lig_e"]
+            elif 'lig_e_condensed' in dst_dict:     # TODO: do we need this 'lig_e_condensed' case?
+                last_pred_state = dst_dict["lig_e_condensed"]
             else:
                 last_pred_state = tfn.one_hot(g.edges['lig_to_lig'].data['e_t'][upper_edge_mask['lig_to_lig']], name_to_modality('lig_e').n_categories)
+        
 
             edge_residual_inputs = [
                 e_t['lig_to_lig'][upper_edge_mask['lig_to_lig']],  # current state of the edge

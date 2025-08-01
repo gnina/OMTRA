@@ -45,8 +45,6 @@ class StructureData:
 @dataclass
 class LigandData:
     coords: np.ndarray
-    atom_types: np.ndarray
-    atom_charges: np.ndarray
     bond_types: np.ndarray
     bond_indices: np.ndarray
     is_covalent: bool
@@ -55,12 +53,17 @@ class LigandData:
     linkages: Optional[List[str]] = (
         None  # "{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}__{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}"
     )
+    atom_types: Optional[np.ndarray] = None
+    atom_charges:Optional[np.ndarray] = None
     # extra feats
     atom_impl_H: Optional[np.ndarray] = None
     atom_aro: Optional[np.ndarray] = None
     atom_hyb: Optional[np.ndarray] = None
     atom_ring: Optional[np.ndarray] = None
     atom_chiral: Optional[np.ndarray] = None
+    # condensed atom typing
+    atom_cond_a: Optional[np.ndarray] = None
+
     
     def to_atom_array(self, atom_type_map) -> struc.AtomArray:
         n_atoms = len(self.coords)
@@ -79,18 +82,31 @@ class LigandData:
     def to_xace_mol(self, dense=False) -> MolXACE:
         xace_dict = {
             'x': self.coords,
-            'a': self.atom_types,
-            'c': self.atom_charges,
             'e': self.bond_types,
             'edge_idxs': self.bond_indices,
         }
+
+        if self.atom_cond_a is not None:
+            xace_dict['cond_a'] = self.atom_cond_a
+        
+        else:
+            xace_dict['a'] = self.atom_types
+            xace_dict['c'] = self.atom_charges
+
+            if self.atom_impl_H is not None:
+                xace_dict['impl_H'] = self.atom_impl_H
+                xace_dict['aro'] = self.atom_aro
+                xace_dict['hyb'] = self.atom_hyb
+                xace_dict['ring'] = self.atom_ring
+                xace_dict['chiral'] = self.atom_chiral
 
         if self.bond_types is None or self.bond_indices is None:
             xace_dict['e'] = torch.zeros((0,), dtype=torch.long)
             xace_dict['edge_idxs'] = torch.zeros((2, 0), dtype=torch.long)
 
         for k in xace_dict:
-            xace_dict[k] = torch.from_numpy(xace_dict[k])
+            if isinstance(xace_dict[k], np.ndarray):
+                xace_dict[k] = torch.from_numpy(xace_dict[k])
             if k == 'x':
                 xace_dict[k] = xace_dict[k].float()
             else:

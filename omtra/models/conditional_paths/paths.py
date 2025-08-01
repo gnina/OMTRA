@@ -36,6 +36,7 @@ def sample_masked_ctmc(
     # raise NotImplementedError("need to alpha_t and beta_t conventions are set correctly, or design a better convention")
     x_t = x_1.clone()
     x_t[torch.rand_like(x_t.float()) < alpha_t.squeeze(-1)] = n_categories
+    
 
     if ue_mask is not None:
         x_t[~ue_mask] = x_t[ue_mask]

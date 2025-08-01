@@ -16,7 +16,8 @@ from omtra.utils.misc import classproperty
 from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
-from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
+from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map, num_condensed_atom_types
+from omtra.data.condensed_atom_typing import CondensedAtomTyper
 
 # from line_profiler import LineProfiler
 
@@ -41,7 +42,9 @@ class PharmitDataset(ZarrDataset):
         self.n_categories_dict = {
             'lig_a': len(lig_atom_type_map),
             'lig_c': len(charge_map),
+            'lig_cond_a': num_condensed_atom_types,
             'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
+            'lig_e_condensed': 4,
             'pharm_a': len(ph_idx_to_type),
         }
 
@@ -61,6 +64,11 @@ class PharmitDataset(ZarrDataset):
     def __len__(self):
         return self.root['lig/node/graph_lookup'].shape[0]
 
+    @functools.lru_cache()
+    def get_condensed_atom_typer(self):
+        return CondensedAtomTyper(fake_atoms=self.use_fake_atoms)
+
+
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
         task_class: Task = task_name_to_class(task_name)
@@ -68,10 +76,13 @@ class PharmitDataset(ZarrDataset):
         # check if this task includes pharmacophore data
         include_pharmacophore = 'pharmacophore' in task_class.groups_present
         # warning: this will break if we mess with different forms of ligands identity
-        lig_denovo = 'ligand_identity' in task_class.groups_generated
+        lig_denovo = any(group in task_class.groups_generated for group in ['ligand_identity',  'ligand_identity_condensed'])
 
         # check if this task includes extra ligand atom features
         include_extra_feats = 'ligand_identity_extra' in task_class.groups_present
+
+        # check if this task includes condensed atom typing
+        condensed_atom_typing = 'ligand_identity_condensed' in task_class.groups_present
 
         # slice lig node data
         xace_dict = {}
@@ -83,10 +94,24 @@ class PharmitDataset(ZarrDataset):
         if include_extra_feats:
             # Get extra ligand atom features as a dictionary
             extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
-            extra_feats_dict = {}
-            for col_idx, feat in enumerate(self.root['lig/node/extra_feats'].attrs.get('features', [])): 
+            extra_feats = extra_feats[:, :-1]
+            features = self.root['lig/node/extra_feats'].attrs.get('features', [])
+
+            # Iterate over all but the last feature
+            for col_idx, feat in enumerate(features[:-1]):
                 col_data = extra_feats[:, col_idx]         
-                extra_feats_dict[feat] = torch.from_numpy(col_data).long()
+                xace_dict[feat] = torch.from_numpy(col_data).long()
+        
+        if condensed_atom_typing:
+            extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
+            extra_feats = extra_feats[:, :-1]
+            
+            cond_a_typer = self.get_condensed_atom_typer()
+
+            xace_dict['cond_a'] = cond_a_typer.feats_to_cond_a(xace_dict['a'], xace_dict['c'], extra_feats)
+            del xace_dict['a']
+            del xace_dict['c']
+
             
         # get slice indicies for ligand-ligand edges
         edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)
@@ -97,9 +122,11 @@ class PharmitDataset(ZarrDataset):
         xace_dict['e'] = self.slice_array('lig/edge/e', start_idx, end_idx)
         xace_dict['edge_idxs'] = self.slice_array('lig/edge/edge_index', start_idx, end_idx)
 
+
         # convert to torch tensors and set data types
         for k in xace_dict:
-            xace_dict[k] = torch.from_numpy(xace_dict[k])
+            if isinstance(xace_dict[k], np.ndarray):
+                xace_dict[k] = torch.from_numpy(xace_dict[k])
             if k == 'x':
                 xace_dict[k] = xace_dict[k].float()
             else:
@@ -108,31 +135,50 @@ class PharmitDataset(ZarrDataset):
         xace_ligand = MolXACE(**xace_dict)
 
         if self.use_fake_atoms and lig_denovo:
-            xace_ligand = add_fake_atoms(xace_ligand, self.fake_atom_p)
+            if condensed_atom_typing:
+                xace_ligand = add_fake_atoms(xace_ligand, self.fake_atom_p, cond_a_typer)
+            else:
+                xace_ligand = add_fake_atoms(xace_ligand, self.fake_atom_p)
 
         # convert sparse xae to dense xae
         xace_ligand = xace_ligand.sparse_to_dense()
         # lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(*xace_ligand)
 
-        # convert charges to token indicies
-        charge_map_tensor = torch.tensor(charge_map)
-        lig_c = torch.searchsorted(charge_map_tensor, xace_ligand.c)
+        if not condensed_atom_typing:
+            # convert charges to token indicies
+            charge_map_tensor = torch.tensor(charge_map)
+            lig_c = torch.searchsorted(charge_map_tensor, xace_ligand.c)
 
         # construct inputs to graph building function
-        g_node_data = {
-            'lig': {
-                'x_1_true': xace_ligand.x, 
-                'a_1_true': xace_ligand.a,
-                'c_1_true': lig_c
-                },
-        }
-
         if include_extra_feats:
-            g_node_data['lig']['impl_H_1_true'] = extra_feats_dict['impl_H']
-            g_node_data['lig']['aro_1_true'] = extra_feats_dict['aro']
-            g_node_data['lig']['hyb_1_true'] = extra_feats_dict['hyb']
-            g_node_data['lig']['ring_1_true'] = extra_feats_dict['ring']
-            g_node_data['lig']['chiral_1_true'] = extra_feats_dict['chiral']
+            g_node_data = {
+                'lig': {
+                    'x_1_true': xace_ligand.x, 
+                    'a_1_true': xace_ligand.a,
+                    'c_1_true': lig_c,
+                    'impl_H_1_true': xace_ligand.impl_H,
+                    'aro_1_true': xace_ligand.aro,
+                    'hyb_1_true': xace_ligand.hyb,
+                    'ring_1_true': xace_ligand.ring,
+                    'chiral_1_true': xace_ligand.chiral
+                    },
+            }
+        
+        elif condensed_atom_typing:
+            g_node_data = {
+                'lig': {
+                    'x_1_true': xace_ligand.x,
+                    'cond_a_1_true': xace_ligand.cond_a}
+            }
+
+        else:
+            g_node_data = {
+                'lig': {
+                    'x_1_true': xace_ligand.x, 
+                    'a_1_true': xace_ligand.a,
+                    'c_1_true': lig_c
+                    },
+            }
 
         g_edge_data = {
             'lig_to_lig': {
