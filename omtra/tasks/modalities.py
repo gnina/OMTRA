@@ -225,11 +225,11 @@ Modality.register(MODALITY_REGISTER,
 )
 # modality for position encoding
 Modality.register(MODALITY_REGISTER,
-    name='prot_pos_enc',
+    name='prot_atom_pos_enc',
     group='protein_identity',
     graph_entity='node',
     entity_name='prot_atom',
-    data_key='pos_enc',
+    data_key='pos_enc'
 )
 
 MODALITY_ORDER = [modality.name for modality in MODALITY_REGISTER.values()]
