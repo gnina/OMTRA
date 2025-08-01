@@ -78,6 +78,8 @@ class PlinderDataset(ZarrDataset):
         self.pskip_factor = pskip_factor
         self.weighted_sampling = pskip_factor > 0.0 and split == 'train'
 
+        self.res_id_embed_dim = res_id_embed_dim
+
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
 
