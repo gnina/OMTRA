@@ -59,7 +59,8 @@ class SelfConditioningResidualLayer(nn.Module):
             elif modality.data_key == 'v': # vectors
                 self.node_generated_dims[ntype] += int(self.n_pharmvec_channels**2)
             elif modality.data_key == 'pos_enc': #position encodings
-                self.node_generated_dims[ntype] += res_id_embed_dim
+                #self.node_generated_dims[ntype] += res_id_embed_dim
+                pass # position encodings are already calculated
             else:
                 raise ValueError(f"Unexpected modality: {modality.name}")
             
@@ -143,6 +144,9 @@ class SelfConditioningResidualLayer(nn.Module):
                     # if we are not generating this feature (it is fixed), use the current state
                     extra_dim = int((m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms)
                     node_res_input = tfn.one_hot(g.nodes[ntype].data[f'{m.data_key}_t'], m.n_categories+extra_dim)
+            elif m.data_key == 'pos_enc':
+                # we dont need to add to/change the position encodings, they are already calculated
+                continue
             else:
                 raise ValueError(f"Unexpected modality: {m.name}")
             node_residual_inputs[ntype].append(node_res_input)
