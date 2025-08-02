@@ -22,7 +22,7 @@ extra_feats_map = {'impl_H': max_impl_H,
                    'ring': 2,
                    'chiral': 2}
 
-num_condensed_atom_types = 390  # TODO: don't hardcode this?
+num_condensed_atom_types = 392  # TODO: don't hardcode this?
 
 ph_type_to_idx = {val: idx for idx, val in enumerate(ph_idx_to_type)}
 

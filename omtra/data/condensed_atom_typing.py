@@ -8,12 +8,28 @@ from omtra.constants import lig_atom_type_map, charge_map, extra_feats_map
 class CondensedAtomTyper():
     def __init__(self,
                  fake_atoms: bool):
+        
+        # load tuple counts for Pharmit
         cond_a_path = omtra_root() + '/omtra/constants/pharmit_condensed_atom_types.pkl'
         
         with open(cond_a_path, 'rb') as f:
             cond_a_counts = pickle.load(f)    
         
-        self.cond_a_list = sorted(list(cond_a_counts.keys()))
+        cond_a_list = list(cond_a_counts.keys())
+
+        # load tuple counts for Plinder
+        plinder_cond_a_path = omtra_root() + '/omtra/constants/plinder_condensed_atom_types.pkl'
+        
+        with open(plinder_cond_a_path, 'rb') as f:
+            plinder_cond_a_counts = pickle.load(f)    
+
+        # update tuple list with Plinder data
+        for _, plinder_version_cond_a in plinder_cond_a_counts.items():
+            new_cond_a = [tuple for tuple in plinder_version_cond_a if tuple not in cond_a_list]
+            cond_a_list = cond_a_list + new_cond_a
+        
+        self.cond_a_list = cond_a_list
+    
         self.fake_atoms = fake_atoms
         self.lig_feats = ['a', 'c'] + list(extra_feats_map.keys())
 
@@ -48,7 +64,7 @@ class CondensedAtomTyper():
                     cond_a.append(self.cond_a_list.index(lig_feat_tuple))
 
             except Exception as e:
-                print(f"Encountered invalid atom feature tuple: {lig_feat_tuple}")
+                print(f"Encountered invalid atom feature tuple: {lig_feat_tuple}", flush=True)
 
         cond_a = np.array(cond_a)
         
@@ -73,7 +89,7 @@ class CondensedAtomTyper():
                 else:
                     lig_feat_tuples.append(self.cond_a_list[idx])
             except Exception as e:
-                print(f"Warning: Encountered an invalid condensed atom type {idx}")
+                print(f"Warning: Encountered an invalid condensed atom type {idx}", flush=True)
        
         lig_feat_tuples = np.array(lig_feat_tuples)
         

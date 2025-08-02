@@ -5,6 +5,7 @@ from tqdm import tqdm
 import time
 import torch
 import zarr
+import pickle
 
 from multiprocessing import Pool
 from functools import partial
@@ -14,14 +15,14 @@ from collections import defaultdict
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description='Compute new ligand features in parallel and save to Pharmit Zarr store.')
+    p = argparse.ArgumentParser(description='Get ligand atom feature tuple counts in Plinder dataset.')
 
-    p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default='/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit')
+    p.add_argument('--plinder_path', type=str, help='Path to the Plinder Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/plinder')
     p.add_argument('--split', type=str, help='Data split: train or val.', default='train')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
     p.add_argument('--block_size', type=int, default=1000000, help='Number of ligands to process in a block.')
     p.add_argument('--n_cpus', type=int, default=1, help='Number of CPUs to use for parallel processing.')
-    p.add_argument('--output_dir', type=Path, help='Output directory for processed data.', default=Path('omtra_pipelines/pharmit_ligand_properties/outputs/count_lig_feats'))
+    p.add_argument('--output_dir', type=Path, help='Output directory for processed data.', default=Path('omtra_pipelines/plinder_ligand_properties/outputs/count_lig_feats'))
  
     return p.parse_args()
 
@@ -33,7 +34,7 @@ atom_types = None
 atom_charge = None
 extra_feats = None
 
-def process_pharmit_block(block_start_idx: int, block_end_idx: int):
+def process_plinder_block(block_start_idx: int, block_end_idx: int):
     """ 
     Parameters:
         block_start_idx (int): Index of the first atom in the block
@@ -58,14 +59,14 @@ def process_pharmit_block(block_start_idx: int, block_end_idx: int):
 
 
 def worker_initializer(store_path):
-    """ Sets pharmit dataset instance as a global variable """
+    """ Sets plinder dataset instance as a global variable """
 
     global atom_types, atom_charges, extra_feats
 
     root = zarr.open(store_path, mode='r')
-    lig_node_group = root['lig/node']
-    atom_types = lig_node_group['a']
-    atom_charges = lig_node_group['c']
+    lig_node_group = root['ligand']
+    atom_types = lig_node_group['atom_types']
+    atom_charges = lig_node_group['atom_charges']
     extra_feats = lig_node_group['extra_feats']
 
 
@@ -116,7 +117,7 @@ class FeatureAggregator:
         
 
 
-def run_parallel(pharmit_path: str,
+def run_parallel(plinder_path: str,
                  split: str,
                  block_size: int,
                  n_cpus: int,
@@ -126,17 +127,17 @@ def run_parallel(pharmit_path: str,
     if max_pending is None:
         max_pending = n_cpus * 5 
 
-    store_path = pharmit_path+'/'+split+'.zarr'
+    store_path = f"{plinder_path}/{split}.zarr"
     root = zarr.open(store_path, mode='r')
 
-    n_atoms = root['lig/node/a'].shape[0]
+    n_atoms = root['ligand/atom_types'].shape[0]
     n_blocks = (n_atoms + block_size - 1) // block_size
 
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
     aggregator = FeatureAggregator()
     error_counter = [0]
 
-    print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n", flush=True)
+    print(f"Plinder zarr store will be processed in {n_blocks} blocks.\n", flush=True)
     print(f"––––––––––––––––––––––––––––––––––", flush=True)
     
     with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(store_path,), maxtasksperchild=5) as pool:
@@ -165,7 +166,7 @@ def run_parallel(pharmit_path: str,
             block_start_idx = block_idx * block_size
             block_end_idx = min(block_start_idx + block_size, n_atoms)
 
-            result = pool.apply_async(process_pharmit_block,
+            result = pool.apply_async(process_plinder_block,
                                       args=(block_start_idx, block_end_idx),
                                       callback=callback_fn,
                                       error_callback=error_callback_fn)   
@@ -179,15 +180,15 @@ def run_parallel(pharmit_path: str,
     return aggregator.unique_atom_features
 
 
-def run_single(pharmit_path: str,
+def run_single(plinder_path: str,
                split: str,
                block_size: int,
                output_dir: Path):
 
-    store_path = store_path = pharmit_path+'/'+split+'.zarr'
+    store_path = f"{plinder_path}/{split}.zarr"
     root = zarr.open(store_path, mode='r')
 
-    n_atoms = root['lig/node/a'].shape[0]
+    n_atoms = root['ligand/atom_types'].shape[0]
     n_blocks = (n_atoms + block_size - 1) // block_size
 
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
@@ -196,7 +197,7 @@ def run_single(pharmit_path: str,
 
     worker_initializer(store_path)  # initialize global variables for zarr arrays
 
-    print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
+    print(f"Plinder zarr store will be processed in {n_blocks} blocks.\n")
     print(f"––––––––––––––––––––––––––––––––––")
 
     for block_idx in range(n_blocks):
@@ -209,7 +210,7 @@ def run_single(pharmit_path: str,
                                   output_dir=output_dir
                                   )     
         try:
-            result = process_pharmit_block(block_start_idx, min(block_start_idx + block_size, n_atoms))
+            result = process_plinder_block(block_start_idx, min(block_start_idx + block_size, n_atoms))
             callback_fn(result)
 
         except Exception as e:
@@ -235,15 +236,24 @@ if __name__ == '__main__':
 
     # Ensure output directory exists
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    tuple_counts = {}
 
     start_time = time.time()
 
-    if args.n_cpus == 1:
-        result = run_single(args.pharmit_path, args.split, args.block_size, args.output_dir)
-    else:
-        result = run_parallel(args.pharmit_path, args.split, args.block_size, args.n_cpus, args.output_dir)
+    for version in ['exp', 'no_links', 'pred']:
 
-    torch.save(result, args.output_dir / f'{args.split}_unique_feat_tuples.pt')
+        plinder_path = f"{args.plinder_path}/{version}"
+
+        if args.n_cpus == 1:
+            result = run_single(plinder_path, args.split, args.block_size, args.output_dir)
+        else:
+            result = run_parallel(plinder_path, args.split, args.block_size, args.n_cpus, args.output_dir)
+        
+        tuple_counts[version] = result
+
+
+    with open(f'{args.output_dir}/plinder_{args.split}_condensed_atom_types.pkl', 'wb') as f:
+        pickle.dump(tuple_counts, f)
 
     end_time = time.time()
 
