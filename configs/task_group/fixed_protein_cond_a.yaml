@@ -10,7 +10,7 @@ defaults:
 task_phases:
   - duration_batches: null
     tasks:
-      - name: flexible_docking_condensed
+      - name: rigid_docking_condensed
         probability: 0.5
       - name: fixed_protein_ligand_denovo_condensed
         probability: 0.5
