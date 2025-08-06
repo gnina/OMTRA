@@ -311,7 +311,7 @@ def compute_metrics(system_pairs, task, metrics_to_run):
 
 
 def sample_system(ckpt_path: Path,
-                  task: str,
+                  task: Task,
                   dataset_start_idx: int,
                   n_samples: int,
                   n_replicates: int,
@@ -349,7 +349,7 @@ def sample_system(ckpt_path: Path,
     g_list = [ dataset[(task.name, i)].to(device) for i in dataset_idxs ]
 
     # system info
-    sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)]
+    sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
     sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
 
     # set coms if protein is present
@@ -358,16 +358,18 @@ def sample_system(ckpt_path: Path,
     else:
         coms = None
     
-    n_systems = len(g_list) * n_replicates
-    reps_per_batch = math.floor(max_batch_size / len(g_list))
-    batch_size = len(g_list) * reps_per_batch
-    n_batches = math.ceil(n_systems/batch_size)
+    # sample the model in batches
+    reps_per_batch = min(max_batch_size // n_samples, n_replicates)
+    n_full_batches = n_replicates // reps_per_batch
+    last_batch_reps = n_replicates % reps_per_batch
 
     sampled_systems = []
+    sample_names = []
 
-    for _ in range(n_batches):
-        sampled_systems += model.sample(
-                                    g_list=g_list,
+    for i in range(n_full_batches):
+        sample_names += [f"sys_{sys_idx}_rep_{(i*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(reps_per_batch)]
+
+        sampled_systems += model.sample(g_list=g_list,
                                     n_replicates=reps_per_batch,
                                     task_name=task.name,
                                     unconditional_n_atoms_dist=dataset,
@@ -377,16 +379,30 @@ def sample_system(ckpt_path: Path,
                                     coms=coms,
                                     )
         
+    # last batch
+    if last_batch_reps > 0:
+        sample_names += [f"sys_{sys_idx}_rep_{(n_full_batches*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(last_batch_reps)]
 
-    return g_list, sampled_systems, sys_info
+        sampled_systems += model.sample(g_list=g_list,
+                                        n_replicates=last_batch_reps,
+                                        task_name=task.name,
+                                        unconditional_n_atoms_dist=dataset,
+                                        device=device,
+                                        n_timesteps=n_timesteps,
+                                        visualize=False,
+                                        coms=coms,
+                                        )
+     
+    return g_list, sampled_systems, sys_info, sample_names
 
 
 
 def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
-                    sampled_systems: List[SampledSystem],
-                    task: Task,
-                    n_replicates: int,
-                    output_dir: Path):
+                       sampled_systems: List[SampledSystem],
+                       sample_names: List[str],
+                       task: Task,
+                       n_replicates: int,
+                       output_dir: Path):
 
     write_ground_truth(
         n_systems=len(g_list),
@@ -400,11 +416,6 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
     
     system_pairs = {}
 
-    # collect all the ligands for each system
-    sample_names = generate_sample_names(
-        n_systems=len(g_list), 
-        n_replicates=n_replicates
-    )
     for sys_id, replicates in enumerate(
         group_samples_by_system(
         sample_names=sample_names,
@@ -519,22 +530,23 @@ def main(args):
     samples_dir = output_dir / 'samples' / task_name
 
     # Get samples from checkpoint
-    g_list, sampled_systems, sys_info = sample_system(ckpt_path=args.ckpt_path,
-                                    task=task,
-                                    dataset_start_idx=args.dataset_start_idx,
-                                    n_samples=args.n_samples,
-                                    n_replicates=args.n_replicates,
-                                    n_timesteps=args.n_timesteps,
-                                    split=args.split,
-                                    max_batch_size=args.max_batch_size,
-                                    plinder_path=args.plinder_path)
+    g_list, sampled_systems, sys_info, sample_names = sample_system(ckpt_path=args.ckpt_path,
+                                                                    task=task,
+                                                                    dataset_start_idx=args.dataset_start_idx,
+                                                                    n_samples=args.n_samples,
+                                                                    n_replicates=args.n_replicates,
+                                                                    n_timesteps=args.n_timesteps,
+                                                                    split=args.split,
+                                                                    max_batch_size=args.max_batch_size,
+                                                                    plinder_path=args.plinder_path)
     
+    # write samples to output files and configure dictionary of system pairs
     system_pairs = write_system_pairs(g_list=g_list,
                                     sampled_systems=sampled_systems,
+                                    sample_names=sample_names,
                                     task=task,
                                     n_replicates=args.n_replicates,
                                     output_dir=samples_dir)
-    
     
     metrics_to_run = {'pb_valid': args.pb_valid,
                       'gnina': args.gnina,
