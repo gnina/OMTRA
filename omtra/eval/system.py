@@ -23,6 +23,7 @@ from omtra.tasks.modalities import name_to_modality
 from collections import defaultdict
 from omtra.tasks.register import task_name_to_class
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
+from omtra.tasks.tasks import Task
 
 from omtra.data.graph.utils import (
     copy_graph,
@@ -42,6 +43,7 @@ class SampledSystem:
     def __init__(
         self,
         g: dgl.DGLHeteroGraph,
+        task: Task,
         traj: Dict[str, torch.Tensor] = None,
         fake_atoms: bool = False,  # whether the molecule contains fake atoms,
         ctmc_mol: bool = True,
@@ -55,7 +57,7 @@ class SampledSystem:
         protein_element_map: List[str] = protein_element_map,
         cond_a_typer: CondensedAtomTyper = None
     ):
-        self.g = g
+        self.task = task
         self.traj = traj
         self.fake_atoms = fake_atoms
         self.ctmc_mol = ctmc_mol
@@ -81,24 +83,30 @@ class SampledSystem:
             self.ligand_atom_type_map = deepcopy(self.ligand_atom_type_map)
             self.ligand_atom_type_map.append("Se")  # masked atoms appear as Se
         
+        self.has_condensed_typing = ('ligand_identity_condensed' in task.groups_present) or ('ligand_identity_condensed' in task.groups_generated)
 
-        # Convert condensed atom type representation to explicit form 
-        self.cond_a_typer = cond_a_typer
+        if self.has_condensed_typing:
+            # decode condensed atom type representation to explicit form 
+            self.cond_a_typer = cond_a_typer
+            self.g = self.decode_conda(g)
+        else:
+            self.g = g
 
+    def decode_conda(self, g):
+        # decodes condensed atom tupes to explicit atom features
         lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
         lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
-        
-        if any('cond_a' in group for group in lig_ndata_feats):
-            cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
+    
+        cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
 
-            for cond_a_feat, suffix in cond_a_feats:
-                lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
+        for cond_a_feat, suffix in cond_a_feats:
+            lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
 
-                for feat, val in lig_feats_dict.items():
-                    self.g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
-                
-                del self.g.nodes["lig"].data[cond_a_feat]
-
+            for feat, val in lig_feats_dict.items():
+                g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
+            
+            del g.nodes["lig"].data[cond_a_feat]
+        return g
 
     def to(self, device: str):
         self.g = self.g.to(device)
@@ -388,7 +396,12 @@ class SampledSystem:
             g_dummy = self.g.clone()
         else:
             g_dummy = g.clone()
-        g_dummy = move_feats_to_t1('denovo_ligand', g_dummy, t="1_true")
+
+        if self.has_condensed_typing:
+            g_dummy = self.decode_conda(g_dummy)       
+
+        g_dummy = move_feats_to_t1('denovo_ligand', g_dummy, t="1_true")     
+        
         ligdata = self.extract_ligdata_from_graph(g=g_dummy, ctmc_mol=self.ctmc_mol)
         rdkit_mol = self.build_molecule(*ligdata)
         return rdkit_mol
@@ -464,6 +477,20 @@ class SampledSystem:
             lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
             lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             lig_edata_feats = list(lig_g.edges["lig_to_lig"].data.keys())
+            
+            # if any('cond_a' in group for group in lig_ndata_feats):
+            #     cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
+
+            #     for cond_a_feat, suffix in cond_a_feats:
+            #         lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
+
+            #         for feat, val in lig_feats_dict.items():
+            #             lig_g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
+                    
+            #         del g.nodes["lig"].data[cond_a_feat]
+
+            #     lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
+
             
         else:
             if g.num_nodes(ntype="npnde") == 0:

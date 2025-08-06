@@ -737,6 +737,7 @@ class OMTRA(pl.LightningModule):
                 ss_kwargs = dict()
             sampled_system = SampledSystem(
                 g=g_i,
+                task=task,
                 fake_atoms=self.fake_atom_p>0.0,
                 cond_a_typer=self.cond_a_typer,
                 **ss_kwargs,
