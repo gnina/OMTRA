@@ -74,6 +74,7 @@ class SampledSystem:
         self.rdkit_ligand = None
         self.rdkit_ref_ligand = None
         self.rdkit_protein = None
+        self.rdkit_ref_protein = None
         
         if self.fake_atoms:
             self.ligand_atom_type_map = deepcopy(self.ligand_atom_type_map)
@@ -422,6 +423,14 @@ class SampledSystem:
         self.rdkit_protein = prot_mol
         return prot_mol
 
+    def get_rdkit_ref_protein(self):
+        if self.rdkit_ref_protein is not None:
+             return self.rdkit_ref_protein
+        prot_arr = self.get_protein_array(reference=True)
+        prot_mol = bt_rdkit.to_mol(prot_arr)
+        self.rdkit_ref_protein = prot_mol
+        return prot_mol
+
     def convert_ligdata_to_biotite(
         self,
         positions,
@@ -477,6 +486,7 @@ class SampledSystem:
             lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
             lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             lig_edata_feats = list(lig_g.edges["lig_to_lig"].data.keys())
+
 
             
         else:
