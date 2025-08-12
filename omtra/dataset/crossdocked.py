@@ -16,7 +16,8 @@ from omtra.constants import (
 )
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders, approx_n_edges
-from omtra.data.xace_ligand import sparse_to_dense, add_k_hop_edges
+#from omtra.data.xace_ligand import sparse_to_dense, add_k_hop_edges
+from omtra.data.xace_ligand import MolXACE
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
@@ -559,8 +560,17 @@ class CrossdockedDataset(ZarrDataset):
         else:
             bond_types = torch.zeros((0,), dtype=torch.long)
             bond_indices = torch.zeros((2, 0), dtype=torch.long)
-
-        lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(
+        
+        #create an instance of MolXACE to use function
+        mol_instance = MolXACE(
+            x=coords,           # coordinates
+            a=atom_types,       # atom types  
+            c=atom_charges,     # charges
+            e=bond_types,       # edge/bond types
+            edge_idxs=bond_indices  # edge indices
+        )
+        
+        lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = mol_instance.sparse_to_dense(
             coords, atom_types, atom_charges, bond_types, bond_indices
         )
 
