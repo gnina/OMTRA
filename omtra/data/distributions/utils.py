@@ -1,4 +1,6 @@
 from scipy.ndimage import gaussian_filter
+import torch
+import math
 
 def smooth_joint_distribution(density, sigma=(1.0, 1.0, 1.0), mode='constant'):
     """
@@ -29,3 +31,23 @@ def smooth_joint_distribution(density, sigma=(1.0, 1.0, 1.0), mode='constant'):
     smoothed_density /= smoothed_density.sum()
     
     return smoothed_density
+def residue_sinusoidal_encoding(residue_idx: torch.LongTensor,
+                                 d_model: int):
+    """
+    residue_idx: (N_atoms,) each entry in [0..R-1]
+    returns:     (N_atoms, d_model) same encoding for same residue_idx
+    """
+    device = residue_idx.device
+    N = residue_idx.size(0)
+    # (d_model/2,) — even dims for sin, odd for cos
+    inv_freq = torch.exp(
+        torch.arange(0, d_model, 2, device=device).float() *
+        -(math.log(10000.0) / d_model)
+    )  # (d_model/2,)
+    # (N, d_model/2)
+    angles = residue_idx.float().unsqueeze(1) * inv_freq.unsqueeze(0)
+    pe = torch.zeros(N, d_model, device=device)
+    pe[:, 0::2] = torch.sin(angles)
+    pe[:, 1::2] = torch.cos(angles)
+    
+    return pe

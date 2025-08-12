@@ -30,6 +30,7 @@ from omtra.data.plinder import (
     SystemData,
     BackboneData,
 )
+from omtra.utils.embedding import residue_sinusoidal_encoding
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
 from typing import List, Dict, Tuple, Any, Optional
 import pandas as pd
@@ -59,6 +60,7 @@ class PlinderDataset(ZarrDataset):
         prior_config: Optional[DictConfig] = None,
         fake_atom_p: float = 0.0,
         pskip_factor: float = 0.0, 
+        res_id_embed_dim: int = 64,
         # this is a parmaeter that controls whether/how we do weighted sampling of the the dataset
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
     ):
@@ -75,6 +77,8 @@ class PlinderDataset(ZarrDataset):
         self.fake_atom_p = fake_atom_p
         self.pskip_factor = pskip_factor
         self.weighted_sampling = pskip_factor > 0.0 and split == 'train'
+
+        self.res_id_embed_dim = res_id_embed_dim
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
@@ -979,6 +983,17 @@ class PlinderDataset(ZarrDataset):
             graph_config=self.graph_config,
         )
 
+        # standardize residue ids (ensure all residue ids start at 0 across chains)
+        # node_data contains chain_ds, and prot_res_ids
+        prot_res_ids = node_data["prot_atom"]["res_id"] #starting indices 
+        prot_chain_ids = node_data["prot_atom"]["chain_id"] # protein chain ids
+        residue_idxs = self.standardize_residue_ids(prot_res_ids, prot_chain_ids)
+        # create protein position embeddings
+        protein_position_encodings = residue_sinusoidal_encoding(residue_idxs, self.res_id_embed_dim)
+        
+        # Add the position embeddings to the graph's protein atom nodes
+        g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
+
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)
 
@@ -1122,6 +1137,22 @@ class PlinderDataset(ZarrDataset):
             int(system_info["lig_atom_end"]),
         )
         return lig_atom_start, lig_atom_end
+    
+    def standardize_residue_ids(self, res_ids: torch.Tensor, chain_ids: torch.Tensor):
+        """
+        Normalize residue IDs within each chain by subtracting the chain-specific minimum residue ID
+        """
+        standardized = torch.zeros_like(res_ids)
+        unique_chains = torch.unique(chain_ids, sorted=True)
+
+        for chain in unique_chains:
+            chain_mask = chain_ids == chain
+            chain_res_ids = res_ids[chain_mask]
+            
+            min_res_id = torch.min(chain_res_ids)
+            standardized[chain_mask] = chain_res_ids - min_res_id
+
+        return standardized
 
 def compute_pskip(
     df: pd.DataFrame,
