@@ -361,7 +361,7 @@ class PlinderDataset(ZarrDataset):
             # Get extra ligand atom features as a dictionary
             lig_extra_feats = self.slice_array(f'ligand/extra_feats', lig_atom_start, lig_atom_end)
             lig_extra_feats = lig_extra_feats[:, :-1]
-            features = self.root['lig/node/extra_feats'].attrs.get('features', [])
+            features = self.root['ligand/extra_feats'].attrs.get('features', [])
 
             lig_extra_feats_dict = {}
 
