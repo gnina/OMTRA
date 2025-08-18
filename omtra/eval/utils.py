@@ -57,10 +57,8 @@ def compute_validity(
                 error_messages['no error'] += 1
             except Chem.rdchem.AtomValenceException:
                 error_messages['AtomValence'] += 1
-                # print("Valence error in GetmolFrags")
             except Chem.rdchem.KekulizeException:
                 error_messages['Kekulize'] += 1
-                # print("Can't kekulize molecule")
             except Exception as e:
                 error_messages['other'] += 1
     
@@ -71,8 +69,21 @@ def compute_validity(
     print(error_str)
 
     frac_valid_mols = n_valid / len(sampled_systems)
-    avg_frag_frac = sum(frag_fracs) / len(frag_fracs)
-    avg_num_components = sum(num_components) / len(num_components)
+
+    # TODO: often frag_fracs/num_components is empty because all atoms are fake. Maybe indicates an architecture issue and we don't need these checks
+
+    if frag_fracs:
+        avg_frag_frac = sum(frag_fracs) / len(frag_fracs)
+    else:
+        print("Warning: all atoms in this batch are probably fake atoms. Setting avg_frag_frac to 0.0")
+        avg_frag_frac = 0.0
+    
+    if num_components:
+        avg_num_components = sum(num_components) / len(num_components)
+    else:
+        print("Warning: all atoms in this batch are probably fake atoms. Setting avg_num_components to 0.0")
+        avg_num_components = 0.0
+    
 
     if return_counts:
         metrics = {
@@ -106,9 +117,14 @@ def compute_stability(sampled_systems: List[SampledSystem]):
         n_stable_atoms += n_stable_atoms_this_mol
         n_stable_molecules += int(mol_stable)
 
-    frac_atoms_stable = (
-        n_stable_atoms / n_atoms
-    )  # the fraction of generated atoms that have valid valencies
+    if n_atoms == 0:
+        print("Warning: all atoms in this batch are probably fake atoms. Setting frac_atoms_stable to 0.0")
+        frac_atoms_stable = 0.0
+    else:
+        frac_atoms_stable = (
+            n_stable_atoms / n_atoms
+        )  # the fraction of generated atoms that have valid valencies
+
     frac_mols_stable_valence = (
         n_stable_molecules / n_molecules
     )  # the fraction of generated molecules whose atoms all have valid valencies

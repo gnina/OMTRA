@@ -98,9 +98,6 @@ class LigandConformer(Task):
     conditional_paths = cpc.ligand_conformer  
 
 
-# TODO: denovo_ligand with extra feats. groups generated + ligand_identity_extra
-# TODO: ligand_conformer with extra feats. groups fixed + ligand_identity_extra
-
 @register_task("denovo_ligand_extra_feats")
 class DeNovoLigandExtraFeats(Task):
     groups_fixed = []
@@ -115,8 +112,30 @@ class DeNovoLigandExtraFeats(Task):
 
 
 @register_task("ligand_conformer_extra_feats")
-class LigandConformer(Task):
+class LigandConformerExtraFeats(Task):
     groups_fixed = ['ligand_identity', 'ligand_identity_extra']
+    groups_generated = ['ligand_structure']
+
+    priors = pc.ligand_conformer
+    conditional_paths = cpc.ligand_conformer
+
+
+@register_task("denovo_ligand_condensed")
+class DeNovoLigandCondensed(Task):
+    groups_fixed = []
+    groups_generated = ['ligand_identity_condensed', 'ligand_structure']
+
+    priors = {'lig_x': {'type': 'gaussian', 'params': {'ot': True}},
+              'lig_e_condensed': dict(type='masked'),
+              'lig_cond_a': dict(type='masked')}
+    conditional_paths = {'lig_x': dict(type='continuous_interpolant'),
+                         'lig_e_condensed': dict(type='ctmc_mask'),
+                         'lig_cond_a': dict(type='ctmc_mask')}
+
+
+@register_task("ligand_conformer_condensed")
+class LigandConformerCondensed(Task):
+    groups_fixed = ['ligand_identity_condensed']
     groups_generated = ['ligand_structure']
 
     priors = pc.ligand_conformer
@@ -159,7 +178,6 @@ class ProteinLigandDeNovo(Task):
     }
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
 
-
 @register_task("fixed_protein_ligand_denovo")
 class FixedProteinLigandDeNovo(Task):
     groups_fixed = ['protein_identity', 'protein_structure']
@@ -168,8 +186,19 @@ class FixedProteinLigandDeNovo(Task):
     priors = deepcopy(pc.denovo_ligand)
 
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein) # can probably remove protein from this
-    
 
+@register_task("fixed_protein_ligand_denovo_condensed")
+class FixedProteinLigandDeNovoCondensed(Task):
+    groups_fixed = ['protein_identity', 'protein_structure']
+    groups_generated = ['ligand_identity_condensed', 'ligand_structure']
+
+    priors = {'lig_x': {'type': 'gaussian', 'params': {'ot': True}},
+              'lig_e_condensed': dict(type='masked'),
+              'lig_cond_a': dict(type='masked')}
+
+    conditional_paths = dict({'lig_x': dict(type='continuous_interpolant'),
+                         'lig_e_condensed': dict(type='ctmc_mask'),
+                         'lig_cond_a': dict(type='ctmc_mask')}, **cpc.protein) # can probably remove protein from this
 
 @register_task("exp_apo_conditioned_denovo_ligand")
 class ExpApoDeNovoLigand(Task):
@@ -217,6 +246,19 @@ class RigidDocking(Task):
     """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
 
     groups_fixed = ["ligand_identity", "protein_identity", "protein_structure"]
+    groups_generated = ["ligand_structure"]
+
+    priors = deepcopy(pc.ligand_conformer)
+    priors["npnde_x"] = {
+        "type": "target_dependent_gaussian",
+    }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
+
+@register_task("rigid_docking_condensed")
+class RigidDockingCondensed(Task):
+    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0 with condensed atom typing for ligands"""
+
+    groups_fixed = ["ligand_identity_condensed", "protein_identity", "protein_structure"]
     groups_generated = ["ligand_structure"]
 
     priors = deepcopy(pc.ligand_conformer)

@@ -49,6 +49,10 @@ def build_edges(g: dgl.DGLHeteroGraph,
             raise NotImplementedError(f"Error getting edge builder for {etype}")
         
         edge_idxs = builder_fn(src_pos, dst_pos, node_batch_idx[src_ntype], node_batch_idx[dst_ntype])
+
+        if etype == 'prot_atom_to_prot_atom' and graph_config.get('cov_prot_edges', False):
+            edge_idxs = get_combined_edges(g, edge_idxs)
+
         g.add_edges(edge_idxs[0], edge_idxs[1], etype=etype)
         canonical_etype = (src_ntype, etype, dst_ntype)
         batch_num_edges[canonical_etype] = get_edges_per_batch(edge_idxs[0], batch_size, node_batch_idx[src_ntype])
@@ -86,6 +90,20 @@ def remove_edges(g: dgl.DGLHeteroGraph, lig_only: bool = False) -> dgl.DGLHetero
     g.set_batch_num_nodes(batch_num_nodes)
     
     return g
+
+def get_combined_edges(g, new_edge_idxs: torch.Tensor):
+
+    # new_edge_idxs has shape (2, n_edges, )
+    cov_edge_idxs = torch.stack(g.edges(etype='prot_atom_covalent_prot_atom'), dim=0) # has shape (2, n_edges)
+
+    # concatenate along the edge dimension → [2, n_a + n_b]
+    edges = torch.cat([cov_edge_idxs, new_edge_idxs], dim=1)
+    # transpose to shape [n_edges, 2] so we can unique rows
+    edges_t = edges.t()
+    # unique rows → returns sorted unique edge pairs
+    unique_edges_t = torch.unique(edges_t, dim=0)
+    # transpose back to [2, n_union]
+    return unique_edges_t.t()
     
     
     

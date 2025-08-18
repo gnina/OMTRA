@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from typing import Tuple, Union
 from collections import defaultdict
 import math
-from omtra.constants import lig_atom_type_map
+from omtra.constants import lig_atom_type_map, extra_feats_map
+from omtra.data.condensed_atom_typing import CondensedAtomTyper
 
 from omtra.utils.misc import combine_tcv_counts, bad_mol_reporter
 
@@ -24,6 +25,15 @@ class MolXACE:
     a: Optional[Union[np.ndarray, torch.Tensor]] = None
     c: Optional[Union[np.ndarray, torch.Tensor]] = None
     e: Optional[Union[np.ndarray, torch.Tensor]] = None  # corresponds to edge attributes (bond orders)
+
+    impl_H: Optional[Union[np.ndarray, torch.Tensor]] = None
+    aro: Optional[Union[np.ndarray, torch.Tensor]] = None
+    hyb: Optional[Union[np.ndarray, torch.Tensor]] = None
+    ring: Optional[Union[np.ndarray, torch.Tensor]] = None
+    chiral: Optional[Union[np.ndarray, torch.Tensor]] = None
+
+    cond_a: Optional[Union[np.ndarray, torch.Tensor]] = None    # condensed atom typing
+
     edge_idxs: Optional[Union[np.ndarray, torch.Tensor]] = None   # corresponds to edge index (upper triangular edges)
     tcv_counts: Optional[dict] = None
     failure_mode: Optional[str] = None
@@ -35,7 +45,11 @@ class MolXACE:
             raise ValueError("bond_idxs and bond_types must be set to convert to dense representation.")
         
         # Create a dense adjacency matrix
-        n_atoms = self.a.shape[0]
+        if self.cond_a is not None:
+            n_atoms = self.cond_a.shape[0]
+        else:
+            n_atoms = self.a.shape[0]
+            
         adj = torch.zeros((n_atoms, n_atoms), dtype=self.e.dtype)
         adj[self.edge_idxs[:, 0], self.edge_idxs[:, 1]] = self.e
         
@@ -51,14 +65,37 @@ class MolXACE:
         edge_idxs = torch.cat((upper_edge_idxs, lower_edge_idxs), dim=1)
         bond_types = torch.cat((upper_edge_labels, upper_edge_labels))
 
-        dense_xace = MolXACE(
-            x=self.x,
-            a=self.a,
-            c=self.c,
-            e=bond_types,
-            edge_idxs=edge_idxs
-        )
-        
+        if self.cond_a is not None:     # condensed atom typing
+            dense_xace = MolXACE(
+                x=self.x,
+                cond_a=self.cond_a,
+                e=bond_types,
+                edge_idxs=edge_idxs
+            )
+
+        elif self.impl_H is not None:   # Extra features
+            dense_xace = MolXACE(
+                x=self.x,
+                a=self.a,
+                c=self.c,
+                impl_H=self.impl_H,
+                aro=self.aro,
+                hyb=self.hyb,
+                ring=self.ring,
+                chiral=self.chiral,
+                e=bond_types,
+                edge_idxs=edge_idxs
+            )
+
+        else:                       # regular 
+            dense_xace = MolXACE(
+                x=self.x,
+                a=self.a,
+                c=self.c,
+                e=bond_types,
+                edge_idxs=edge_idxs
+            )
+            
         return dense_xace
 
 
@@ -186,7 +223,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         tcv_counts=tcv_counts,
     )
 
-def add_fake_atoms(mol: MolXACE, fake_atom_p: float):
+def add_fake_atoms(mol: MolXACE, fake_atom_p: float, cond_a_typer: CondensedAtomTyper=None):
     n_real_atoms, _ = mol.x.shape
     max_num_fake_atoms = math.ceil(n_real_atoms*fake_atom_p)
     num_fake_atoms = torch.randint(low=0, high=max_num_fake_atoms, size=(1,))
@@ -197,15 +234,30 @@ def add_fake_atoms(mol: MolXACE, fake_atom_p: float):
     # currently: gaussians around anchor atom 
     # possibilities: collapse on nearest atom, random placement in molecule interior,
     # fixed distance from acnhor atom
-    fake_atom_positions = fake_atom_positions + torch.randn_like(fake_atom_positions) 
-    fake_atom_charges = torch.zeros_like(mol.c[anchor_atom_idxs])
-    fake_atom_types = torch.full_like(mol.a[anchor_atom_idxs], fill_value=len(lig_atom_type_map))
-
-    # combine fake atoms with real atoms
+    fake_atom_positions = fake_atom_positions + torch.randn_like(fake_atom_positions)
     mol.x = torch.cat((mol.x, fake_atom_positions), dim=0)
-    mol.a = torch.cat((mol.a, fake_atom_types), dim=0)
-    mol.c = torch.cat((mol.c, fake_atom_charges), dim=0)
 
+    # TODO: dataset class initialize CondensedAtomTyper and pass to add_fake_atoms. Right now done by Pharmit dataclass
+
+    if mol.cond_a is not None:  # condensed atom typing
+        fake_atom_cond_a =  torch.full_like(mol.cond_a[anchor_atom_idxs], fill_value=len(cond_a_typer.cond_a_list))
+        mol.cond_a = torch.cat((mol.cond_a, fake_atom_cond_a), dim=0)
+
+    else: 
+        fake_atom_charges = torch.zeros_like(mol.c[anchor_atom_idxs])
+        fake_atom_types = torch.full_like(mol.a[anchor_atom_idxs], fill_value=len(lig_atom_type_map))
+
+        # combine fake atoms with real atoms
+        mol.a = torch.cat((mol.a, fake_atom_types), dim=0)
+        mol.c = torch.cat((mol.c, fake_atom_charges), dim=0)
+        
+        if mol.impl_H is not None:  # extra features
+            for extra_feat in extra_feats_map.keys():
+                old_feat = getattr(mol, extra_feat)     # Old atom extra features
+                fake_atom_feats = torch.zeros_like(old_feat[anchor_atom_idxs])
+                new_feat = torch.cat((old_feat, fake_atom_feats), dim=0)    
+                setattr(mol, extra_feat, new_feat)      # Add fake atom extra features
+    
     return mol
 
 

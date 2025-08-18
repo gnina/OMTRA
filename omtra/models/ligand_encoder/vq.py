@@ -383,6 +383,8 @@ class LigandVQVAE(pl.LightningModule):
                  decay: float = 0.99,
                  epsilon: float = 1e-5,
                  use_extra_feats: bool = False,
+                 extra_feats_cost: float = 1.0,
+                 e_zero_cost: float = 1.0,
                  og_run_dir: Optional[str] = None,):
                  
         super().__init__()
@@ -400,6 +402,8 @@ class LigandVQVAE(pl.LightningModule):
         self.rbf_dmax = rbf_dmax
         self.mask_prob = mask_prob
         self.use_extra_feats = use_extra_feats
+        self.extra_feats_cost = extra_feats_cost
+        self.e_zero_cost = e_zero_cost
 
         
         self.encoder = Encoder(
@@ -468,6 +472,7 @@ class LigandVQVAE(pl.LightningModule):
         self.atom_charge_loss_fn = torch.nn.CrossEntropyLoss()
 
         self.bond_order_loss_fn = torch.nn.CrossEntropyLoss()
+        self.zero_bond_order_loss_fn = torch.nn.CrossEntropyLoss()
 
         if self.use_extra_feats:
             self.extra_feats_loss_fn = nn.ModuleDict({feat: torch.nn.CrossEntropyLoss() for feat in extra_feats_map.keys()})
@@ -493,19 +498,28 @@ class LigandVQVAE(pl.LightningModule):
         ####
         atom_type_loss = self.atom_type_loss_fn(logits['atom_type'], target_atom_types)
         atom_charge_loss = self.atom_charge_loss_fn(logits['atom_charge'], target_atom_charges)
-        bond_order_loss = self.bond_order_loss_fn(logits['bond_order'], target_bond_orders)
+
+        # Log loss on non-zero bond orders
+        #bond_order_loss = self.bond_order_loss_fn(logits['bond_order'], target_bond_orders)
+
+        nonzero_indices = torch.nonzero(target_bond_orders != 0, as_tuple=True)[0]
+        bond_order_loss = self.bond_order_loss_fn(logits['bond_order'][nonzero_indices], target_bond_orders[nonzero_indices])
+
+        zero_indices = torch.nonzero(target_bond_orders == 0, as_tuple=True)[0]
+        zero_bond_order_loss = self.bond_order_loss_fn(logits['bond_order'][zero_indices], target_bond_orders[zero_indices])
+
 
         # Accuracy
         a_accuracy = (torch.argmax(logits['atom_type'], dim=1) == target_atom_types).float().mean()
         c_accuracy = (torch.argmax(logits['atom_charge'], dim=1) == target_atom_charges).float().mean()
         e_accuracy = (torch.argmax(logits['bond_order'], dim=1) == target_bond_orders).float().mean()
-        nonzero_indices = torch.nonzero(target_bond_orders != 0, as_tuple=True)[0]
         e_nonzero_accuracy = (torch.argmax(logits['bond_order'], dim=1)[nonzero_indices] == target_bond_orders[nonzero_indices]).float().mean()
 
         losses = {'vq+comittment_loss': loss,
                   'a_recon_loss': atom_type_loss,
                   'c_recon_loss': atom_charge_loss,
-                  'e_recon_loss': bond_order_loss,
+                  'e_non_zero_recon_loss': bond_order_loss,
+                  'e_zero_recon_loss': zero_bond_order_loss,
                   'a_accuracy': a_accuracy,
                   'c_accuracy': c_accuracy,
                   'e_accuracy': e_accuracy,
@@ -520,7 +534,7 @@ class LigandVQVAE(pl.LightningModule):
                 # predicted classes
                 target = g.nodes['lig'].data[feat+'_1_true']  # (n_nodes,)
                 # loss
-                extra_feats_losses[feat+'_recon_loss'] = loss_fn(logits[feat], target)
+                extra_feats_losses[feat+'_recon_loss'] = loss_fn(logits[feat], target) * self.extra_feats_cost
                 # accuracy
                 extra_feats_losses[feat+'_accuracy'] = (torch.argmax(logits[feat], dim=1) == target).float().mean()
             
@@ -543,7 +557,10 @@ class LigandVQVAE(pl.LightningModule):
         total_loss = torch.zeros(1, device=g.device, requires_grad=True)
         for loss_name, loss_val in losses.items():
             if 'loss' in loss_name:
-                total_loss = total_loss + 1.0 * loss_val
+                if loss_name == 'e_zero_recon_loss':
+                    total_loss = total_loss + self.e_zero_cost * loss_val
+                else:
+                    total_loss = total_loss + 1.0 * loss_val
 
         self.log_dict(train_log_dict, sync_dist=True, on_step=True, on_epoch=False)
         self.log("train_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True)
@@ -565,7 +582,10 @@ class LigandVQVAE(pl.LightningModule):
         total_loss = torch.zeros(1, device=g.device)
         for loss_name, loss_val in losses.items():
             if 'loss' in loss_name:
-                total_loss = total_loss + 1.0 * loss_val
+                if loss_name == 'e_zero_recon_loss':
+                    total_loss = total_loss + self.e_zero_cost * loss_val
+                else:
+                    total_loss = total_loss + 1.0 * loss_val
 
         self.log_dict(val_log_dict, sync_dist=True, on_step=False, on_epoch=True, batch_size=g.batch_size)
         self.log("val_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True, batch_size=g.batch_size)

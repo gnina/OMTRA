@@ -171,7 +171,6 @@ def run_parallel(pharmit_path: Path,
     print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
 
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
- 
     error_counter = [0]
 
     with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(pharmit_path, store_name), maxtasksperchild=5) as pool:
@@ -180,7 +179,6 @@ def run_parallel(pharmit_path: Path,
         for block_idx in range(n_blocks):
             
             while len(pending) >= max_pending:
-                # Filter out jobs that have finished
                 pending = [r for r in pending if not r.ready()]
                 if len(pending) >= max_pending:
                     time.sleep(0.1)
@@ -202,6 +200,7 @@ def run_parallel(pharmit_path: Path,
                                       error_callback=error_callback_fn)   
             pending.append(result)
 
+        # block main process until all async jobs have finished
         for result in pending:
             result.wait() 
 
