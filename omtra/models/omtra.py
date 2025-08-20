@@ -39,6 +39,8 @@ from omtra.data.distributions.pharmit_dists import (
     sample_n_lig_atoms_pharmit,
     sample_n_pharms_pharmit,
 )
+from omtra.aux_losses.register import aux_loss_name_to_class
+
 from omegaconf import DictConfig, OmegaConf
 
 from omtra.priors.prior_factory import get_prior
@@ -59,6 +61,7 @@ class OMTRA(pl.LightningModule):
         conditional_paths: DictConfig,
         optimizer: DictConfig,
         vector_field: DictConfig,
+        aux_losses: DictConfig,
         total_loss_weights: Dict[str, float] = {},
         ligand_encoder: DictConfig = DictConfig({}),
         ligand_encoder_checkpoint: Optional[str] = None,
@@ -87,6 +90,7 @@ class OMTRA(pl.LightningModule):
         self.fake_atom_p = fake_atom_p
         self.distort_p = distort_p
         self.zero_bo_loss_weight = zero_bo_loss_weight
+        self.aux_loss_cfg = aux_losses
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -229,6 +233,14 @@ class OMTRA(pl.LightningModule):
             else:
                 self.loss_fn_dict[modality.name] = nn.MSELoss(reduction=reduction)
 
+        # create auxiliary loss functions
+        self.aux_loss_fn_dict = nn.ModuleDict()
+        self.aux_loss_weights = {}
+        for aux_loss_name, aux_loss_cfg in self.aux_loss_cfg.items():
+            aux_loss_class = aux_loss_name_to_class(aux_loss_name)
+            self.aux_loss_fn_dict[aux_loss_name] = aux_loss_class(**aux_loss_cfg.get('params', {}))
+            self.aux_loss_weights[aux_loss_name] = aux_loss_cfg.get("weight", 1.0)
+
     # @profile
     def training_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
@@ -365,6 +377,7 @@ class OMTRA(pl.LightningModule):
             upper_edge_mask=upper_edge_mask,
         )
 
+        # compute targets for each of the flow matching losses
         targets = {}
         for modality in task_class.modalities_generated:
             is_categorical = modality.n_categories and modality.n_categories > 0
@@ -385,6 +398,7 @@ class OMTRA(pl.LightningModule):
                 target[xt_idxs != n_categories] = -100
             targets[modality.name] = target
 
+        # get weights for time-scaled losses
         if self.time_scaled_loss:
             time_weights = {}
             for modality in task_class.modalities_generated:
@@ -393,6 +407,8 @@ class OMTRA(pl.LightningModule):
                     time_weights[modality.name] / time_weights[modality.name].sum()
                 )  # TODO: actually implement this
 
+
+        # compute all flow matching losses
         losses = {}
         for modality in task_class.modalities_generated:
             if self.time_scaled_loss:
@@ -416,6 +432,16 @@ class OMTRA(pl.LightningModule):
             )
             if self.time_scaled_loss:
                 losses[modality.name] = losses[modality.name].mean()
+
+        # compute auxiliary losses
+        for aux_loss_name, aux_loss_fn in self.aux_loss_fn_dict.items():
+            if not aux_loss_fn.supports_task(task_class):
+                continue
+            aux_loss = aux_loss_fn(g, vf_output, task_class, lig_ue_mask)
+            if self.time_scaled_loss:
+                aux_loss = aux_loss.mean()
+            losses[aux_loss_name] = aux_loss * self.aux_loss_weights[aux_loss_name]
+
         return losses
 
     def configure_optimizers(self):

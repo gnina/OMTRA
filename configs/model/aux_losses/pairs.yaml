@@ -1,0 +1,5 @@
+prot_lig_pairdist:
+  weight: 1.0
+
+lig_pairdist:
+  weight: 1.0
