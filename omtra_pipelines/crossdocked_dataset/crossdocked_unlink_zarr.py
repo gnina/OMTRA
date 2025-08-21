@@ -197,6 +197,21 @@ class CrossdockedNoLinksZarrConverter:
                     dtype=np.int32,
                 )
 
+                #Add extra ligand features
+                if group == self.ligand:
+                    lig_node_group = self.root['ligand']
+                    n_atoms = lig_node_group['coords'].shape[0]
+                    nodes_per_chunk = lig_node_group['coords'].chunks[0]
+
+                    lig_node_group.create_array(
+                        "extra_feats", 
+                        shape=(n_atoms, 6), 
+                        chunks=(nodes_per_chunk, 6), 
+                        dtype=np.int8, 
+                        overwrite=False,
+                        attributes=['impl_H', 'aro', 'hyb', 'ring', 'chiral', 'frag']
+                    )
+
             # Initialize lookup tables/attrs
             self.root.attrs["system_lookup"] = []
             self.root.attrs["npnde_lookup"] = []
@@ -422,6 +437,25 @@ class CrossdockedNoLinksZarrConverter:
 
             group["bond_types"].append(all_bond_types)
             group["bond_indices"].append(all_bond_indices)
+        
+
+        # Add extra features for ligands (not npnde)- concatenate each feature type separately, then stack
+        if group == self.ligand:
+            if sum(atom_counts) > 0:
+                data_with_atoms = [data for data in data_batch if len(data.coords) > 0]
+                all_impl_H = np.concatenate([data.atom_impl_H for data in data_with_atoms])
+                all_aro = np.concatenate([data.atom_aro for data in data_with_atoms])
+                all_hyb = np.concatenate([data.atom_hyb for data in data_with_atoms])
+                all_ring = np.concatenate([data.atom_ring for data in data_with_atoms])
+                all_chiral = np.concatenate([data.atom_chiral for data in data_with_atoms])
+                all_frag = np.concatenate([data.fragments for data in data_with_atoms])
+                
+                # Single column_stack operation to create (total_atoms, 6) array
+                all_extra_feats = np.column_stack([
+                    all_impl_H, all_aro, all_hyb, all_ring, all_chiral, all_frag
+                ])
+                
+                group["extra_feats"].append(all_extra_feats)
 
         return indices
     
