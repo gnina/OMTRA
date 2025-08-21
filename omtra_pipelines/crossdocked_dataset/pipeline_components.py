@@ -21,6 +21,7 @@ from biotite.structure.io import save_structure
 from biotite.interface.rdkit import to_mol
 
 from biotite.structure import molecule_iter, filter_amino_acids, stack
+from omtra.data.extra_ligand_features import *
 
 from omtra.data.plinder import (
     LigandData,
@@ -265,6 +266,7 @@ class SystemProcessor:
         #removing waters and hydrogens
         receptor = receptor[receptor.res_name != "HOH"]
         receptor = receptor[receptor.element != "H"]
+        receptor = receptor[receptor.element != "D"]
         
         try:
             raw_structure = Path(receptor_path).relative_to(self.raw_data)
@@ -432,6 +434,13 @@ class SystemProcessor:
             coords=P, types=X, vectors=V, interactions=I
         )
         logger.info("Extracted pharmacophore data")
+        #Calculate extra ligand features
+        extra_lig_features = ligand_properties(ligand_mol)
+
+        lig_fragments = fragment_molecule(ligand_mol)
+
+        logger.info("Extracted extra ligand features")
+
         ligand_data = LigandData(
                 sdf=ligand_path,
                 ccd=None, #not defining this
@@ -442,6 +451,13 @@ class SystemProcessor:
                 bond_indices=xace_mols[0].edge_idxs, #
                 is_covalent=False,
                 linkages=None,
+                #extra feats
+                atom_impl_H=extra_lig_features[:,0],
+                atom_aro=extra_lig_features[:,1],
+                atom_hyb=extra_lig_features[:,2],
+                atom_ring=extra_lig_features[:,3],
+                atom_chiral=extra_lig_features[:,4],
+                fragments=lig_fragments
             )
         logger.info("LigandData Object created.")
         return (ligand_data, pharmacophores_data)
