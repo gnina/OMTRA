@@ -63,6 +63,8 @@ class LigandData:
     atom_chiral: Optional[np.ndarray] = None
     # condensed atom typing
     atom_cond_a: Optional[np.ndarray] = None
+    # fragments
+    fragments: Optional[np.ndarray] = None
 
     
     def to_atom_array(self, atom_type_map) -> struc.AtomArray:
