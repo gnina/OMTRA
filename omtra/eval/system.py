@@ -486,8 +486,6 @@ class SampledSystem:
             lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
             lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             lig_edata_feats = list(lig_g.edges["lig_to_lig"].data.keys())
-
-
             
         else:
             if g.num_nodes(ntype="npnde") == 0:

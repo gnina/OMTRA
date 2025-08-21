@@ -1,0 +1,61 @@
+ligand_conformer_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.847
+      ot: True
+      permutation: False
+denovo_ligand_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.847
+      ot: True
+  lig_e_condensed:
+    type: masked
+  lig_cond_a:
+    type: masked
+rigid_docking_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.847
+      ot: True
+  npnde_x:
+    type: target_dependent_gaussian
+fixed_protein_ligand_denovo_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.847
+      ot: True
+  lig_e_condensed:
+    type: masked
+  lig_cond_a:
+    type: masked
+flexible_docking_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.847
+      ot: True
+      permutation: False
+  prot_atom_x:
+    type: target_dependent_gaussian
+  npnde_x:
+    type: target_dependent_gaussian
+protein_ligand_denovo_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.847
+      ot: True
+  lig_e_condensed:
+    type: masked
+  lig_cond_a:
+    type: masked
+  prot_atom_x:
+    type: target_dependent_gaussian
+  npnde_x:
+    type: target_dependent_gaussian
+

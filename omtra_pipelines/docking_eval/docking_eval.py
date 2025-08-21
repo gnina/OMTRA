@@ -108,7 +108,7 @@ def parse_args():
     p.add_argument(
         '--max_batch_size',
         type=int,
-        default=50,
+        default=500,
         help='Maximum number of systems to sample per batch.',
     )
     p.add_argument(
@@ -146,6 +146,7 @@ def pb_valid(
     buster = pb.PoseBusters(config=config, max_workers=pb_workers)
     df_pb = buster.bust(gen_ligs, true_lig, prot_file)
     df_pb['pb_valid'] = df_pb[df_pb['sanitization'] == True].values.astype(bool).all(axis=1)
+    df_pb.columns = [f"pb_{col}" for col in df_pb.columns]
     
     return df_pb
 
