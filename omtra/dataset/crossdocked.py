@@ -30,6 +30,7 @@ from omtra.data.plinder import (
     SystemData,
     BackboneData,
 )
+from omtra.data.condensed_atom_typing import CondensedAtomTyper
 from typing import List, Dict, Tuple, Any, Optional
 import pandas as pd
 import numpy as np
@@ -153,12 +154,17 @@ class CrossdockedDataset(ZarrDataset):
             )
         return npndes
     
+    @functools.lru_cache()
+    def get_condensed_atom_typer(self):
+        return CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0)
+    
     def get_system(
-        self, index: int, include_pharmacophore: bool, include_protein: bool
+        self, index: int, include_pharmacophore: bool, include_protein: bool, include_extra_feats: bool, condensed_atom_typing: bool
     ) -> SystemData:
-        system_info = self.system_lookup[
-            self.system_lookup["system_idx"] == index
-        ].iloc[0]
+        # system_info = self.system_lookup[
+        #     self.system_lookup["system_idx"] == index
+        # ].iloc[0]
+        system_info = self.system_lookup.iloc[index]
 
         rec_start, rec_end = int(system_info["rec_start"]), int(system_info["rec_end"])
         backbone_start, backbone_end = (
@@ -335,6 +341,35 @@ class CrossdockedDataset(ZarrDataset):
                 "ligand/bond_indices", lig_bond_start, lig_bond_end
             ),  # edge index
         )
+
+        if condensed_atom_typing:
+            # Get extra ligand atom features
+            lig_extra_feats = self.slice_array(f'ligand/extra_feats', lig_atom_start, lig_atom_end)
+            lig_extra_feats = lig_extra_feats[:, :-1]
+
+            cond_a_typer = self.get_condensed_atom_typer()
+
+            ligand.atom_cond_a = torch.from_numpy(cond_a_typer.feats_to_cond_a(ligand.atom_types, ligand.atom_charges, lig_extra_feats)).long() 
+
+        elif include_extra_feats:
+            # Get extra ligand atom features as a dictionary
+            lig_extra_feats = self.slice_array(f'ligand/extra_feats', lig_atom_start, lig_atom_end)
+            lig_extra_feats = lig_extra_feats[:, :-1]
+            features = self.root['lig/node/extra_feats'].attrs.get('features', [])
+
+            lig_extra_feats_dict = {}
+
+            # Iterate over all but the last feature
+            for col_idx, feat in enumerate(features[:-1]):
+                col_data = lig_extra_feats[:, col_idx]         
+                lig_extra_feats_dict[feat] = torch.from_numpy(col_data).long()
+
+            # add extra features to ligand
+            ligand.atom_impl_H=lig_extra_feats_dict['impl_H']
+            ligand.atom_aro=lig_extra_feats_dict['aro']
+            ligand.atom_hyb=lig_extra_feats_dict['hyb']
+            ligand.atom_ring=lig_extra_feats_dict['ring']
+            ligand.atom_chiral=lig_extra_feats_dict['chiral']
 
         if include_pharmacophore:
             pharm_start, pharm_end = (
@@ -615,6 +650,8 @@ class CrossdockedDataset(ZarrDataset):
         ligand: LigandData,
         ligand_id: str,
         task: Task,
+        include_extra_feats: bool,
+        condensed_atom_typing: bool,
         pocket: Optional[StructureData] = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
@@ -624,18 +661,46 @@ class CrossdockedDataset(ZarrDataset):
 
         lig_xace = ligand.to_xace_mol(dense=True)
 
-        denovo_ligand = 'ligand_identity' in task.groups_generated
-        if self.fake_atom_p > 0 and denovo_ligand:
-            lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
+        # denovo_ligand = 'ligand_identity' in task.groups_generated
+        # if self.fake_atom_p > 0 and denovo_ligand:
+        #     lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
+        denovo_ligand = any(group in task.groups_generated for group in ['ligand_identity',  'ligand_identity_condensed'])
 
-        lig_c = self.encode_charges(lig_xace.c)
+        if self.fake_atom_p > 0 and denovo_ligand:
+            if condensed_atom_typing:
+                cond_a_typer = self.get_condensed_atom_typer()
+                lig_xace = add_fake_atoms(lig_xace, self.fake_atom_p, cond_a_typer)
+            else:
+                lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
+
+        # lig_c = self.encode_charges(lig_xace.c)
+        # node_data = {
+        #     "lig": {
+        #         "x_1_true": lig_xace.x,
+        #         "a_1_true": lig_xace.a,
+        #         "c_1_true": lig_c,
+        #     }
+        # }
         node_data = {
             "lig": {
                 "x_1_true": lig_xace.x,
-                "a_1_true": lig_xace.a,
-                "c_1_true": lig_c,
             }
         }
+
+        if condensed_atom_typing:
+            node_data["lig"]["cond_a_1_true"] = lig_xace.cond_a
+        
+        else:
+            lig_c = self.encode_charges(lig_xace.c)
+            node_data["lig"]["a_1_true"] = lig_xace.a
+            node_data["lig"]["c_1_true"] = lig_c
+
+            if include_extra_feats:
+                node_data["lig"]["impl_H_1_true"] = lig_xace.impl_H
+                node_data["lig"]["aro_1_true"] = lig_xace.aro
+                node_data["lig"]["hyb_1_true"] = lig_xace.hyb
+                node_data["lig"]["ring_1_true"] = lig_xace.ring
+                node_data["lig"]["chiral_1_true"] = lig_xace.chiral
 
         edge_data = {
             "lig_to_lig": {
@@ -831,7 +896,9 @@ class CrossdockedDataset(ZarrDataset):
         system: SystemData,
         task: Task, 
         include_pharmacophore: bool, 
-        include_protein: bool
+        include_protein: bool, 
+        include_extra_feats: bool,
+        condensed_atom_typing: bool
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -869,6 +936,8 @@ class CrossdockedDataset(ZarrDataset):
             system.ligand, 
             system.ligand_id, 
             task=task,
+            include_extra_feats=include_extra_feats,
+            condensed_atom_typing=condensed_atom_typing,
             pocket=system.pocket
         )
         node_data.update(lig_node_data)
@@ -890,6 +959,8 @@ class CrossdockedDataset(ZarrDataset):
         task_class: Task = task_name_to_class(task_name)
 
         include_pharmacophore = "pharmacophore" in task_class.groups_present
+        include_extra_feats = "ligand_identity_extra" in task_class.groups_present
+        condensed_atom_typing = "ligand_identity_condensed" in task_class.groups_present
 
         include_protein = (
             "protein_identity" in task_class.groups_present
@@ -900,6 +971,8 @@ class CrossdockedDataset(ZarrDataset):
             idx,
             include_pharmacophore=include_pharmacophore,
             include_protein=include_protein,
+            include_extra_feats=include_extra_feats,
+            condensed_atom_typing=condensed_atom_typing
         )
 
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
@@ -908,6 +981,8 @@ class CrossdockedDataset(ZarrDataset):
                 task=task_class,
                 include_pharmacophore=include_pharmacophore,
                 include_protein=include_protein,
+                include_extra_feats=include_extra_feats,
+                condensed_atom_typing=condensed_atom_typing
             )
         )
 
@@ -1026,6 +1101,12 @@ class CrossdockedDataset(ZarrDataset):
                 )
 
             node_counts.append(counts)
+
+        # Adding lines to account for fake atoms
+        if self.fake_atom_p > 0:
+            lig_node_counts = node_counts[0]
+            mean_fake_atoms = self.fake_atom_p/2 * lig_node_counts
+            node_counts[0] = lig_node_counts + mean_fake_atoms.astype(int)
 
         if per_ntype:
             num_nodes_dict = {
