@@ -996,7 +996,7 @@ class VectorField(nn.Module):
             # TODO: other discrete sampling methods?
             # TODO: path planning, probably in place of purity sampling
             # TODO: campbell step assumes alpha_t = 1 - beta_t; need to change behavior if this is ever not the case
-            has_fake_atoms = (self.fake_atoms) and ((m.data_key == 'a') or ((m.data_key == 'cond_a')))
+            has_fake_atoms = self.fake_atoms and m.name in ['lig_a', 'lig_cond_a']
             n_categories = m.n_categories + int(has_fake_atoms)
 
             xt, x_1_sampled = self.campbell_step(
