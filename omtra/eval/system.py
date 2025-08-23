@@ -98,7 +98,14 @@ class SampledSystem:
         lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
         lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
     
-        cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
+        # get all node features that are condensed atom types
+        cond_a_feats = []
+        for feat in lig_ndata_feats:
+            if "cond_a" not in feat:
+                continue
+            parts = feat.split("cond_a")
+            suffix = parts[1]  # Get the suffix after "cond_a"
+            cond_a_feats.append((feat, suffix))
 
         for cond_a_feat, suffix in cond_a_feats:
             lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
@@ -106,7 +113,7 @@ class SampledSystem:
             for feat, val in lig_feats_dict.items():
                 g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
             
-            del g.nodes["lig"].data[cond_a_feat]
+            # del g.nodes["lig"].data[cond_a_feat]
         return g
 
     def to(self, device: str):
@@ -384,10 +391,10 @@ class SampledSystem:
             self._cached_protein_array = arr
         return arr
 
-    def get_rdkit_ligand(self) -> Union[None, Chem.Mol]:
+    def get_rdkit_ligand(self, show_fake_atoms=False) -> Union[None, Chem.Mol]:
         if self.rdkit_ligand is not None:
             return self.rdkit_ligand
-        ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol)
+        ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol, show_fake_atoms=show_fake_atoms)
         rdkit_mol = self.build_molecule(*ligdata)
         self.rdkit_ligand = rdkit_mol
         return rdkit_mol

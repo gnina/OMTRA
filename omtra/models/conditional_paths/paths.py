@@ -30,12 +30,12 @@ def sample_masked_ctmc(
     x_1: torch.Tensor,
     alpha_t: torch.Tensor,  # for each node/edge
     beta_t: torch.Tensor,  # for each node/edge
-    n_categories: int,
     ue_mask: torch.Tensor = None,
 ):
     # raise NotImplementedError("need to alpha_t and beta_t conventions are set correctly, or design a better convention")
     x_t = x_1.clone()
-    x_t[torch.rand_like(x_t.float()) < alpha_t.squeeze(-1)] = n_categories
+    mask = torch.rand_like(x_t.float()) < alpha_t.squeeze(-1)
+    x_t[mask] = x_0[mask]
     
 
     if ue_mask is not None:

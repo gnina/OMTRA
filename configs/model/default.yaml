@@ -5,6 +5,7 @@ defaults:
   - conditional_paths: default
   - vector_field: default
   - optimizer: default
+  - aux_losses: default
 
 k_checkpoints: 15
 checkpoint_interval: 5000

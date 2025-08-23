@@ -1,0 +1,6 @@
+# this is where we can set auxiliary losses to train with
+# by default this is actually an empty dictionary and no aux losses are used
+# so the general format for specifying an auxiliary loss here is
+# aux_loss_name:
+#   weight: (some floating point weight)
+#   params: {} # dictionary of params, can be left out optionally

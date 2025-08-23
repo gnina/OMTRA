@@ -7,10 +7,19 @@ from omtra.tasks.modalities import name_to_modality
 from omtra.tasks.tasks import Task
 from omtra.data.graph.utils import get_node_batch_idxs_ntype
 
-def sample_priors(g: dgl.DGLHeteroGraph, task_class: Task, prior_fns: dict, training: bool, com: torch.Tensor = None):
+def sample_priors(
+        g: dgl.DGLHeteroGraph, 
+        task_class: Task, 
+        prior_fns: dict, 
+        training: bool, 
+        com: torch.Tensor = None,
+        fake_atoms: bool = False
+        ):
     for modality_name in prior_fns:
         prior_name, prior_func = prior_fns[modality_name] # get prior name and function
         modality = name_to_modality(modality_name) # get the modality object
+
+        modality_has_fake_atoms = modality_name in ['lig_a', 'lig_cond_a'] and fake_atoms
 
         # skip modalities that are not present in the graph (for example a system with no npndes)
         if modality.is_node and g.num_nodes(modality.entity_name) == 0:
@@ -42,12 +51,13 @@ def sample_priors(g: dgl.DGLHeteroGraph, task_class: Task, prior_fns: dict, trai
             target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
             args = [target_data, ]
             if modality.is_categorical:
-                args.append(modality.n_categories)
+                args.append(modality.n_categories+int(modality_has_fake_atoms))
         else:
+            # inference time priors, which are different than train time priors, for reasons i forget :(
             n = g.num_nodes(modality.entity_name) if modality.is_node else g.num_edges(modality.entity_name)
             if modality.is_categorical:
                 # for categorical data, we need to pass the number of categories
-                args = (n, modality.n_categories)
+                args = (n, modality.n_categories+int(modality_has_fake_atoms))
             elif modality.data_key == 'x':
                 # for x data, we need to pass the number of dimensions
                 args = [n, 3]

@@ -240,7 +240,9 @@ def add_fake_atoms(mol: MolXACE, fake_atom_p: float, cond_a_typer: CondensedAtom
     # TODO: dataset class initialize CondensedAtomTyper and pass to add_fake_atoms. Right now done by Pharmit dataclass
 
     if mol.cond_a is not None:  # condensed atom typing
-        fake_atom_cond_a =  torch.full_like(mol.cond_a[anchor_atom_idxs], fill_value=len(cond_a_typer.cond_a_list))
+        fake_atom_cond_a =  torch.full_like(
+            mol.cond_a[anchor_atom_idxs], 
+            fill_value=cond_a_typer.fake_atom_idx)
         mol.cond_a = torch.cat((mol.cond_a, fake_atom_cond_a), dim=0)
 
     else: 
