@@ -40,3 +40,24 @@ def rbf_twoscale(D, D_min=0., D_max=10, D_count=32, dividing_point: float = 3.5,
         rbf_embeddings.append(RBF_i)
 
     return torch.cat(rbf_embeddings, dim=-1)
+
+def residue_sinusoidal_encoding(residue_idx: torch.LongTensor,
+                                 d_model: int):
+    """
+    residue_idx: (N_atoms,) each entry in [0..R-1]
+    returns:     (N_atoms, d_model) same encoding for same residue_idx
+    """
+    device = residue_idx.device
+    N = residue_idx.size(0)
+    # (d_model/2,) — even dims for sin, odd for cos
+    inv_freq = torch.exp(
+        torch.arange(0, d_model, 2, device=device).float() *
+        -(math.log(10000.0) / d_model)
+    )  # (d_model/2,)
+    # (N, d_model/2)
+    angles = residue_idx.float().unsqueeze(1) * inv_freq.unsqueeze(0)
+    pe = torch.zeros(N, d_model, device=device)
+    pe[:, 0::2] = torch.sin(angles)
+    pe[:, 1::2] = torch.cos(angles)
+    
+    return pe

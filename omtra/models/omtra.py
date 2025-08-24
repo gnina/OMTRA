@@ -738,6 +738,7 @@ class OMTRA(pl.LightningModule):
                 ss_kwargs = dict()
             sampled_system = SampledSystem(
                 g=g_i,
+                task=task,
                 fake_atoms=self.fake_atom_p>0.0,
                 cond_a_typer=self.cond_a_typer,
                 **ss_kwargs,
@@ -745,6 +746,73 @@ class OMTRA(pl.LightningModule):
             sampled_systems.append(sampled_system)
         return sampled_systems
     
+    @torch.no_grad()
+    def sample_in_batches(
+        self,
+        task_name: str,
+        g_list: Optional[
+            List[dgl.DGLHeteroGraph]
+        ] = None,  # list of graphs containing conditional information (receptor structure, pharmacphore, ligand identity, etc)
+        n_replicates: int = 1,  # number of replicates samples to draw per conditioning input in g_list, or just number of samples if a fully unconditional task
+        max_batch_size: int = 500,
+        coms: Optional[
+            torch.Tensor
+        ] = None,  # center of mass for adding ligands/pharms to systems
+        unconditional_n_atoms_dist: str = None,  # distribution to use for sampling number of atoms in unconditional tasks
+        n_timesteps: int = None,
+        device: Optional[torch.device] = None,
+        visualize=False,
+    ) -> List[SampledSystem]:
+        
+        n_samples = len(g_list)
+        
+        reps_per_batch = min(max_batch_size // n_samples, n_replicates)
+        n_full_batches = n_replicates // reps_per_batch
+        last_batch_reps = n_replicates % reps_per_batch
+
+        sampled_systems = [[] for _ in range(n_samples)]
+        #sample_names = []
+
+        for i in range(n_full_batches):
+            #sample_names += [f"sys_{sys_idx}_rep_{(i*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(reps_per_batch)]
+
+            batch_results = self.sample(g_list=g_list,
+                                        n_replicates=reps_per_batch,
+                                        task_name=task_name,
+                                        unconditional_n_atoms_dist=unconditional_n_atoms_dist,
+                                        device=device,
+                                        n_timesteps=n_timesteps,
+                                        visualize=visualize,
+                                        coms=coms,
+                                        )
+            # re-order samples
+            for i in range(n_samples):
+                start_idx = i * reps_per_batch
+                end_idx = start_idx + reps_per_batch
+                sampled_systems[i].extend(batch_results[start_idx:end_idx])
+            
+        # last batch
+        if last_batch_reps > 0:
+            #sample_names += [f"sys_{sys_idx}_rep_{(n_full_batches*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(last_batch_reps)]
+
+            batch_results = self.sample(g_list=g_list,
+                                            n_replicates=last_batch_reps,
+                                            task_name=task_name,
+                                            unconditional_n_atoms_dist=unconditional_n_atoms_dist,
+                                            device=device,
+                                            n_timesteps=n_timesteps,
+                                            visualize=visualize,
+                                            coms=coms,
+                                            )
+
+            for i in range(n_samples):
+                start_idx = i * last_batch_reps
+                end_idx = start_idx + last_batch_reps
+                sampled_systems[i].extend(batch_results[start_idx:end_idx])
+
+        sampled_systems = [rep for sys in sampled_systems for rep in sys]
+        
+        return sampled_systems
 
     @functools.lru_cache()
     def infer_n_atoms_dist(self, task):

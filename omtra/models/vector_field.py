@@ -72,6 +72,7 @@ class VectorField(nn.Module):
         dst_feat_msg_reduction_factor: float = 4,
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
+        res_id_embed_dim: int = 64
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -192,11 +193,13 @@ class VectorField(nn.Module):
             n_cat_feats = self.ntype_cat_feats[
                 ntype
             ]  # number of categorical features for this node type
+            input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
+            if res_id_embed_dim is not None and ntype == 'prot_atom':
+                input_dim += res_id_embed_dim
+
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
-                    n_cat_feats * token_dim
-                    + self.time_embedding_dim
-                    + self.task_embedding_dim,
+                    input_dim,
                     n_hidden_scalars,
                 ),
                 nn.SiLU(),
@@ -349,6 +352,7 @@ class VectorField(nn.Module):
                 edge_embedding_dim=n_hidden_edge_feats,
                 rbf_dim=rbf_dim,
                 rbf_dmax=rbf_dmax,
+                res_id_embed_dim=res_id_embed_dim,
                 fake_atoms=fake_atoms,
             )
 
@@ -419,6 +423,13 @@ class VectorField(nn.Module):
                     self.token_embeddings[modality.name](
                         g.nodes[ntype].data[f"{modality.data_key}_t"]
                     )
+                )
+            # should be positional encodings
+            elif modality.data_key == "pos_enc":
+                if ntype not in node_scalar_features:
+                    node_scalar_features[ntype] = []
+                node_scalar_features[ntype].append(
+                    g.nodes[ntype].data[f"{modality.data_key}_t"]
                 )
 
         # loop back over node types, and anything without vector features should be given a zero vector
