@@ -782,9 +782,9 @@ class VectorField(nn.Module):
             if time_spacing == "even":
                 t = torch.linspace(0, 1, n_timesteps, device=g.device)
             elif time_spacing == "uneven":
-                t = 1.0 - torch.logspace(-2, 0, n_timesteps + 1).flip(0) 
-                t = torch.min(t)
-                t = t / torch.max(t)
+                # log-dense near t=1, then normalize to [0,1]
+                t = 1.0 - torch.logspace(-2, 0, steps=n_timesteps + 1, device=g.device).flip(0)
+                t = (t - t.min()) / (t.max() - t.min())  # vector-wise normalization
             else:
                 raise ValueError(f"Unknown time_spacing: {time_spacing}")
         else:
