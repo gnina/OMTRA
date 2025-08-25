@@ -242,6 +242,14 @@ Modality.register(MODALITY_REGISTER,
     data_key='e',
     n_categories=len(bond_type_map), # TODO: either use edge types from constants or dont use edge types at all for npndes
 )
+# modality for position encoding
+Modality.register(MODALITY_REGISTER,
+    name='prot_atom_pos_enc',
+    group='protein_identity',
+    graph_entity='node',
+    entity_name='prot_atom',
+    data_key='pos_enc'
+)
 
 MODALITY_ORDER = [modality.name for modality in MODALITY_REGISTER.values()]
 GROUP_SPACE = set([modality.group for modality in MODALITY_REGISTER.values()])

@@ -7,6 +7,8 @@ omtra_pipelines/crossdocked_dataset/slurm_output/
 data/pharmit_dev/
 data/plinder/
 data/pharmit/
+data/crossdocked/
+**/*.zarr/
 local/
 .vscode/
 wandb/
@@ -14,6 +16,10 @@ wandb_symlinks/
 *.tar
 omtra/constants/radius_edge_approximators/*.png
 slurm_output/
+omtra_pipelines/crossdocked_dataset/bad_mols/
+omtra_pipelines/docking_eval/outputs
+samples
+omtra/models/ligand_encoder/lightning_logs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
