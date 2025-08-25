@@ -7,7 +7,7 @@ The script opens the Zarr store and creates an empty Zarr array of size (n_atoms
 
 Example usage:
 
-```python
+```console
 python phase1.py \
     --pharmit_path /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit \ # path to the Pharmit dataset
     --store_name train  \ # train/val
@@ -31,12 +31,11 @@ Functions for ligand property computation, fragment computation, and writing dat
 
 Example usage:
 
-```python
+```console
 python run_phase2.py \
     --pharmit_path /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit \ # path to the Pharmit dataset
     --store_name train  \ # train/val
     --array_name extra_feats \ # name of the new zarr array
     --n_cpus 1 \ # number of cpus. 1 cpu uses run_single (un-parallelized)
-    --output_dir Path('./outputs/phase2')  \ # output directory for error files
+    --output_dir './outputs/phase2' \ # output directory for error files
 ```
-

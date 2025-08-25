@@ -39,6 +39,8 @@ from omtra.data.distributions.pharmit_dists import (
     sample_n_lig_atoms_pharmit,
     sample_n_pharms_pharmit,
 )
+from omtra.aux_losses.register import aux_loss_name_to_class
+
 from omegaconf import DictConfig, OmegaConf
 
 from omtra.priors.prior_factory import get_prior
@@ -59,6 +61,7 @@ class OMTRA(pl.LightningModule):
         conditional_paths: DictConfig,
         optimizer: DictConfig,
         vector_field: DictConfig,
+        aux_losses: DictConfig,
         total_loss_weights: Dict[str, float] = {},
         ligand_encoder: DictConfig = DictConfig({}),
         ligand_encoder_checkpoint: Optional[str] = None,
@@ -70,6 +73,10 @@ class OMTRA(pl.LightningModule):
         distort_p: float = 0.0,
         eval_config: Optional[DictConfig] = None,
         zero_bo_loss_weight: float = 1.0,
+        train_t_dist: str = 'uniform',
+        t_alpha: float = 1.8,
+        cat_loss_weight: float = 1.0,
+        time_scaled_loss: bool = False,
     ):
         super().__init__()
 
@@ -85,8 +92,11 @@ class OMTRA(pl.LightningModule):
         self.eval_config = eval_config
         self.og_run_dir = og_run_dir
         self.fake_atom_p = fake_atom_p
+        self.use_fake_atoms = self.fake_atom_p > 0
         self.distort_p = distort_p
         self.zero_bo_loss_weight = zero_bo_loss_weight
+        self.aux_loss_cfg = aux_losses
+        self.cat_loss_weight = cat_loss_weight
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -130,7 +140,7 @@ class OMTRA(pl.LightningModule):
             "lig_e_condensed": 4,
             "pharm_a": len(ph_idx_to_type),
         }
-        self.time_scaled_loss = False
+        self.time_scaled_loss = time_scaled_loss
         self.interpolant_scheduler = InterpolantScheduler(schedule_type="linear")
         self.vector_field = hydra.utils.instantiate(
             vector_field,
@@ -155,6 +165,16 @@ class OMTRA(pl.LightningModule):
         self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
 
         self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0)
+
+        # configure train t distribution 
+        if train_t_dist == 'uniform':
+            self.train_t_sampler = lambda batch_size, device: torch.rand(batch_size, device=device).float()
+        elif train_t_dist == 'beta':
+            self.train_t_sampler = lambda batch_size, device: torch.distributions.Beta(t_alpha, 1).sample((batch_size,)).to(device).float()
+        else:
+            raise ValueError(
+                f"Unsupported t distribution: Only uniform or beta time distributions are supported, but specified {train_t_dist}."
+            )
 
     # some code for debugging parameter consistency issues across multiple GPUs
     # def setup(self, stage=None):
@@ -228,6 +248,15 @@ class OMTRA(pl.LightningModule):
                 )
             else:
                 self.loss_fn_dict[modality.name] = nn.MSELoss(reduction=reduction)
+
+        # create auxiliary loss functions
+        self.aux_loss_fn_dict = nn.ModuleDict()
+        for aux_loss_name, aux_loss_cfg in self.aux_loss_cfg.items():
+            aux_loss_class = aux_loss_name_to_class(aux_loss_name)
+            self.aux_loss_fn_dict[aux_loss_name] = aux_loss_class(
+                time_scaled_loss=self.time_scaled_loss,
+                **aux_loss_cfg.get('params', {})
+            )
 
     # @profile
     def training_step(self, batch_data, batch_idx):
@@ -335,8 +364,7 @@ class OMTRA(pl.LightningModule):
     # @profile
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
         # sample time
-        # TODO: what are time sampling methods used in other papers?
-        t = torch.rand(g.batch_size, device=g.device).float()
+        t = self.train_t_sampler(batch_size=g.batch_size, device=g.device)
 
         # maybe not necessary right now, perhaps after we add edges appropriately
         node_batch_idxs, edge_batch_idxs = get_batch_idxs(g)
@@ -345,6 +373,8 @@ class OMTRA(pl.LightningModule):
         upper_edge_mask["lig_to_lig"] = lig_ue_mask
 
         # sample conditional path
+        # TODO: ctmc conditional path sampling manually sets things to mask token rather 
+        # than setting to prior value (which is usually mask token)
         task_class: Task = task_name_to_class(task_name)
         g = self.sample_conditional_path(
             g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask
@@ -365,6 +395,7 @@ class OMTRA(pl.LightningModule):
             upper_edge_mask=upper_edge_mask,
         )
 
+        # compute targets for each of the flow matching losses
         targets = {}
         for modality in task_class.modalities_generated:
             is_categorical = modality.n_categories and modality.n_categories > 0
@@ -385,18 +416,28 @@ class OMTRA(pl.LightningModule):
                 target[xt_idxs != n_categories] = -100
             targets[modality.name] = target
 
+        # get weights for time-scaled losses
         if self.time_scaled_loss:
+            weights = 1.0 / ((1.0 - t).clamp(min=1e-6)) ** 2    # clamp to avoid division by 0 error
+            weights = torch.clamp(weights, max=100.0)
+
             time_weights = {}
             for modality in task_class.modalities_generated:
-                time_weights[modality.name] = torch.ones_like(t)
-                time_weights[modality.name] = (
-                    time_weights[modality.name] / time_weights[modality.name].sum()
-                )  # TODO: actually implement this
+                time_weights[modality.name] = weights
+        else:
+            weights = None
 
+        # compute all flow matching losses
         losses = {}
         for modality in task_class.modalities_generated:
+            is_categorical = modality.is_categorical
+
             if self.time_scaled_loss:
                 weight = time_weights[modality.name]
+
+                if is_categorical:
+                    weight = weight * self.cat_loss_weight
+
                 if modality.graph_entity == "edge":
                     weight = weight[edge_batch_idxs[modality.entity_name]][
                         upper_edge_mask[modality.entity_name]
@@ -404,8 +445,12 @@ class OMTRA(pl.LightningModule):
                 else:
                     weight = weight[node_batch_idxs[modality.entity_name]]
                 weight = weight.unsqueeze(-1)
+
+            elif is_categorical:
+                weight = self.cat_loss_weight
             else:
                 weight = 1.0
+
             target = targets[modality.name]
             if modality.is_node and g.num_nodes(modality.entity_name) == 0:
                 losses[modality.name] = torch.tensor(0.0, device=g.device)
@@ -416,6 +461,23 @@ class OMTRA(pl.LightningModule):
             )
             if self.time_scaled_loss:
                 losses[modality.name] = losses[modality.name].mean()
+
+        # compute auxiliary losses
+        for aux_loss_name, aux_loss_fn in self.aux_loss_fn_dict.items():
+            if not aux_loss_fn.supports_task(task_class):
+                continue
+            aux_loss = aux_loss_fn(
+                g, 
+                vf_output, 
+                task_class, 
+                node_batch_idxs,
+                lig_ue_mask,
+                time_weights=weights
+                )
+            if self.time_scaled_loss:
+                aux_loss = aux_loss.mean()
+            losses[aux_loss_name] = aux_loss
+
         return losses
 
     def configure_optimizers(self):
@@ -461,13 +523,6 @@ class OMTRA(pl.LightningModule):
 
             if modality.graph_entity == "edge":
                 conditional_path_fn = partial(conditional_path_fn, ue_mask=lig_ue_mask)
-
-            if modality.is_categorical:
-                fake_atoms = (self.fake_atom_p > 0.0) and ((modality.data_key == 'a') or ((modality.data_key == 'cond_a')))
-                n_categories = modality.n_categories + int(fake_atoms)  # correction for fake atoms
-                conditional_path_fn = partial(
-                    conditional_path_fn, n_categories=n_categories
-                )
 
             # expand alpha_t and beta_t for the nodes/edges
             if modality.graph_entity == "node":
@@ -671,7 +726,14 @@ class OMTRA(pl.LightningModule):
 
         # sample prior distributions for each modality
         prior_fns = get_prior(task, self.prior_config, training=False)
-        g = sample_priors(g, task, prior_fns, training=False, com=com_batch)
+        g = sample_priors(
+            g, 
+            task, 
+            prior_fns, 
+            training=False, 
+            com=com_batch,
+            fake_atoms=self.use_fake_atoms
+            )
 
         # TODO: need to solidify creatioin of upper edge mask (where to do this (not just in sample), etc)
         upper_edge_mask = {}
@@ -739,7 +801,7 @@ class OMTRA(pl.LightningModule):
             sampled_system = SampledSystem(
                 g=g_i,
                 task=task,
-                fake_atoms=self.fake_atom_p>0.0,
+                fake_atoms=self.use_fake_atoms,
                 cond_a_typer=self.cond_a_typer,
                 **ss_kwargs,
             )

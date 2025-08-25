@@ -1,0 +1,9 @@
+prot_lig_pairdist:
+  params:
+    weight: 0.3
+    d_max: 4.5
+
+lig_pairdist:
+  params:
+    weight: 0.3
+    d_max: 4.0

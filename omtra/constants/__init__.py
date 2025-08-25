@@ -24,6 +24,8 @@ extra_feats_map = {'impl_H': max_impl_H,
 
 num_condensed_atom_types = 392  # TODO: don't hardcode this?
 
+pharmit_train_x_std = 2.573
+
 ph_type_to_idx = {val: idx for idx, val in enumerate(ph_idx_to_type)}
 
 protein_element_map = [

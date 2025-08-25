@@ -217,7 +217,7 @@ class PharmitDataset(ZarrDataset):
 
         # sample priors
         priors_fns = get_prior(task_class, self.prior_config, training=True)
-        g = sample_priors(g, task_class, priors_fns, training=True)
+        g = sample_priors(g, task_class, priors_fns, training=True, fake_atoms=self.use_fake_atoms)
 
         return g
     

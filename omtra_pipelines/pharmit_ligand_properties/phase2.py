@@ -106,7 +106,8 @@ def dgl_to_rdkit(g):
     """ Converts one DGL molecule to RDKit ligand """
 
     g = move_feats_to_t1('denovo_ligand', g, '1_true')
-    rdkit_ligand = SampledSystem(g).get_rdkit_ligand()
+    task = task_name_to_class('denovo_ligand')
+    rdkit_ligand = SampledSystem(g, task=task).get_rdkit_ligand()
     return rdkit_ligand
 
 
