@@ -758,6 +758,7 @@ class VectorField(nn.Module):
         cat_temp_func: Optional[Callable] = None,
         tspan=None,
         visualize=False,
+        time_spacing: str = "even",
         **kwargs,
     ):
         # TODO: adapt flowmol integrate for hetero version
@@ -767,7 +768,14 @@ class VectorField(nn.Module):
             cat_temp_func = self.cat_temp_func
 
         if tspan is None:
-            t = torch.linspace(0, 1, n_timesteps, device=g.device)
+            if time_spacing == "even":
+                t = torch.linspace(0, 1, n_timesteps, device=g.device)
+            elif time_spacing == "uneven":
+                t = 1.0 - torch.logspace(-2, 0, n_timesteps + 1).flip(0) 
+                t = torch.min(t)
+                t = t / torch.max(t)
+            else:
+                raise ValueError(f"Unknown time_spacing: {time_spacing}")
         else:
             t = tspan
 
