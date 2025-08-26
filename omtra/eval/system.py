@@ -675,6 +675,9 @@ class SampledSystem:
 
                 data_src[f"{m.data_key}_1"] = self.traj[traj_key][frame_idx]
 
+            if self.has_condensed_typing:
+                g_dummy = self.decode_conda(g_dummy)
+            
             if lig:
                 ligdata = self.extract_ligdata_from_graph(
                     g=g_dummy, ctmc_mol=self.ctmc_mol, show_fake_atoms=True
