@@ -329,7 +329,7 @@ def compute_metrics(system_pairs,
                 except Exception as e:
                     print(f"Invalid: Another error encountered during sanitization of generated ligand {i}: {e}")
 
-            all_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(data['gen_lig_ids'])
+            all_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(data['gen_ligs_ids'])
             valid_lig_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(valid_gen_lig_ids)
 
             metrics[all_rows, 'RDKit_valid'] = False
@@ -691,10 +691,10 @@ def main(args):
                                                           plinder_path=args.plinder_path)
         
         print("Finished sampling. Clearing torch GPU cache...\n")
-        torch.cuda.synchronize()
-        gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
+        # torch.cuda.synchronize()
+        # gc.collect()
+        # torch.cuda.empty_cache()
+        # torch.cuda.ipc_collect()
 
         sys_info.to_csv(f"{samples_dir}/{task_name}_sys_info.csv", index=False)
         

@@ -145,6 +145,14 @@ class DeNovoLigandPharmacophore(Task):
     priors = dict(**pc.denovo_ligand, **pc.denovo_pharmacophore)
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.denovo_pharmacophore)
 
+@register_task("denovo_ligand_pharmacophore_condensed")
+class DeNovoLigandPharmacophoreCondensed(Task):
+    groups_fixed = []
+    groups_generated = ['ligand_identity_condensed', 'ligand_structure', 'pharmacophore']
+
+    priors = dict(**pc.denovo_ligand_condensed, **pc.denovo_pharmacophore)
+    conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.denovo_pharmacophore)
+
 @register_task("denovo_ligand_from_pharmacophore")
 class DeNovoLigandFromPharmacophore(Task):
     groups_fixed = ['pharmacophore']
@@ -152,6 +160,14 @@ class DeNovoLigandFromPharmacophore(Task):
 
     priors = pc.denovo_ligand
     conditional_paths = cpc.denovo_ligand
+
+@register_task("denovo_ligand_from_pharmacophore_condensed")
+class DeNovoLigandFromPharmacophoreCondensed(Task):
+    groups_fixed = ['pharmacophore']
+    groups_generated = ['ligand_identity_condensed', 'ligand_structure']
+
+    priors = pc.denovo_ligand_condensed
+    conditional_paths = cpc.denovo_ligand_condensed
 
 ##
 # tasks with ligand+protein and no pharmacophore
@@ -441,6 +457,21 @@ class ProteinLigandPharmacophoreDeNovo(Task):
     }
 
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.denovo_pharmacophore, **cpc.protein)
+
+@register_task("protein_ligand_pharmacophore_denovo_condensed")
+class ProteinLigandPharmacophoreDeNovoCondensed(Task):
+    groups_fixed = ['protein_identity']
+    groups_generated = ['protein_structure', 'ligand_identity_condensed', 'ligand_structure', 'pharmacophore']
+
+    priors = dict(**pc.denovo_ligand_condensed, **pc.denovo_pharmacophore)
+    priors['prot_atom_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    priors['npnde_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+
+    conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.denovo_pharmacophore, **cpc.protein)
 
 
 # TODO: there could be more protein+ligand+pharmacophore tasks but that is a future decision

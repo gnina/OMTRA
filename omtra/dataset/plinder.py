@@ -60,9 +60,10 @@ class PlinderDataset(ZarrDataset):
         prior_config: Optional[DictConfig] = None,
         fake_atom_p: float = 0.0,
         pskip_factor: float = 0.0, 
-        res_id_embed_dim: int = 64,
         # this is a parmaeter that controls whether/how we do weighted sampling of the the dataset
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
+        res_id_embed_dim: int = 64,
+        max_pharms_sampled: int = 6
     ):
         super().__init__(
             split,
@@ -80,6 +81,8 @@ class PlinderDataset(ZarrDataset):
         self.weighted_sampling = pskip_factor > 0.0 and split == 'train'
 
         self.res_id_embed_dim = res_id_embed_dim
+
+        self.max_pharms_sampled = max_pharms_sampled
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
@@ -387,16 +390,33 @@ class PlinderDataset(ZarrDataset):
                 system_info["pharm_start"],
                 system_info["pharm_end"],
             )
+            pharm_idxs = np.arange(pharm_start, pharm_end)
+            interacting_pharms = pharm_idxs[self.slice_array("pharmacophore/interactions", pharm_start, pharm_end)]
+
+            # TODO: what should we do if there are no interacting pharmacophores?
+            if len(interacting_pharms) == 0:
+                print("Warning: No interacting pharmacophores in this system.")
+                coords = np.array([])
+                types = np.array([])
+                vectors = np.array([])
+                interactions = np.array([])
+
+            else:
+                pharm_sample_size =  np.random.randint(1, min(self.max_pharms_sampled, len(interacting_pharms)) + 1)
+                pharm_sample = np.random.choice(interacting_pharms, size=pharm_sample_size, replace=False)
+
+                coords = np.array([self.slice_array("pharmacophore/coords", i, i+1) for i in pharm_sample]).squeeze(1)
+                types = np.array([self.slice_array("pharmacophore/types", i, i+1) for i in pharm_sample]).squeeze(1)
+                vectors = np.array([self.slice_array("pharmacophore/vectors", i, i+1) for i in pharm_sample]).squeeze(1)
+                interactions = np.ones(len(pharm_sample), dtype=bool)
+            
             pharmacophore = PharmacophoreData(
-                coords=self.slice_array("pharmacophore/coords", pharm_start, pharm_end),
-                types=self.slice_array("pharmacophore/types", pharm_start, pharm_end),
-                vectors=self.slice_array(
-                    "pharmacophore/vectors", pharm_start, pharm_end
-                ),
-                interactions=self.slice_array(
-                    "pharmacophore/interactions", pharm_start, pharm_end
-                ),
+                coords=coords,
+                types=types,
+                vectors=vectors,
+                interactions=interactions
             )
+
 
         system = SystemData(
             system_id=system_info["system_id"],

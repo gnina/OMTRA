@@ -28,12 +28,14 @@ class PharmitDataset(ZarrDataset):
                  graph_config: DictConfig,
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
+                 max_pharms_sampled: int = 6,
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
         self.prior_config = prior_config
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = fake_atom_p > 0
+        self.max_pharms_sampled = max_pharms_sampled
 
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
@@ -193,12 +195,22 @@ class PharmitDataset(ZarrDataset):
         if include_pharmacophore:
             # read pharmacophore data from zarr store
             start_idx, end_idx = self.slice_array('pharm/node/graph_lookup', idx)
-            pharm_x = self.slice_array('pharm/node/x', start_idx, end_idx)
-            pharm_a = self.slice_array('pharm/node/a', start_idx, end_idx)
-            pharm_v = self.slice_array('pharm/node/v', start_idx, end_idx)
-            pharm_x = torch.from_numpy(pharm_x).float()
-            pharm_a = torch.from_numpy(pharm_a).long()
-            pharm_v = torch.from_numpy(pharm_v).float()
+
+            pharm_idxs = np.arange(start_idx, end_idx)
+
+            if len(pharm_idxs) == 0:
+                print("Warning: No pharmacophores in this system.")
+                pharm_x = torch.tensor([])
+                pharm_a = torch.tensor([])
+                pharm_v = torch.tensor([])
+
+            else:
+                pharm_sample_size = np.random.randint(1, min(self.max_pharms_sampled, len(pharm_idxs)) + 1)
+                pharm_sample = np.random.choice(pharm_idxs, size=pharm_sample_size, replace=False)
+
+                pharm_x = torch.from_numpy(np.stack([self.slice_array('pharm/node/x', i, i+1) for i in pharm_sample], axis=0)).float().squeeze(1)
+                pharm_a = torch.from_numpy(np.stack([self.slice_array('pharm/node/a', i, i+1) for i in pharm_sample], axis=0)).long().squeeze(1)
+                pharm_v = torch.from_numpy(np.stack([self.slice_array('pharm/node/v', i, i+1) for i in pharm_sample], axis=0)).float().squeeze(1)
 
             # add target pharmacophore data to graph
             g_node_data['pharm'] =  {
