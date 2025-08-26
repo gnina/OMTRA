@@ -174,7 +174,7 @@ def gnina(prot_file, lig_file, output_sdf, env):
         print(result.stderr)
         return None
 
-    supplier = Chem.SDMolSupplier(output_sdf, removeHs=False)
+    supplier = Chem.SDMolSupplier(output_sdf, sanitize=False, removeHs=False)
 
     for lig in supplier:
         if lig is None:
@@ -207,7 +207,7 @@ def gnina(prot_file, lig_file, output_sdf, env):
         print(result.stderr)
         return None
 
-    supplier = Chem.SDMolSupplier(output_sdf, removeHs=False)
+    supplier = Chem.SDMolSupplier(output_sdf, sanitize=False, removeHs=False)
 
     for lig in supplier:
         if lig is None:
@@ -314,37 +314,72 @@ def compute_metrics(system_pairs,
             print(f"{sys_id}, {data['gen_ligs_ids']}, {data['gen_prot_id']}", flush=True)
             print(f"––––––––––––––––––––––––––––––––", flush=True)
 
-            rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(data['gen_ligs_ids'])
+            valid_gen_ligs = []
+            valid_gen_lig_ids = []
+            
+            for i, lig in enumerate(data['gen_ligs']):
+                try:
+                    Chem.SanitizeMol(lig)
+                    valid_gen_ligs.append(lig)
+                    valid_gen_lig_ids.append(data['gen_ligs_ids'][i])
+                except Chem.rdchem.KekulizeException:
+                    print(f"Invalid: Kekulization failed for generated ligand {i}")
+                except Chem.rdchem.MolSanitizeException:
+                    print(f"Invalid: General sanitization failed for generated ligand {i}")
+                except Exception as e:
+                    print(f"Invalid: Another error encountered during sanitization of generated ligand {i}: {e}")
+
+            all_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(data['gen_lig_ids'])
+            valid_lig_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(valid_gen_lig_ids)
+
+            metrics[all_rows, 'RDKit_valid'] = False
+            metrics[valid_lig_rows, 'RDKit_valid'] = True
             
             # PoseBusters valid
             if metrics_to_run['pb_valid']:
                 results = run_with_timeout(pb_valid,
                                            timeout=timeout,
-                                           gen_ligs=data['gen_ligs'], 
+                                           gen_ligs=valid_gen_ligs, 
                                            true_lig=data['true_lig'], 
                                            prot_file=data['gen_prot_file'], 
                                            task=task)
 
                 if results is not None:
-                    # # prevent accidental float dtype
-                    # for col in results.columns:
-                    #     if col not in metrics:
-                    #         metrics[col] = pd.Series(dtype=bool)
-
-                    metrics.loc[rows, results.columns] = results.to_numpy(dtype=bool)
+                    metrics.loc[valid_lig_rows, results.columns] = results.to_numpy(dtype=bool)
                 
-
                 true_results = run_with_timeout(pb_valid,
-                                           timeout=timeout,
-                                           gen_ligs=data['true_lig'], 
-                                           true_lig=None, 
-                                           prot_file=data['gen_prot_file'], 
-                                           task=task)
+                                                timeout=timeout,
+                                                gen_ligs=data['true_lig'], 
+                                                true_lig=None, 
+                                                prot_file=data['gen_prot_file'], 
+                                                task=task)
 
                 if true_results is not None:
                     cols = [f"{c}_true" for c in true_results.columns]
-                    metrics.loc[rows, cols] = true_results.to_numpy(dtype=bool)
+                    metrics.loc[all_rows, cols] = true_results.to_numpy(dtype=bool)
             
+            # PoseCheck
+            if metrics_to_run['posecheck']:
+                # generated ligand
+                results = run_with_timeout(posecheck, 
+                                           timeout=timeout,
+                                           prot_file=data['gen_prot_file'], 
+                                           ligs=valid_gen_ligs)
+                
+                if results is not None:
+                    for name, val in results.items():
+                        metrics.loc[valid_lig_rows, name] = val
+                
+                # ground truth ligand
+                results_true = run_with_timeout(posecheck, 
+                                                timeout=timeout,
+                                                prot_file=data['true_prot_file'], 
+                                                ligs=[data['true_lig']])
+                
+                if results_true is not None:
+                    for name, val in results_true.items():
+                        metrics.loc[all_rows, f"{name}_true"] = val[0]
+
             # GNINA
             if metrics_to_run['gnina']:
                 output_sdf = f"{output_dir}/gnina_output.sdf" 
@@ -373,29 +408,7 @@ def compute_metrics(system_pairs,
                 
                 if results_true is not None:
                     for metric_name, vals in results_true.items():
-                        metrics.loc[rows, f"{metric_name}_true"] = vals['']
-
-            # PoseCheck
-            if metrics_to_run['posecheck']:
-                # generated ligand
-                results = run_with_timeout(posecheck, 
-                                           timeout=timeout,
-                                           prot_file=data['gen_prot_file'], 
-                                           ligs=data['gen_ligs'])
-                
-                if results is not None:
-                    for name, val in results.items():
-                        metrics.loc[rows, name] = val
-                
-                # ground truth ligand
-                results_true = run_with_timeout(posecheck, 
-                                                timeout=timeout,
-                                                prot_file=data['true_prot_file'], 
-                                                ligs=[data['true_lig']])
-                
-                if results_true is not None:
-                    for name, val in results_true.items():
-                        metrics.loc[rows, f"{name}_true"] = val[0]
+                        metrics.loc[all_rows, f"{metric_name}_true"] = vals['']
             
             # RMSD
             if metrics_to_run['rmsd']:
@@ -514,38 +527,13 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
         sys_name = f"sys_{sys_id}_gt"
         sys_gt_dir = output_dir / sys_name
 
-        all_gen_ligs = [s.get_rdkit_ligand() for s in replicates]
-        gen_ligs = []
-        valid_lig_idxs = []
-
-        # sanitize generated ligands and check that they have atoms
-        for i, lig in enumerate(all_gen_ligs):
-            try:
-                Chem.SanitizeMol(lig)
-                Chem.Kekulize(lig, clearAromaticFlags=True)
-                
-                if lig.GetNumAtoms() > 0:
-                    lig.SetProp("_Name", f"gen_ligands_{i}")  
-                    gen_ligs.append(lig)
-                    valid_lig_idxs.append(i)
-                else:
-                    print(f"Generated ligand {i} for system {sys_id} is empty.", flush=True)
-                    
-            except Exception as e:
-                print(f"Generated ligand {i} for system {sys_id} failed to sanitize: {e}", flush=True)
-
-        # sanitize true ligand
+        gen_ligs = [s.get_rdkit_ligand() for s in replicates]
         true_lig = replicates[0].get_gt_ligand(g=g_list[sys_id].to('cpu'))
-        try:
-            Chem.SanitizeMol(true_lig)
-            Chem.Kekulize(true_lig, clearAromaticFlags=True)
-        except Exception as e:
-            print(f"WARNING: True ligand failed to sanitize for system {sys_id}: {e} ", flush=True)
-
+       
 
         if 'protein_structure' in task.groups_generated:
             # pair each generated ligand to generated protein
-            for i, lig in zip(valid_lig_idxs, gen_ligs):
+            for i, lig in enumerate(gen_ligs):
                 pair = {}
 
                 # generated ligand 
@@ -581,7 +569,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
             gen_lig_file = sys_gt_dir / f"gen_ligands.sdf"
             write_mols_to_sdf(gen_ligs, gen_lig_file)
             pair['gen_ligs_file'] = gen_lig_file
-            pair['gen_ligs_ids'] = [f"gen_ligands_{i}" for i in valid_lig_idxs]
+            pair['gen_ligs_ids'] = [f"gen_ligands_{i}" for i in range(len(gen_ligs))]
 
             # true ligand 
             pair['true_lig'] = true_lig
@@ -624,14 +612,14 @@ def system_pairs_from_path(samples_dir: Path,
                 if os.path.exists(gen_lig_file):
 
                     # generated ligand 
-                    gen_ligs = [mol for mol in Chem.SDMolSupplier(str(gen_lig_file)) if mol is not None]
+                    gen_ligs = [mol for mol in Chem.SDMolSupplier(str(gen_lig_file), sanitize=False, removeHs=False) if mol is not None]
                     pair['gen_ligs'] = gen_ligs
                     pair['gen_ligs_file'] = gen_lig_file
                     pair['gen_ligs_ids'] = [mol.GetProp("_Name") for mol in gen_ligs]
 
                     # true ligand 
                     true_lig_file = sys_dir / f"ligand.sdf"
-                    pair['true_lig'] = Chem.SDMolSupplier(str(true_lig_file))[0]
+                    pair['true_lig'] = Chem.SDMolSupplier(str(true_lig_file), sanitize=False, removeHs=False)[0]
                     pair['true_lig_file'] = true_lig_file
                     
                     # generated protein
@@ -649,14 +637,14 @@ def system_pairs_from_path(samples_dir: Path,
 
             # generated ligand 
             gen_lig_file = sys_dir / f"gen_ligands.sdf"
-            gen_ligs = [mol for mol in Chem.SDMolSupplier(str(gen_lig_file)) if mol is not None]
+            gen_ligs = [mol for mol in Chem.SDMolSupplier(str(gen_lig_file), sanitize=False, removeHs=False) if mol is not None]
             pair['gen_ligs'] = gen_ligs
             pair['gen_ligs_file'] = gen_lig_file
             pair['gen_ligs_ids'] = [mol.GetProp("_Name") for mol in gen_ligs]
 
             # true ligand 
             true_lig_file = sys_dir / f"ligand.sdf"
-            pair['true_lig'] = Chem.SDMolSupplier(str(true_lig_file))[0]
+            pair['true_lig'] = Chem.SDMolSupplier(str(true_lig_file), sanitize=False, removeHs=False)[0]
             pair['true_lig_file'] = true_lig_file
             
             # generated protein
@@ -672,7 +660,6 @@ def system_pairs_from_path(samples_dir: Path,
         system_pairs[sys_name] = sys_pair
 
     return system_pairs
-
 
 
 def main(args):
@@ -694,14 +681,14 @@ def main(args):
 
         # Get samples from checkpoint
         g_list, sampled_systems, sys_info = sample_system(ckpt_path=args.ckpt_path,
-                                                                    task=task,
-                                                                    dataset_start_idx=args.dataset_start_idx,
-                                                                    n_samples=args.n_samples,
-                                                                    n_replicates=args.n_replicates,
-                                                                    n_timesteps=args.n_timesteps,
-                                                                    split=args.split,
-                                                                    max_batch_size=args.max_batch_size,
-                                                                    plinder_path=args.plinder_path)
+                                                          task=task,
+                                                          dataset_start_idx=args.dataset_start_idx,
+                                                          n_samples=args.n_samples,
+                                                          n_replicates=args.n_replicates,
+                                                          n_timesteps=args.n_timesteps,
+                                                          split=args.split,
+                                                          max_batch_size=args.max_batch_size,
+                                                          plinder_path=args.plinder_path)
         
         print("Finished sampling. Clearing torch GPU cache...\n")
         torch.cuda.synchronize()
@@ -713,10 +700,10 @@ def main(args):
         
         # write samples to output files and configure dictionary of system pairs
         system_pairs = write_system_pairs(g_list=g_list,
-                                        sampled_systems=sampled_systems,
-                                        task=task,
-                                        n_replicates=args.n_replicates,
-                                        output_dir=samples_dir)
+                                          sampled_systems=sampled_systems,
+                                          task=task,
+                                          n_replicates=args.n_replicates,
+                                          output_dir=samples_dir)
     else:
         samples_dir = args.samples_dir
         sys_info = pd.read_csv(f"{samples_dir}/{task_name}_sys_info.csv")
