@@ -260,12 +260,12 @@ class ProteinLigandPharmacophoreDeNovoCondensed(Task):
 
 @register_task("fixed_protein_ligand_pharmacophore_denovo_condensed")
 class ProteinLigandPharmacophoreDeNovoCondensed(Task):
-    groups_fixed = ['protein_identity', 'protein_structure']
-    groups_generated = ['ligand_identity_condensed', 'ligand_structure', 'pharmacophore']
+    groups_fixed = ['protein_identity', 'protein_structure', 'pharmacophore']
+    groups_generated = ['ligand_identity_condensed', 'ligand_structure']
 
-    priors = dict(**pc.denovo_ligand_condensed, **pc.denovo_pharmacophore)
+    priors = dict(**pc.denovo_ligand_condensed)
 
-    conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.denovo_pharmacophore, **cpc.protein)
+    conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.protein)
 
 
 @register_task("protein_ligand_pharmacophore_denovo_condensed")
