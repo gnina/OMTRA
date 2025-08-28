@@ -338,7 +338,7 @@ def compute_metrics(system_pairs,
             except Chem.rdchem.MolSanitizeException:
                 print(f"Invalid: General sanitization failed for true ligand")
             except Exception as e:
-                print(f"Invalid: Another error encountered during sanitization of true ligand: {e}")
+                print(f"Invalid: Another error encountered during sanitization of true ligand for system {sys_id}: {e}")
 
             all_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(data['gen_ligs_ids'])
             valid_lig_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(valid_gen_lig_ids)
@@ -357,7 +357,7 @@ def compute_metrics(system_pairs,
 
                 if results is not None:
                     metrics.loc[valid_lig_rows, results.columns] = results.to_numpy(dtype=bool)
-                    metrics.loc[~valid_lig_rows, results.columns] = False
+                    metrics.loc[all_rows & ~valid_lig_rows, results.columns] = False
                 
                 true_results = run_with_timeout(pb_valid,
                                                 timeout=timeout,
@@ -721,7 +721,7 @@ def main(args):
                                           output_dir=samples_dir)
     else:
         samples_dir = args.samples_dir
-        sys_info = pd.read_csv(f"{samples_dir}/{task_name}_sys_info.csv")
+        sys_info =pd.read_csv(f"{samples_dir}/{task_name}_sys_info.csv")
         system_pairs = system_pairs_from_path(samples_dir=samples_dir,
                                               task=task,
                                               n_samples=args.n_samples,
