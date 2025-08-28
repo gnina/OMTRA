@@ -223,8 +223,12 @@ def pb_valid_unconditional(
     else:
         buster = pb.PoseBusters(config=pb_cfg, **params)
         df_pb = buster.bust(valid_rdmols, None, None)
+        pb_results = df_pb.mean().to_dict()
+        pb_results = { f'pb_{key}': pb_results[key] for key in pb_results }
+
         n_pb_valid = df_pb[df_pb['sanitization'] == True].values.astype(bool).all(axis=1).sum()
         metrics['pb_valid'] = n_pb_valid / len(sampled_systems) 
+        metrics.update(pb_results)
     
     return metrics
 
