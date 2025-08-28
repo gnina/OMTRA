@@ -561,6 +561,7 @@ class OMTRA(pl.LightningModule):
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
         visualize=False,
+        time_spacing: str = "even"
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -768,7 +769,7 @@ class OMTRA(pl.LightningModule):
         # the only reason i'm allowing it to be none by default and manually adding it in
         # is that i don't want to define a default number of timesteps in more than one palce
         # it is already defined as default arg to VectorField.integrate
-        itg_kwargs = dict(visualize=visualize)
+        itg_kwargs = dict(visualize=visualize, time_spacing=time_spacing)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
 

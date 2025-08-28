@@ -27,6 +27,7 @@ res_id_embed_dim: 64 # dimension of residue id embedding
 
 pharmit_path: ${omtra_root:}/data/pharmit
 plinder_path: ${omtra_root:}/data/plinder
+crossdocked_path: ${omtra_root:}/data/crossdocked/internal_split0
 
 
 # this is a directory that will symlink wandb 

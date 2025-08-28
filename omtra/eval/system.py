@@ -426,6 +426,11 @@ class SampledSystem:
         if self.rdkit_protein is not None:
             return self.rdkit_protein
         prot_arr = self.get_protein_array()
+        
+        # Remove deuterium atoms before RDKit conversion
+        non_deuterium_mask = prot_arr.element != "D"
+        prot_arr = prot_arr[non_deuterium_mask]
+
         prot_mol = bt_rdkit.to_mol(prot_arr)
         self.rdkit_protein = prot_mol
         return prot_mol

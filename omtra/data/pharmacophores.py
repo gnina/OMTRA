@@ -4,6 +4,8 @@ from scipy.spatial.distance import cdist
 from omtra.data.pharmvec import GetDonorFeatVects, GetAcceptorFeatVects, GetAromaticFeatVects, GetHalogenFeatVects
 from omtra.constants import ph_idx_to_type, ph_type_to_idx
 
+#from line_profiler import profile
+
 smarts_patterns = {
     'Aromatic': ["a1aaaaa1", "a1aaaa1"],
     'PositiveIon': ['[+,+2,+3,+4]', "[$(C(N)(N)=N)]", "[$(n1cc[nH]c1)]"],
@@ -50,22 +52,26 @@ matching_distance = {
     "Hydrophobic": [5, 4,],
     'Halogen': [5, 4]
 }
-
+#@profile
 def get_smarts_matches(rdmol, smarts_pattern):
     """Find positions of a SMARTS pattern in molecule."""
     feature_positions = []
     atom_positions = []
     smarts_mol = Chem.MolFromSmarts(smarts_pattern)
     matches = rdmol.GetSubstructMatches(smarts_mol, uniquify=True)
+    conformer = rdmol.GetConformer()
+    positions = conformer.GetPositions()
+
     for match in matches:
-        atoms = [np.array(rdmol.GetConformer().GetAtomPosition(idx)) for idx in match]
+        atoms = positions[list(match)]
+        #atoms = [np.array(conformer.GetAtomPosition(idx)) for idx in match]
         feature_location = np.mean(atoms, axis=0)
         
         atom_positions.append(atoms)
         feature_positions.append(feature_location)
 
     return matches, atom_positions, feature_positions
-
+#@profile
 def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
     """Return direction vector(s) for all matches of a smarts pattern"""
     vectors = []
@@ -86,7 +92,7 @@ def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
         else:
             vectors.append([np.zeros(3)])
     return vectors
-
+#@profile
 def check_interaction(all_ligand_positions, receptor, feature):
     """
     Check if the ligand features interact with a matching receptor features. 
@@ -117,8 +123,8 @@ def check_interaction(all_ligand_positions, receptor, feature):
                 updated_vectors[i] = [vector]
 
     return interaction, updated_vectors
-
-def get_pharmacophore_dict(ligand, receptor=None, build_vec=False):
+#@profile
+def get_pharmacophore_dict(ligand, receptor=None):
     """Extract pharmacophores and direction vectors from RDKit molecule.
         
     Returns
@@ -143,11 +149,9 @@ def get_pharmacophore_dict(ligand, receptor=None, build_vec=False):
         
         for pattern in patterns:
             atom_idxs, atom_positions, feature_positions = get_smarts_matches(ligand, pattern)
-            if not feature_positions:
-                continue
-            all_ligand_positions.extend(feature_positions)
-            if build_vec:
+            if feature_positions:
                 vectors = get_vectors(ligand, feature, atom_idxs, atom_positions, feature_positions)
+                all_ligand_positions.extend(feature_positions)
                 all_ligand_vectors.extend(vectors)
         
         if all_ligand_positions:
@@ -167,13 +171,9 @@ def get_pharmacophore_dict(ligand, receptor=None, build_vec=False):
     # if receptor: receptor = Chem.RemoveHs(receptor)                
                 
     return pharmacophores
-
-def get_pharmacophores(mol, rec=None, build_vec=False):
-
-    if rec:
-        pharmacophores_dict = get_pharmacophore_dict(mol, rec, build_vec=build_vec)
-    else:
-        pharmacophores_dict = get_pharmacophore_dict(mol, build_vec=build_vec)
+#@profile
+def get_pharmacophores(mol, rec=None):
+    pharmacophores_dict = get_pharmacophore_dict(mol, rec) if rec else get_pharmacophore_dict(mol)
         
     X, P, V, I = [], [], [], []
     for ptype in pharmacophores_dict:
