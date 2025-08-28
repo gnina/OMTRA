@@ -96,6 +96,8 @@ def parse_args():
         default=None,
         help="Path to the Plinder dataset (optional)"
     )
+    p.add_argument('--split', type=str, default='val', help='Which data split to use')
+
     p.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
 
     return p.parse_args()
@@ -248,7 +250,7 @@ def main(args):
     
     # 4) instantiate datamodule & model
     dm  = quick_load.datamodule_from_config(train_cfg)
-    multitask_dataset = dm.load_dataset('val')
+    multitask_dataset = dm.load_dataset(args.split)
     model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
     
     # get task we are sampling for
