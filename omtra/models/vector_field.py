@@ -367,6 +367,7 @@ class VectorField(nn.Module):
         apply_softmax=False,
         remove_com=False,
         prev_dst_dict=None,
+        extract_latents_for_confidence=False,
     ):
         """Predict x_1 (trajectory destination) given x_t, and, optionally, previous destination features."""
         device = g.device
@@ -550,12 +551,17 @@ class VectorField(nn.Module):
             upper_edge_mask,
             apply_softmax,
             remove_com,
+            extract_latents_for_confidence=extract_latents_for_confidence,
         )
 
         # TODO: added this here for testing, but not sure if this is the right place
         g = remove_edges(g)
-
-        return dst_dict
+        
+        if extract_latents_for_confidence:
+            dst_dict, final_gnn_latents = dst_dict
+            return dst_dict, final_gnn_latents
+        else:
+            return dst_dict
 
     # @profile
     def denoise_graph(
@@ -570,6 +576,7 @@ class VectorField(nn.Module):
         upper_edge_mask: Dict[str, torch.Tensor],
         apply_softmax: bool = False,
         remove_com: bool = False,
+        extract_latents_for_confidence=False,
     ):
         x_diff, d = self.precompute_distances(g)
         for recycle_idx in range(self.n_recycles):
@@ -722,7 +729,16 @@ class VectorField(nn.Module):
             else:
                 raise NotImplementedError(f"unaccounted for modality: {m.name}")
 
-        return dst_dict
+        if extract_latents_for_confidence:
+            pre_output_head_latents = {
+                "node_scalar_features": node_scalar_features,
+                "node_vec_features": node_vec_features, 
+                "node_positions": node_positions,
+                "edge_features": edge_features,
+            }
+            return dst_dict, pre_output_head_latents 
+        else:
+            return dst_dict
 
     @g_local_scope
     def precompute_distances(self, g: dgl.DGLGraph, node_positions=None, etype=None):
@@ -769,12 +785,13 @@ class VectorField(nn.Module):
         cat_temp_func: Optional[Callable] = None,
         tspan=None,
         visualize=False,
+        extract_latents_for_confidence=False,
         time_spacing: str = "even",
         **kwargs,
     ):
         # TODO: adapt flowmol integrate for hetero version
         # TODO: figure out what should be attribute of class vs passed as arg vs pulled from cfg etc, nail down defaults
-
+    
         if cat_temp_func is None:
             cat_temp_func = self.cat_temp_func
 
@@ -869,6 +886,7 @@ class VectorField(nn.Module):
                 stochasticity=stochasticity,
                 last_step=last_step,
                 prev_dst_dict=dst_dict,
+                extract_latents_for_confidence=extract_latents_for_confidence,
                 **kwargs,
             )
 
@@ -890,7 +908,7 @@ class VectorField(nn.Module):
                 continue
             g.edges[etype].data[f"{dk}_1"] = g.edges[etype].data[f"{dk}_t"]
 
-        
+
         if not visualize:
             return g
         
@@ -910,7 +928,7 @@ class VectorField(nn.Module):
             for i in range(len(per_graph_mtrajs)):
                 per_system_traj[i][m.name] = per_graph_mtrajs[i]
                 per_system_traj[i][f'{m.name}_pred'] = per_graph_pred_mtrajs[i]
-
+    
         return g, per_system_traj
 
     def step(
@@ -932,6 +950,7 @@ class VectorField(nn.Module):
         prev_dst_dict: Optional[Dict] = None,
         stochasticity: float = 8.0,
         last_step: bool = False,
+        extract_latents_for_confidence=False,
     ):
         device = g.device
 
@@ -941,7 +960,7 @@ class VectorField(nn.Module):
             eta = stochasticity
 
         # predict the destination of the trajectory given the current timepoint
-        dst_dict = self(
+        vf_forward_output = self(
             g,
             task,
             t=torch.full((g.batch_size,), t_i, device=device),
@@ -950,7 +969,20 @@ class VectorField(nn.Module):
             apply_softmax=True,
             remove_com=False,  # TODO: is this ...should this be set to True?
             prev_dst_dict=prev_dst_dict,
+            extract_latents_for_confidence=extract_latents_for_confidence
         )
+        
+        if extract_latents_for_confidence:
+            dst_dict, model_latents = vf_forward_output
+            # if the user requested latents, we rely on the plumbing we have in `forward` and `denoise_graph` to obtain model_latents, and populate it to the graph
+            keys = ["node_scalar_features", "node_vec_features", "node_positions"] 
+            
+            # TODO: add "edge_features" if needed
+            for key in keys:
+                for ntype in model_latents[key]:
+                    g.nodes[ntype].data[key] = model_latents[key][ntype]          
+        else:
+            dst_dict = vf_forward_output
 
         dt = s_i - t_i
 
@@ -1046,7 +1078,7 @@ class VectorField(nn.Module):
             data_src[f"{m.data_key}_1_pred"] = x_1_sampled
 
         return g, dst_dict
-
+    
     def campbell_step(
         self,
         g: dgl.DGLHeteroGraph,
