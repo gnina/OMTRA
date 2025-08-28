@@ -98,40 +98,119 @@ class LigandConformer(Task):
     conditional_paths = cpc.ligand_conformer  
 
 
-@register_task("denovo_ligand_extra_feats")
-class DeNovoLigandExtraFeats(Task):
-    groups_fixed = []
-    groups_generated = ['ligand_identity', 'ligand_structure', 'ligand_identity_extra']
+##
+# tasks with ligand+protein and no pharmacophore
+##
+@register_task("rigid_docking")
+class RigidDocking(Task):
+    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
 
-    priors = pc.denovo_ligand_extra_feats
-    conditional_paths = cpc.denovo_ligand_extra_feats
+    groups_fixed = ["ligand_identity", "protein_identity", "protein_structure"]
+    groups_generated = ["ligand_structure"]
+
+    priors = deepcopy(pc.ligand_conformer)
+    priors["npnde_x"] = {
+        "type": "target_dependent_gaussian",
+    }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
+
+@register_task("flexible_docking")
+class FlexibleDocking(Task):
+    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
+    groups_fixed = ['ligand_identity','protein_identity']
+    groups_generated = ['ligand_structure', 'protein_structure']
+
+    priors = deepcopy(pc.ligand_conformer)
+    priors['prot_atom_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    priors['npnde_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
 
 
-@register_task("ligand_conformer_extra_feats")
-class LigandConformerExtraFeats(Task):
-    groups_fixed = ['ligand_identity', 'ligand_identity_extra']
-    groups_generated = ['ligand_structure']
+@register_task("fixed_protein_ligand_denovo")
+class FixedProteinLigandDeNovo(Task):
+    groups_fixed = ['protein_identity', 'protein_structure']
+    groups_generated = ['ligand_identity', 'ligand_structure']
 
-    priors = pc.ligand_conformer
-    conditional_paths = cpc.ligand_conformer
+    priors = deepcopy(pc.denovo_ligand)
+
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein) # can probably remove protein from this
+
+@register_task("protein_ligand_denovo")
+class ProteinLigandDeNovo(Task):
+    groups_fixed = ['protein_identity']
+    groups_generated = ['protein_structure', 'ligand_identity', 'ligand_structure']
+
+    priors = deepcopy(pc.denovo_ligand)
+    priors['prot_atom_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    priors['npnde_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
 
 
-@register_task("denovo_ligand_condensed")
-class DeNovoLigandCondensed(Task):
-    groups_fixed = []
-    groups_generated = ['ligand_identity_condensed', 'ligand_structure']
+@register_task("exp_apo_conditioned_denovo_ligand")
+class ExpApoDeNovoLigand(Task):
+    groups_fixed = ['protein_identity']
+    groups_generated = ['ligand_identity', 'ligand_structure', 'protein_structure']
 
-    priors = pc.denovo_ligand_condensed
-    conditional_paths = cpc.denovo_ligand_condensed
+    priors = deepcopy(pc.denovo_ligand)
+    priors['prot_atom_x'] = {
+        'type': 'apo_exp', # in this case the prior is an actual apo structure itself; a sample from a data distribution
+    }
+    priors['npnde_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
 
 
-@register_task("ligand_conformer_condensed")
-class LigandConformerCondensed(Task):
-    groups_fixed = ['ligand_identity_condensed']
-    groups_generated = ['ligand_structure']
 
-    priors = pc.ligand_conformer
-    conditional_paths = cpc.ligand_conformer
+@register_task("pred_apo_conditioned_denovo_ligand")
+class PredApoDeNovoLigand(ExpApoDeNovoLigand):
+    priors = deepcopy(pc.denovo_ligand)
+    priors['prot_atom_x'] = {
+        'type': 'apo_pred'
+    }
+    priors['npnde_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
+
+@register_task("expapo_conditioned_ligand_docking")
+class ExpApoConditionedLigandDocking(Task):
+    """Docking a ligand into the protein structure, protein structure is an experimentally determined apo structure at t=0."""
+    groups_fixed = ['ligand_identity','protein_identity']
+    groups_generated = ['ligand_structure', 'protein_structure']
+
+    priors = deepcopy(pc.ligand_conformer)
+    priors['prot_atom_x'] = {
+        'type': 'apo_exp',
+    }
+    priors['npnde_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
+
+
+@register_task("predapo_conditioned_ligand_docking")
+class PredApoConditionedLigandDocking(Task):
+    """Docking a ligand into the protein structure, protein structure is a predicted apo structure at t=0."""
+    groups_fixed = ['ligand_identity','protein_identity']
+    groups_generated = ['ligand_structure', 'protein_structure']
+
+    priors = deepcopy(pc.ligand_conformer)
+    priors['prot_atom_x'] = {
+        'type': 'apo_pred',
+    }
+    priors['npnde_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
 
 
 ## 
@@ -152,277 +231,6 @@ class DeNovoLigandFromPharmacophore(Task):
 
     priors = pc.denovo_ligand
     conditional_paths = cpc.denovo_ligand
-
-##
-# tasks with ligand+protein and no pharmacophore
-##
-@register_task("protein_ligand_denovo")
-class ProteinLigandDeNovo(Task):
-    groups_fixed = ['protein_identity']
-    groups_generated = ['protein_structure', 'ligand_identity', 'ligand_structure']
-
-    priors = deepcopy(pc.denovo_ligand)
-    priors['prot_atom_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
-
-@register_task("protein_ligand_denovo_condensed")
-class ProteinLigandDeNovoCondensed(Task):
-    groups_fixed = ['protein_identity']
-    groups_generated = ['protein_structure', 'ligand_identity_condensed', 'ligand_structure']
-
-    priors = deepcopy(pc.denovo_ligand_condensed)
-    
-    priors['prot_atom_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    
-    conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.protein)
-
-@register_task("protein_ligand_denovo_extra_feats")
-class ProteinLigandDeNovoExtraFeats(Task):
-    groups_fixed = ['protein_identity']
-    groups_generated = ['protein_structure', 'ligand_identity', 'ligand_identity_extra', 'ligand_structure']
-
-    priors = deepcopy(pc.denovo_ligand_extra_feats)
-    
-    priors['prot_atom_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    
-    conditional_paths = dict(**cpc.denovo_ligand_extra_feats, **cpc.protein)
-
-@register_task("fixed_protein_ligand_denovo")
-class FixedProteinLigandDeNovo(Task):
-    groups_fixed = ['protein_identity', 'protein_structure']
-    groups_generated = ['ligand_identity', 'ligand_structure']
-
-    priors = deepcopy(pc.denovo_ligand)
-
-    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein) # can probably remove protein from this
-
-@register_task("fixed_protein_ligand_denovo_condensed")
-class FixedProteinLigandDeNovoCondensed(Task):
-    groups_fixed = ['protein_identity', 'protein_structure']
-    groups_generated = ['ligand_identity_condensed', 'ligand_structure']
-
-    priors = deepcopy(pc.denovo_ligand_condensed)
-
-    conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.protein) # can probably remove protein from this
-
-@register_task("fixed_protein_ligand_denovo_extra_feats")
-class FixedProteinLigandDeNovoExtraFeats(Task):
-    groups_fixed = ['protein_identity', 'protein_structure']
-    groups_generated = ['ligand_identity', 'ligand_identity_extra', 'ligand_structure']
-
-    priors = deepcopy(pc.denovo_ligand_extra_feats)
-
-    conditional_paths = dict(**cpc.denovo_ligand_extra_feats, **cpc.protein) # can probably remove protein from this
-
-@register_task("exp_apo_conditioned_denovo_ligand")
-class ExpApoDeNovoLigand(Task):
-    groups_fixed = ['protein_identity']
-    groups_generated = ['ligand_identity', 'ligand_structure', 'protein_structure']
-
-    priors = deepcopy(pc.denovo_ligand)
-    priors['prot_atom_x'] = {
-        'type': 'apo_exp', # in this case the prior is an actual apo structure itself; a sample from a data distribution
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
-
-@register_task("exp_apo_conditioned_denovo_ligand_condensed")
-class ExpApoDeNovoLigandCondensed(Task):
-    groups_fixed = ['protein_identity']
-    groups_generated = ['ligand_identity_condensed', 'ligand_structure', 'protein_structure']
-
-    priors = deepcopy(pc.denovo_ligand_condensed)
-    priors['prot_atom_x'] = {
-        'type': 'apo_exp', # in this case the prior is an actual apo structure itself; a sample from a data distribution
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.protein)
-
-@register_task("pred_apo_conditioned_denovo_ligand")
-class PredApoDeNovoLigand(ExpApoDeNovoLigand):
-    priors = deepcopy(pc.denovo_ligand)
-    priors['prot_atom_x'] = {
-        'type': 'apo_pred'
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
-
-@register_task("pred_apo_conditioned_denovo_ligand_condensed")
-class PredApoDeNovoLigandCondensed(ExpApoDeNovoLigandCondensed):
-    priors = deepcopy(pc.denovo_ligand_condensed)
-    priors['prot_atom_x'] = {
-        'type': 'apo_pred'
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.protein)
-
-@register_task("flexible_docking")
-class FlexibleDocking(Task):
-    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
-    groups_fixed = ['ligand_identity','protein_identity']
-    groups_generated = ['ligand_structure', 'protein_structure']
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-
-@register_task("flexible_docking_condensed")
-class FlexibleDockingCondensed(Task):
-    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
-    groups_fixed = ['ligand_identity_condensed','protein_identity']
-    groups_generated = ['ligand_structure', 'protein_structure']
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-    
-@register_task("flexible_docking_extra_feats")
-class FlexibleDockingExtraFeats(Task):
-    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
-    groups_fixed = ['ligand_identity', 'ligand_identity_extra', 'protein_identity']
-    groups_generated = ['ligand_structure', 'protein_structure']
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-
-@register_task("rigid_docking")
-class RigidDocking(Task):
-    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
-
-    groups_fixed = ["ligand_identity", "protein_identity", "protein_structure"]
-    groups_generated = ["ligand_structure"]
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors["npnde_x"] = {
-        "type": "target_dependent_gaussian",
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-
-@register_task("rigid_docking_condensed")
-class RigidDockingCondensed(Task):
-    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0 with condensed atom typing for ligands"""
-
-    groups_fixed = ["ligand_identity_condensed", "protein_identity", "protein_structure"]
-    groups_generated = ["ligand_structure"]
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors["npnde_x"] = {
-        "type": "target_dependent_gaussian",
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-
-@register_task("rigid_docking_extra_feats")
-class RigidDockingExtraFeats(Task):
-    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
-
-    groups_fixed = ["ligand_identity", "ligand_identity_extra", "protein_identity", "protein_structure"]
-    groups_generated = ["ligand_structure"]
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors["npnde_x"] = {
-        "type": "target_dependent_gaussian",
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-
-@register_task("expapo_conditioned_ligand_docking")
-class ExpApoConditionedLigandDocking(Task):
-    """Docking a ligand into the protein structure, protein structure is an experimentally determined apo structure at t=0."""
-    groups_fixed = ['ligand_identity','protein_identity']
-    groups_generated = ['ligand_structure', 'protein_structure']
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom_x'] = {
-        'type': 'apo_exp',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-
-@register_task("expapo_conditioned_ligand_docking_condensed")
-class ExpApoConditionedLigandDockingCondensed(Task):
-    """Docking a ligand with condensed atom types into the protein structure, protein structure is an experimentally determined apo structure at t=0."""
-    groups_fixed = ['ligand_identity_condensed','protein_identity']
-    groups_generated = ['ligand_structure', 'protein_structure']
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom_x'] = {
-        'type': 'apo_exp',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-
-@register_task("predapo_conditioned_ligand_docking")
-class PredApoConditionedLigandDocking(Task):
-    """Docking a ligand into the protein structure, protein structure is a predicted apo structure at t=0."""
-    groups_fixed = ['ligand_identity','protein_identity']
-    groups_generated = ['ligand_structure', 'protein_structure']
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom_x'] = {
-        'type': 'apo_pred',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-
-@register_task("predapo_conditioned_ligand_docking_condensed")
-class PredApoConditionedLigandDockingCondensed(Task):
-    """Docking a ligand with condensed atom types into the protein structure, protein structure is a predicted apo structure at t=0."""
-    groups_fixed = ['ligand_identity_condensed','protein_identity']
-    groups_generated = ['ligand_structure', 'protein_structure']
-
-    priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom_x'] = {
-        'type': 'apo_pred',
-    }
-    priors['npnde_x'] = {
-        'type': 'target_dependent_gaussian',
-    }
-    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-
 
 ##
 # Tasks with ligand+protein+pharmacophore
