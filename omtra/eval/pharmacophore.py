@@ -49,7 +49,7 @@ def compute_pharmacophore_match(sampled_systems: List[SampledSystem], threshold=
         pharm_counts['n_true_pharms'] += n_true_pharms
         pharm_counts['n_true_matched'] += matching_pharms.any(axis=1).sum()
         pharm_counts['n_gen_unmatched'] += n_extra
-        pharm_counts['n_pharms_matched_perfect'] += int(all_true_matched and n_extra == 0)
+        pharm_counts['n_pharms_matched_perfect'] += int(all_true_matched)
 
     print(f', '.join([f"{k}={v}" for k, v in error_counts.items()]))
     n_errors = sum(list(error_counts.values()))
@@ -63,6 +63,6 @@ def compute_pharmacophore_match(sampled_systems: List[SampledSystem], threshold=
         pharm_counts['n_gen_pharms'] = 1
 
     metrics =  {
-        "frac_pharm_samples_matching": pharm_counts['n_pharms_matched_perfect']/len(sampled_systems),
+        "frac_pharm_samples_matching": pharm_counts['n_pharms_matched_perfect']/len(sampled_systems),  
         "frac_true_centers_matched": pharm_counts['n_true_matched']/pharm_counts['n_true_pharms']    }
     return metrics

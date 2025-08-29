@@ -86,6 +86,9 @@ denovo_ligand_from_pharmacophore_condensed:
       train: true
       params:
         max_workers: 0
+  - pharm_match:
+      train: true
+      params: {}
 ligand_conformer:
   - stability:
       train: true
@@ -177,6 +180,7 @@ ligand_conformer_from_pharmacophore_condensed:
   - pb_valid_unconditional:
       train: true
       params:
+        max_workers: 0
 rigid_docking:
   - stability:
       train: true
@@ -734,7 +738,34 @@ rigid_docking_pharmacophore_condensed:
       train: true
       params:
         clash_cutoff: 0.05
-fixed_protein_ligand_pharmacophore_denovo_condensed:
+rigid_docking_pharmacophore_condensed:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+fixed_protein_pharmacophore_ligand_denovo_condensed:
   - validity:
       train: true
       params: {}
@@ -760,4 +791,7 @@ fixed_protein_ligand_pharmacophore_denovo_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pharm_match:
+      train: true
+      params: {}
   
