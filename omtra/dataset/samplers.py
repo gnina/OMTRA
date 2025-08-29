@@ -91,7 +91,7 @@ class MultiTaskSampler(Sampler):
 
             chunk_tracker_args = [self.edges_per_batch, self.frac_start, self.frac_end]
 
-            if dataset_name == 'pharmit':
+            if dataset_name in ['pharmit', 'crossdocked']:
                 # create a single chunk tracker for all tasks
                 chunk_tracker_idx = len(self.chunk_trackers)
                 self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(

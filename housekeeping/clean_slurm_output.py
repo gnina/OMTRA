@@ -4,7 +4,7 @@ import subprocess
 
 def parse_args():
 
-    p = argparse.ArgumentParser(description='Map sweep experiments to the GPUs they are running on')
+    p = argparse.ArgumentParser(description='Remove all slurm output except currently running jobs')
     p.add_argument('slurm_output_dir', type=Path, help='Directory containing slurm output files')
     p.add_argument('--dry', action='store_true', help='Dry run, do not delete files')
 

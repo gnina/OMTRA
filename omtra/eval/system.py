@@ -426,6 +426,11 @@ class SampledSystem:
         if self.rdkit_protein is not None:
             return self.rdkit_protein
         prot_arr = self.get_protein_array()
+        
+        # Remove deuterium atoms before RDKit conversion
+        non_deuterium_mask = prot_arr.element != "D"
+        prot_arr = prot_arr[non_deuterium_mask]
+
         prot_mol = bt_rdkit.to_mol(prot_arr)
         self.rdkit_protein = prot_mol
         return prot_mol
@@ -675,6 +680,9 @@ class SampledSystem:
 
                 data_src[f"{m.data_key}_1"] = self.traj[traj_key][frame_idx]
 
+            if self.has_condensed_typing:
+                g_dummy = self.decode_conda(g_dummy)
+            
             if lig:
                 ligdata = self.extract_ligdata_from_graph(
                     g=g_dummy, ctmc_mol=self.ctmc_mol, show_fake_atoms=True
