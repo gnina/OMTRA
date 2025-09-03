@@ -275,4 +275,4 @@ def pb_valid_pocket(
 def check_pharm_match(
     sampled_systems: List[SampledSystem], params: Dict[str, Any]
 ) -> Dict[str, Any]:
-    return compute_pharmacophore_match(sampled_systems)
+    return compute_pharmacophore_match(sampled_systems, **params)
