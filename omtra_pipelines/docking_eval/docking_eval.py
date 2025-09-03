@@ -123,6 +123,12 @@ def parse_args():
         default=None,
         help="Path to the Plinder dataset (optional)."
     )
+    p.add_argument(
+        "--sys_info_file",
+        type=str,
+        default=None,
+        help="Path to the system info file (optional)."
+    )
     return p.parse_args()
 
 
@@ -721,11 +727,17 @@ def main(args):
                                           output_dir=samples_dir)
     else:
         samples_dir = args.samples_dir
+
+        if args.sys_info_file is None:
+            sys_info_file =  f"{samples_dir}/{task_name}_sys_info.csv"
+            print(f"Using default system info file: {sys_info_file}")
+        else:
+            sys_info_file = args.sys_info_file
         
         try:
-            sys_info = pd.read_csv(f"{samples_dir}/{task_name}_sys_info.csv")
+            sys_info = pd.read_csv(sys_info_file)
         except Exception as e:  # case where we didn't generate a system info file
-            print(f'Could not find system info csv at {samples_dir}/{task_name}_sys_info.csv')
+            print(f"Warning: Could not find system info csv at {sys_info_file}")
             sys_info = None
 
         system_pairs = system_pairs_from_path(samples_dir=samples_dir,
