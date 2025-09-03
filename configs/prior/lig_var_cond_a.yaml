@@ -21,6 +21,7 @@ rigid_docking_condensed:
     params:
       std: 2.573
       ot: True
+      permutation: False
   npnde_x:
     type: target_dependent_gaussian
 fixed_protein_ligand_denovo_condensed:
