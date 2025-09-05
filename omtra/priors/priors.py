@@ -18,6 +18,12 @@ def gaussian_train(x1: torch.Tensor, std: float = 1.0,
     Generate a prior feature by sampling from a Gaussian distribution.
     """
     x0 = torch.randn_like(x1) * std
+
+    if translation:
+        # move x0 to the same COM as x1
+        x0_mean = x0.mean(dim=0, keepdim=True)
+        x1_mean = x1.mean(dim=0, keepdim=True)
+        x0 += x1_mean - x0_mean
     
     if ot:
         # move x0 to the same COM as x1
@@ -27,12 +33,6 @@ def gaussian_train(x1: torch.Tensor, std: float = 1.0,
 
         # align x0 to x1
         x0 = align_prior(x0, x1, rigid_body=rigid_body, permutation=permutation)
-    
-    if translation:
-        # move x0 to the same COM as x1
-        x0_mean = x0.mean(dim=0, keepdim=True)
-        x1_mean = x1.mean(dim=0, keepdim=True)
-        x0 += x1_mean - x0_mean
 
     return x0
 
