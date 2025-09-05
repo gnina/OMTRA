@@ -37,6 +37,9 @@ def get_currently_running_jobs(username: str):
             continue
         process_id = job_line[0]
         process_ids.append(process_id)
+    
+    # print(f'found {len(process_ids)} currently running jobs', flush=True)
+    # print(*process_ids, sep='\n', flush=True)
 
 
     return set(process_ids)
@@ -83,20 +86,26 @@ def parse_slurm_file(slurm_file: Path):
 
 def is_stale_run(run_dir: Path, running_run_ids: list, step_cutoff: float) -> bool:
     
-    run_id = run_dir.name.split('_')[-1]
+
+    resume_info_file = run_dir / 'resume_info.yaml'
+    if not resume_info_file.exists():
+        # TODO: this could in theory cause issues if this script is run after a run is started but before that run writes the resume_info file
+        # although this is unlikely / avoidable by the suer
+        print(f'no resume_info.yaml found for {run_dir}, deleting', flush=True)
+        return True
+
+    with open(resume_info_file, 'r') as f:
+        resume_info = yaml.safe_load(f)
+    run_id = resume_info['run_id']
 
     # check if this run is still running
     is_running = run_id in running_run_ids
 
-    # if run_dir.name == 'geom-gaussian-b16_7imwds35':
-    #     print('*****')
-    #     print(is_running)
-    #     print(run_id)
-        
-    #     # print all running_run_ids separate by \n
-    #     print(*running_run_ids, sep='\n')
-
-    #     print('*****')
+    # print('****')
+    # print(f'run_dir: {run_dir}')
+    # print(f'run_id: {run_id}')
+    # print(f'is_running: {is_running}')
+    # print('****')
 
     if is_running:
         return False
@@ -158,6 +167,10 @@ if __name__ == "__main__":
     for slurm_file in slurm_files:
         experiments = parse_slurm_file(slurm_file)
         running_experiments.extend(experiments)
+
+    # print running experiments
+    # print(f'found {len(running_experiments)} running experiments', flush=True)
+    # print(*running_experiments, sep='\n', flush=True)
 
     # get the wandb run ids of every running experiment
     run_ids = []
