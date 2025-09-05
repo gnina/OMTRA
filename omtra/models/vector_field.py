@@ -951,6 +951,9 @@ class VectorField(nn.Module):
         stochasticity: float = 8.0,
         last_step: bool = False,
         extract_latents_for_confidence=False,
+        stochastic_sampling: bool = False,
+        noise_scaler: float = 1.0,
+        eps: float = 0.01,
     ):
         device = g.device
 
@@ -1009,7 +1012,18 @@ class VectorField(nn.Module):
             x_1 = dst_dict[m.name]
             x_t = data_src[m.entity_name].data[f"{m.data_key}_t"]
             vf = self.vector_field(x_t, x_1, alpha_t_i[m.name], alpha_t_prime_i[m.name], beta_t_i[m.name], beta_t_prime_i[m.name])
-            data_src[m.entity_name].data[f"{m.data_key}_t"] = x_t + dt * vf
+
+            if stochastic_sampling:
+                g_t = 1 / (t_i + eps)  # g(t_n-1)
+                g_s = 1 / (s_i + eps)  # g(t_n)
+                score = (t_i * vf - x_t) / (1 - t_i)    # score(x_t_n-1, z)
+                noise = torch.randn_like(x_t)
+
+                data_src[m.entity_name].data[f"{m.data_key}_t"] = x_t + (vf + g_t*score)*dt + torch.sqrt(2 * dt * g_s * noise_scaler) * noise
+
+            else:
+                data_src[m.entity_name].data[f"{m.data_key}_t"] = x_t + dt * vf
+
             data_src[m.entity_name].data[f"{m.data_key}_1_pred"] = x_1.detach().clone()
 
         # iterate over categorical modalities and apply updates

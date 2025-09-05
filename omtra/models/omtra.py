@@ -77,6 +77,7 @@ class OMTRA(pl.LightningModule):
         t_alpha: float = 1.8,
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
+
     ):
         super().__init__()
 
@@ -562,7 +563,11 @@ class OMTRA(pl.LightningModule):
         device: Optional[torch.device] = None,
         visualize=False,
         extract_latents_for_confidence=False,
-        time_spacing: str = "even"
+        time_spacing: str = "even",
+        stochastic_sampling: bool = False,
+        noise_scaler: float = 1.0,
+        eps: float = 0.01,
+
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -770,7 +775,7 @@ class OMTRA(pl.LightningModule):
         # the only reason i'm allowing it to be none by default and manually adding it in
         # is that i don't want to define a default number of timesteps in more than one palce
         # it is already defined as default arg to VectorField.integrate
-        itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing)
+        itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing, stochastic_sampling=stochastic_sampling, noise_scaler=noise_scaler, eps=eps)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
 
@@ -825,6 +830,11 @@ class OMTRA(pl.LightningModule):
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
         visualize=False,
+        extract_latents_for_confidence=False,
+        time_spacing: str = "even",
+        stochastic_sampling: bool = False,
+        noise_scaler: float = 1.0,
+        eps: float = 0.01,
     ) -> List[SampledSystem]:
         
         n_samples = len(g_list)
@@ -847,6 +857,10 @@ class OMTRA(pl.LightningModule):
                                         n_timesteps=n_timesteps,
                                         visualize=visualize,
                                         coms=coms,
+                                        extract_latents_for_confidence=extract_latents_for_confidence,
+                                        time_spacing=time_spacing,
+                                        stochastic_sampling=stochastic_sampling,
+                                        noise_scaler=noise_scaler,
                                         )
             # re-order samples
             for i in range(n_samples):
@@ -859,14 +873,19 @@ class OMTRA(pl.LightningModule):
             #sample_names += [f"sys_{sys_idx}_rep_{(n_full_batches*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(last_batch_reps)]
 
             batch_results = self.sample(g_list=g_list,
-                                            n_replicates=last_batch_reps,
-                                            task_name=task_name,
-                                            unconditional_n_atoms_dist=unconditional_n_atoms_dist,
-                                            device=device,
-                                            n_timesteps=n_timesteps,
-                                            visualize=visualize,
-                                            coms=coms,
-                                            )
+                                        n_replicates=last_batch_reps,
+                                        task_name=task_name,
+                                        unconditional_n_atoms_dist=unconditional_n_atoms_dist,
+                                        device=device,
+                                        n_timesteps=n_timesteps,
+                                        visualize=visualize,
+                                        coms=coms,
+                                        extract_latents_for_confidence=extract_latents_for_confidence,
+                                        time_spacing=time_spacing,
+                                        stochastic_sampling=stochastic_sampling,
+                                        noise_scaler=noise_scaler,
+                                        eps=eps,
+                                        )
 
             for i in range(n_samples):
                 start_idx = i * last_batch_reps
