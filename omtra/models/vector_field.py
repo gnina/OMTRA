@@ -1019,11 +1019,6 @@ class VectorField(nn.Module):
                 score = (t_i * vf - x_t) / (1 - t_i)    # score(x_t_n-1, z)
                 noise = torch.randn_like(x_t)
 
-                # print(f"t_n:{t_i},\t dt: {dt},\t g(t_n-1): {g_t}")
-                # print((vf + g_t*score)*dt)
-                # print(f"{m.data_key}: {x_t + (vf + g_t*score)*dt + torch.sqrt(2 * dt * g_s * noise_scaler) * noise}")
-                # print(f"---")
-
                 data_src[m.entity_name].data[f"{m.data_key}_t"] = x_t + (vf + g_t*score)*dt + torch.sqrt(2 * dt * g_s * noise_scaler) * noise
 
             else:
