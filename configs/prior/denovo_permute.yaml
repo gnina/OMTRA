@@ -33,3 +33,13 @@ denovo_ligand_from_pharmacophore_condensed:
       rigid_body: false
       translation: True
 
+fixed_protein_pharmacophore_ligand_denovo_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.573
+      ot: True
+      rigid_body: false
+      translation: True
+
+

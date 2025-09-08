@@ -55,14 +55,10 @@ edges:             # parameter for KNN edges
   #   type: knn
   #   params:
   #     k: 3
-  prot_atom_to_pharm:
+  pharm_to_prot_atom:
     type: radius
     params:
-      r: 8
-  pharm_to_prot_atom:
-    type: knn
-    params:
-      k: 5
+      k: 6
   # prot_res_to_pharm:
   #   type: radius
   #   params:
@@ -78,6 +74,7 @@ symmetric_etypes:
   - lig_to_pharm      
   - npnde_to_pharm     
   - lig_to_npnde
+  - pharm_to_prot_atom
 
 
 cov_prot_edges: true
