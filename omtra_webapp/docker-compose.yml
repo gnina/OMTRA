@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: omtra_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  api:
+    build: 
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: omtra_api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - WORKER_TIMEOUT=180
+      - MAX_FILE_SIZE=26214400  # 25MB
+      - MAX_FILES_PER_JOB=3
+      - JOB_TTL_HOURS=48
+    volumes:
+      - ./api:/app
+      - job_storage:/srv/app/jobs
+      - model_cache:/srv/app/models
+    depends_on:
+      - redis
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: omtra_worker
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - WORKER_TIMEOUT=180
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./worker:/app
+      - job_storage:/srv/app/jobs
+      - model_cache:/srv/app/models
+    depends_on:
+      - redis
+      - api
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: omtra_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  job_storage:
+  model_cache:
+
+networks:
+  default:
+    name: omtra_network
