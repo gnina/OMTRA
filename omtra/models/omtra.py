@@ -77,6 +77,7 @@ class OMTRA(pl.LightningModule):
         t_alpha: float = 1.8,
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
+
     ):
         super().__init__()
 
@@ -411,7 +412,7 @@ class OMTRA(pl.LightningModule):
                 # set the target to ignore_index when the feature is already unmasked in xt
                 
                 # Get masked atom index
-                fake_atoms = (self.fake_atom_p > 0.0) and ((modality.data_key == 'a') or ((modality.data_key == 'cond_a'))) # correction for atom type and fake atoms
+                fake_atoms = (self.fake_atom_p > 0.0) and ((modality.data_key == 'a') or ((modality.data_key == 'cond_a'))) and (modality.entity_name == 'lig') # correction for atom type and fake atoms
                 n_categories = modality.n_categories + int(fake_atoms) 
                 target[xt_idxs != n_categories] = -100
             targets[modality.name] = target
@@ -562,7 +563,11 @@ class OMTRA(pl.LightningModule):
         device: Optional[torch.device] = None,
         visualize=False,
         extract_latents_for_confidence=False,
-        time_spacing: str = "even"
+        time_spacing: str = "even",
+        stochastic_sampling: bool = False,
+        noise_scaler: float = 1.0,
+        eps: float = 0.01,
+
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -770,7 +775,7 @@ class OMTRA(pl.LightningModule):
         # the only reason i'm allowing it to be none by default and manually adding it in
         # is that i don't want to define a default number of timesteps in more than one palce
         # it is already defined as default arg to VectorField.integrate
-        itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing)
+        itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing, stochastic_sampling=stochastic_sampling, noise_scaler=noise_scaler, eps=eps)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
 
@@ -825,9 +830,14 @@ class OMTRA(pl.LightningModule):
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
         visualize=False,
+        extract_latents_for_confidence=False,
+        time_spacing: str = "even",
+        stochastic_sampling: bool = False,
+        noise_scaler: float = 1.0,
+        eps: float = 0.01,
     ) -> List[SampledSystem]:
         
-        n_samples = len(g_list)
+        n_samples = len(g_list) if g_list is not None else 1
         
         reps_per_batch = min(max_batch_size // n_samples, n_replicates)
         n_full_batches = n_replicates // reps_per_batch
@@ -847,6 +857,10 @@ class OMTRA(pl.LightningModule):
                                         n_timesteps=n_timesteps,
                                         visualize=visualize,
                                         coms=coms,
+                                        extract_latents_for_confidence=extract_latents_for_confidence,
+                                        time_spacing=time_spacing,
+                                        stochastic_sampling=stochastic_sampling,
+                                        noise_scaler=noise_scaler,
                                         )
             # re-order samples
             for i in range(n_samples):
@@ -859,14 +873,19 @@ class OMTRA(pl.LightningModule):
             #sample_names += [f"sys_{sys_idx}_rep_{(n_full_batches*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(last_batch_reps)]
 
             batch_results = self.sample(g_list=g_list,
-                                            n_replicates=last_batch_reps,
-                                            task_name=task_name,
-                                            unconditional_n_atoms_dist=unconditional_n_atoms_dist,
-                                            device=device,
-                                            n_timesteps=n_timesteps,
-                                            visualize=visualize,
-                                            coms=coms,
-                                            )
+                                        n_replicates=last_batch_reps,
+                                        task_name=task_name,
+                                        unconditional_n_atoms_dist=unconditional_n_atoms_dist,
+                                        device=device,
+                                        n_timesteps=n_timesteps,
+                                        visualize=visualize,
+                                        coms=coms,
+                                        extract_latents_for_confidence=extract_latents_for_confidence,
+                                        time_spacing=time_spacing,
+                                        stochastic_sampling=stochastic_sampling,
+                                        noise_scaler=noise_scaler,
+                                        eps=eps,
+                                        )
 
             for i in range(n_samples):
                 start_idx = i * last_batch_reps

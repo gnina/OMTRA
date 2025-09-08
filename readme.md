@@ -15,29 +15,12 @@ chmod +x build_env.sh
 ```
 
 # TODO:
-- [ ] need to apply masking on node vec feature loss
-- [ ] need to consider permutation invariance for vector feature prediction?
-- [ ] there is massive utiltiy in an on-the-fly (batched) addition of radius edges overlaid on top of edges that contain bond order as an edge feature
-- [ ] what to do with pharm interaction feature
-- [ ] when training omtra with ligand encoder, inject encoder config from encoder checkpoint
-- [ ] methods for evaluating conformer quality? - PB gen?
-- [ ] scoring PL-interaction on denovo designs
-- [ ] alternative time sampling methods for training (semlaflow, foldflow2)
 - [ ] filter private library pharmit compounds
 - [ ] harmonic prior
-- [ ] scale OT (https://arxiv.org/abs/2406.07266) - playing with variance of prior
-- [ ] experiment with standard deviation of priors
-- [ ] learned, task-dependent normalization for message passing
-- [ ] why does going 4->6 layers break the model?
 - [ ] test resume functionality
-- [ ] aux losses; interaction loss
-- [ ] each conv can be a self-conv followed by interaction conv
 - [ ] add shape-color similarity for docking evaluation
 - [ ] use sc-rdkit for denovo evals: https://github.com/oxpig/DeLinker/blob/master/analysis/calc_SC_RDKit.py
-- [ ] reproduce loss weightings from flowmol
 - [ ] add vpa: https://arxiv.org/abs/2403.04747
-- [ ] where are node dists generated in plinder pipeline? where to put them for crossdocked?
-- [ ] pharmacophore sub-sampling
 
 
 # Essetial things
