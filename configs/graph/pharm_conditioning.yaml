@@ -8,7 +8,7 @@ edges:             # parameter for KNN edges
     params:
       k: 2
   lig_to_pharm:
-    type: radius
+    type: knn
     params:
       k: 5
   lig_to_npnde:
@@ -31,14 +31,14 @@ edges:             # parameter for KNN edges
     type: knn
     params:
       k: 5
-  prot_res_to_lig:
-    type: radius
-    params:
-      r: 8
-  lig_to_prot_res:
-    type: knn
-    params:
-      k: 3
+  # prot_res_to_lig:
+  #   type: radius
+  #   params:
+  #     r: 8
+  # lig_to_prot_res:
+  #   type: knn
+  #   params:
+  #     k: 3
   prot_atom_to_npnde:
     type: radius
     params:
@@ -47,14 +47,14 @@ edges:             # parameter for KNN edges
     type: knn
     params:
       k: 5
-  prot_res_to_npnde:
-    type: radius
-    params:
-      r: 8
-  npnde_to_prot_res:
-    type: knn
-    params:
-      k: 3
+  # prot_res_to_npnde:
+  #   type: radius
+  #   params:
+  #     r: 8
+  # npnde_to_prot_res:
+  #   type: knn
+  #   params:
+  #     k: 3
   prot_atom_to_pharm:
     type: radius
     params:
@@ -63,21 +63,21 @@ edges:             # parameter for KNN edges
     type: knn
     params:
       k: 5
-  prot_res_to_pharm:
-    type: radius
-    params:
-      r: 8
-  pharm_to_prot_res:
-    type: knn
-    params:
-      k: 3
-  pharm_to_lig:
-    type: radius
-    params:
-      k: 5
+  # prot_res_to_pharm:
+  #   type: radius
+  #   params:
+  #     r: 8
+  # pharm_to_prot_res:
+  #   type: knn
+  #   params:
+  #     k: 3
   
 
 # enforce certain edge types are symmetric
 symmetric_etypes:
+  - lig_to_pharm      
   - npnde_to_pharm     
   - lig_to_npnde
+
+
+cov_prot_edges: true

@@ -192,7 +192,7 @@ class ProteinLigandPharmacophoreDeNovoCondensed(Task):
     conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
 
 
-@register_task("fixed_protein_ligand_pharmacophore_denovo_condensed")
+@register_task("fixed_protein_pharmacophore_ligand_denovo_condensed")
 class ProteinLigandPharmacophoreDeNovoCondensed(Task):
     groups_fixed = ['protein_identity', 'protein_structure', 'pharmacophore']
     groups_generated = ['ligand_identity_condensed', 'ligand_structure']
