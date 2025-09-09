@@ -162,9 +162,12 @@ def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[st
     if etype == 'npnde_to_npnde':
         return src_n*1.25
 
-    if etype not in graph_config.edges:
+    if etype not in graph_config.edges: # graph config doesn't explicit specify this edge type, but it is an edge type that is supported for this task
         inv_etype = get_inv_edge_type(etype)
+        assert inv_etype in graph_config.symmetric_etypes # so it must therefore be a symmetric edge type
         etype = inv_etype
+        src_ntype, etype, dst_ntype = to_canonical_etype(etype)
+        src_n, dst_n = num_nodes_dict[src_ntype], num_nodes_dict[dst_ntype]
 
     graph_type = graph_config.edges[etype]['type']
     if graph_type == 'complete':
@@ -186,6 +189,8 @@ def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[st
         n_edges_per_src_node[zero_mask] = 0
         n_edges = n_edges_per_src_node*src_n
         n_edges = n_edges.long()
+        if (n_edges < 0).any().item():
+            raise ValueError(f"Negative number of edges estimated for edge type {etype}.")
     else:
         raise ValueError(f"Graph type {graph_type} not recognized.")
     
