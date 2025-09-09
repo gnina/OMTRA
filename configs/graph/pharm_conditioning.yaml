@@ -58,7 +58,7 @@ edges:             # parameter for KNN edges
   pharm_to_prot_atom:
     type: radius
     params:
-      r: 6
+      r: 4.5
   # prot_res_to_pharm:
   #   type: radius
   #   params:

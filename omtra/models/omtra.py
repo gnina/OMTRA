@@ -391,7 +391,7 @@ class OMTRA(pl.LightningModule):
         
         # add noise to pharmacophore coordinates
         if self.pharm_var > 0.0:
-            g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**2
+            g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**0.5
 
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
