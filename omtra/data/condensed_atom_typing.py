@@ -8,7 +8,8 @@ from omtra.constants import lig_atom_type_map, charge_map, extra_feats_map
 
 class CondensedAtomTyper():
     def __init__(self,
-                 fake_atoms: bool):
+                 fake_atoms: bool, 
+                 include_crossdocked: bool):
         
         # load tuple counts for Pharmit
         cond_a_path = omtra_root() + '/omtra/constants/pharmit_condensed_atom_types.pkl'
@@ -32,6 +33,15 @@ class CondensedAtomTyper():
 
         # Concatenate arrays and find unique atom uncondensed feature tuples
         all_tuples = np.vstack([cond_to_uncond] + plinder_uncond_tuples)
+
+        #if we want to include crossdocked, load unique tuples from .pt file
+        if include_crossdocked:
+            crossdocked_cond_a_path = omtra_root() + '/omtra_pipelines/crossdocked_ligand_properties/outputs/count_lig_feats/combined_unique_feat_tuples.pt'
+
+            crossdocked_cond_a_counts = torch.load(crossdocked_cond_a_path)
+            crossdocked_uncond_tuples = np.array(list(crossdocked_cond_a_counts.keys()), dtype=np.int64)
+            all_tuples = np.vstack([all_tuples, crossdocked_uncond_tuples])
+
         cond_to_uncond = np.unique(all_tuples, axis=0)
         self.cond_to_uncond = cond_to_uncond
 
