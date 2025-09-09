@@ -23,7 +23,7 @@ root_dir = "/net/galaxy/home/koes/paf46_shared/cd2020_v1.3"
 zarr_output_dir = "test_external_output.zarr" #these are not used
 
 #load the file
-data = torch.load('crossdocked_external_splits/split_by_name.pt')
+data = torch.load('/net/galaxy/home/koes/jmgupta/omtra_2/omtra_pipelines/crossdocked_dataset/crossdocked_external_splits/split_by_name.pt')
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Test Crossdocked dataset processing")
