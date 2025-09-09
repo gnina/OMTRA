@@ -123,7 +123,6 @@ def sample_n_lig_atoms_plinder(n_prot_atoms: torch.Tensor = None, n_pharms: torc
             # prot atoms is not specified so we marginalize over n_prot_atoms
             p = p_joint.sum(axis=2) # has shape (n_ligand_atoms_support, n_pharms_support)
             p = p.unsqueeze(0).expand(n_pharms.shape[0], -1, -1) # has shape (n_samples, n_ligand_atoms_support, n_pharms_support)
-            print('before', p.shape, flush=True)
 
 
         if n_pharms is not None:
@@ -139,7 +138,6 @@ def sample_n_lig_atoms_plinder(n_prot_atoms: torch.Tensor = None, n_pharms: torc
             
             # marginalize by summing over valid n_pharms indices
             p = (p * mask).sum(dim=-1)  # (n_samples, n_ligand_atoms_support)
-            print('after', p.shape, flush=True)
 
             # find corresponding indicies for the number of pharmacophores provided
             # n_pharms_idxs = torch.searchsorted(supports['n_pharms'], n_pharms)

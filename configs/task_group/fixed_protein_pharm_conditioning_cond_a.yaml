@@ -11,13 +11,13 @@ task_phases:
   - duration_batches: null
     tasks:
       - name: fixed_protein_pharmacophore_ligand_denovo_condensed
-        probability: 0.42
+        probability: 0.425
       - name: rigid_docking_pharmacophore_condensed
-        probability: 0.42
+        probability: 0.425
       - name: denovo_ligand_from_pharmacophore_condensed
-        probability: 0.04
+        probability: 0.075
       - name: ligand_conformer_from_pharmacophore_condensed
-        probability: 0.04
+        probability: 0.075
       - name: denovo_ligand_condensed
         probability: 0.04
       - name: ligand_conformer_condensed
