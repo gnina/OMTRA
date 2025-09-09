@@ -275,7 +275,7 @@ class PharmitDataset(ZarrDataset):
                 mean_fake_atoms = self.fake_atom_p/2 * ntype_node_counts
                 ntype_node_counts = ntype_node_counts + mean_fake_atoms.astype(int)
             elif ntype == 'pharm':
-                ntype_node_counts = int(round(min(self.max_pharms_sampled, ntype_node_counts) / 2))  # we sample between 1 and max_pharms_sampled pharmacophores, so (1+max_pharms_sampled)/2 pharms in expectation
+                ntype_node_counts = np.round(np.minimum(self.max_pharms_sampled, ntype_node_counts) / 2).astype(int)  # we sample between 1 and max_pharms_sampled pharmacophores, so (1+max_pharms_sampled)/2 pharms in expectation
             node_counts.append(ntype_node_counts)
 
         if per_ntype:
