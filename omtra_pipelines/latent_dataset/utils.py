@@ -1,5 +1,6 @@
 import torch
 from omtra.eval.system import SampledSystem
+from omtra.tasks.register import task_name_to_class
 
 # this implementation is from: https://gist.github.com/bougui505/e392a371f5bab095a3673ea6f4976cc8?permalink_comment_id=5286981#gistcomment-5286981
 # as a sanity check we can compare it to the implementation in rdkit:
@@ -55,7 +56,7 @@ def find_rigid_alignment(A, B):
 
     return pred_aligned
 
-def get_gt_as_rdkit_ligand(g):
+def get_gt_as_rdkit_ligand(g, task_name, cond_a_typer=None):
     """
         Used to wrap a ground truth graph as a SampledSystem, so that we 
         can call get_rdkit_ligand() on it.
@@ -69,10 +70,14 @@ def get_gt_as_rdkit_ligand(g):
         lig_node_data['a_1'] = lig_node_data['a_1_true']
     if 'c_1_true' in lig_node_data:
         lig_node_data['c_1'] = lig_node_data['c_1_true']
+    if 'cond_a_1_true' in lig_node_data:
+        lig_node_data['cond_a_1'] = lig_node_data['cond_a_1_true']
         
     lig_edge_data = gt_graph_for_rdkit.edges["lig_to_lig"].data
     lig_edge_data['e_1'] = lig_edge_data['e_1_true']
     
-    gt_system_wrapper = SampledSystem(g=gt_graph_for_rdkit.to('cpu'))
+    # Create task instance & gt wrapper
+    task_class = task_name_to_class(task_name)
+    gt_system_wrapper = SampledSystem(g=gt_graph_for_rdkit.to('cpu'), task=task_class, cond_a_typer=cond_a_typer)
     
     return gt_system_wrapper.get_rdkit_ligand()
