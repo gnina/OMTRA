@@ -2,7 +2,7 @@ import zarr
 import numpy as np
 from pathlib import Path
 
-def init_zarr_store_latents(store_path: Path, totals: dict, n_chunks: int):
+def init_zarr_store_latents(store_path: Path, totals: dict, n_chunks: int, node_types: list):
     store = zarr.storage.LocalStore(store_path)
     root = zarr.group(store=store)
 
@@ -23,10 +23,11 @@ def init_zarr_store_latents(store_path: Path, totals: dict, n_chunks: int):
     atoms_per_chunk = n_atoms // n_chunks
     
     # latents
-    latents_group.create_array('node_scalar_features', shape=(n_atoms, scalar_dim), chunks=(atoms_per_chunk, scalar_dim), dtype=np.float32)
-    latents_group.create_array('node_vec_features', shape=(n_atoms, vector_dim, 3), chunks=(atoms_per_chunk, vector_dim, 3), dtype=np.float32)
-    latents_group.create_array('node_positions', shape=(n_atoms, 3), chunks=(atoms_per_chunk, 3), dtype=np.float32)
-
+    for ntype in node_types:
+        latents_group.create_array(f'{ntype}_scalar_features', shape=(n_atoms, scalar_dim), chunks=(atoms_per_chunk, scalar_dim), dtype=np.float32)
+        latents_group.create_array(f'{ntype}_vec_features', shape=(n_atoms, vector_dim, 3), chunks=(atoms_per_chunk, vector_dim, 3), dtype=np.float32)
+        latents_group.create_array(f'{ntype}_positions', shape=(n_atoms, 3), chunks=(atoms_per_chunk, 3), dtype=np.float32)
+    
     # coords
     coords_group.create_array('coords_gt', shape=(n_atoms, 3), chunks=(atoms_per_chunk, 3), dtype=np.float32)
     coords_group.create_array('coords_pred', shape=(n_atoms, 3), chunks=(atoms_per_chunk, 3), dtype=np.float32)
