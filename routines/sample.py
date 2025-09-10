@@ -96,6 +96,24 @@ def parse_args():
         default=None,
         help="Path to the Plinder dataset (optional)"
     )
+    p.add_argument(
+        "--stochastic_sampling",
+        type=bool,
+        default=False,
+        help="Whether to perform stochastic sampling."
+    )
+    p.add_argument(
+        "--noise_scaler",
+        type=float,
+        default=1.0,
+        help="Scaling factor for noise (stochasticity)"
+    )
+    p.add_argument(
+        "--eps",
+        type=float,
+        default=0.01,
+        help="Scaling factor for noise (stochasticity)"
+    )
     p.add_argument('--split', type=str, default='val', help='Which data split to use')
 
     p.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
@@ -292,6 +310,9 @@ def main(args):
         n_timesteps=args.n_timesteps,
         visualize=args.visualize,
         coms=coms,
+        stochastic_sampling=args.stochastic_sampling,
+        noise_scaler=args.noise_scaler, # for stochastic sampling 
+        eps=args.eps,
     )
 
     if args.output_dir is None:

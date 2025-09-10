@@ -129,7 +129,12 @@ def parse_args():
         default=None,
         help="Dataset."
     )
-
+    p.add_argument(
+        "--sys_info_file",
+        type=str,
+        default=None,
+        help="Path to the system info file (optional)."
+    )
     return p.parse_args()
 
 
@@ -345,7 +350,7 @@ def compute_metrics(system_pairs,
             except Chem.rdchem.MolSanitizeException:
                 print(f"Invalid: General sanitization failed for true ligand")
             except Exception as e:
-                print(f"Invalid: Another error encountered during sanitization of true ligand: {e}")
+                print(f"Invalid: Another error encountered during sanitization of true ligand for system {sys_id}: {e}")
 
             all_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(data['gen_ligs_ids'])
             valid_lig_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(valid_gen_lig_ids)
@@ -364,7 +369,7 @@ def compute_metrics(system_pairs,
 
                 if results is not None:
                     metrics.loc[valid_lig_rows, results.columns] = results.to_numpy(dtype=bool)
-                    metrics.loc[~valid_lig_rows, results.columns] = False
+                    metrics.loc[all_rows & ~valid_lig_rows, results.columns] = False
                 
                 true_results = run_with_timeout(pb_valid,
                                                 timeout=timeout,
@@ -512,7 +517,7 @@ def sample_system(ckpt_path: Path,
                                               n_replicates=n_replicates,
                                               max_batch_size=max_batch_size,
                                               task_name=task.name,
-                                              unconditional_n_atoms_dist=dataset,
+                                              unconditional_n_atoms_dist='plinder',
                                               device=device,
                                               n_timesteps=n_timesteps,
                                               visualize=False,
@@ -742,7 +747,19 @@ def main(args):
                                           output_dir=samples_dir)
     else:
         samples_dir = args.samples_dir
-        sys_info = pd.read_csv(f"{samples_dir}/{task_name}_sys_info.csv")
+
+        if args.sys_info_file is None:
+            sys_info_file =  f"{samples_dir}/{task_name}_sys_info.csv"
+            print(f"Using default system info file: {sys_info_file}")
+        else:
+            sys_info_file = args.sys_info_file
+        
+        try:
+            sys_info = pd.read_csv(sys_info_file)
+        except Exception as e:  # case where we didn't generate a system info file
+            print(f"Warning: Could not find system info csv at {sys_info_file}")
+            sys_info = None
+
         system_pairs = system_pairs_from_path(samples_dir=samples_dir,
                                               task=task,
                                               n_samples=args.n_samples,
@@ -759,7 +776,8 @@ def main(args):
                               output_dir=samples_dir,
                               timeout=args.timeout)        
 
-    metrics = pd.merge(metrics, sys_info, on='sys_id', how='left')
+    if sys_info is not None:
+        metrics = pd.merge(metrics, sys_info, on='sys_id', how='left')
     metrics.to_csv(f"{output_dir}/{task_name}_metrics.csv", index=False)
 
 if __name__ == "__main__":

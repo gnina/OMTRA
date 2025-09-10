@@ -1,13 +1,13 @@
 _target_: omtra.models.vector_field.VectorField
 
 
-n_vec_channels:                16
-n_cp_feats:                    4
+n_vec_channels:                32
+n_cp_feats:                    8
 n_hidden_scalars:              256
-n_hidden_edge_feats:           64
+n_hidden_edge_feats:           128
 n_recycles:                    1
 n_molecule_updates:            4
-convs_per_update:              1
+convs_per_update:              2
 n_message_gvps:                3
 n_update_gvps:                 3
 n_expansion_gvps:              3

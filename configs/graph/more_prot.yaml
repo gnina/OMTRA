@@ -10,7 +10,7 @@ edges:             # parameter for KNN edges
   lig_to_pharm:
     type: knn
     params:
-      k: 5
+      k: 3
   lig_to_npnde:
     type: knn
     params:
@@ -22,7 +22,7 @@ edges:             # parameter for KNN edges
   prot_atom_to_prot_atom:
     type: radius
     params:
-      r: 4.5
+      r: 5
   prot_atom_to_lig:
     type: radius
     params:
@@ -30,7 +30,7 @@ edges:             # parameter for KNN edges
   lig_to_prot_atom:
     type: knn
     params:
-      k: 5
+      k: 15
   # prot_res_to_lig:
   #   type: radius
   #   params:

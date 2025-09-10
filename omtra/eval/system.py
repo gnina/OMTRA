@@ -728,7 +728,7 @@ class SampledSystem:
     def write_ligand(self, output_file: str, 
                      trajectory: bool = False, 
                      endpoint: bool = False, 
-                     ground_truth: bool = True,
+                     ground_truth: bool = False,
                      g = None):
         """Write a ligand or a ligand trajectory to an sdf file."""
         output_file = Path(output_file)
