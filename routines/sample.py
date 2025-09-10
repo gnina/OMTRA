@@ -288,6 +288,8 @@ def main(args):
         dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
     elif args.dataset == 'pharmit':
         dataset = multitask_dataset.datasets['pharmit']
+    elif args.dataset == 'crossdocked':
+        dataset = multitask_dataset.datasets['crossdocked']
     else:
         raise ValueError(f"Unknown dataset {args.dataset}")
 
