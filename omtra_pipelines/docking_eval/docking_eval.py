@@ -124,6 +124,12 @@ def parse_args():
         help="Path to the Plinder dataset (optional)."
     )
     p.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="Dataset."
+    )
+    p.add_argument(
         "--sys_info_file",
         type=str,
         default=None,
@@ -452,6 +458,7 @@ def sample_system(ckpt_path: Path,
                   n_timesteps: int,
                   split: str,
                   max_batch_size: int,
+                  dataset_name: str,
                   plinder_path: Path = None):
     
     if not ckpt_path.exists():
@@ -475,8 +482,15 @@ def sample_system(ckpt_path: Path,
     model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
 
     # get raw dataset object
-    plinder_link_version = task.plinder_link_version
-    dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
+    if args.dataset == "plinder":
+        plinder_link_version = task.plinder_link_version
+        dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
+    elif args.dataset == 'pharmit':
+        dataset = multitask_dataset.datasets['pharmit']
+    elif args.dataset == 'crossdocked':
+        dataset = multitask_dataset.datasets['crossdocked']
+    else:
+        raise ValueError(f"Unknown dataset {args.dataset}")
 
     # get g_list
     dataset_idxs = range(dataset_start_idx, dataset_start_idx + n_samples)
@@ -484,8 +498,13 @@ def sample_system(ckpt_path: Path,
 
     # system info
     sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
-    sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
-    sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'sys_id']]
+
+    if dataset_name == "plinder":
+        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
+        sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'sys_id']]
+    elif dataset_name == "crossdocked": 
+        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
+        sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb', 'sys_id']]
 
     # set coms if protein is present
     if 'protein_identity' in task.groups_present and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed'])):
@@ -709,6 +728,7 @@ def main(args):
                                                           n_timesteps=args.n_timesteps,
                                                           split=args.split,
                                                           max_batch_size=args.max_batch_size,
+                                                          dataset_name=args.dataset,
                                                           plinder_path=args.plinder_path)
         
         print("Finished sampling. Clearing torch GPU cache...\n")

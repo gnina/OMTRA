@@ -168,7 +168,7 @@ class OMTRA(pl.LightningModule):
 
         self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
 
-        self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0)
+        self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0, include_crossdocked=True)
 
         # configure train t distribution 
         if train_t_dist == 'uniform':

@@ -200,6 +200,10 @@ rigid_docking_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 rigid_docking_extra_feats:
   - stability:
       train: true
@@ -269,6 +273,10 @@ flexible_docking_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 flexible_docking_extra_feats:
   - stability:
       train: true
@@ -428,6 +436,10 @@ protein_ligand_denovo_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 protein_ligand_denovo_extra_feats:
   - validity:
       train: true
@@ -494,6 +506,10 @@ fixed_protein_ligand_denovo_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 fixed_protein_ligand_denovo_extra_feats:
   - validity:
       train: true
@@ -631,6 +647,10 @@ rigid_docking_pharmacophore_condensed:
       train: true
       params:
         threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 fixed_protein_pharmacophore_ligand_denovo_condensed:
   - validity:
       train: true
@@ -657,4 +677,8 @@ fixed_protein_pharmacophore_ligand_denovo_condensed:
       train: true
       params:
         threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
   
