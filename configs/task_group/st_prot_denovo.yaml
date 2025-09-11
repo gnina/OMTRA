@@ -12,12 +12,12 @@ task_phases:
     tasks:
       - name: fixed_protein_ligand_denovo_condensed
         probability: 0.92
-      - name: denovo_ligand_condensed
-        probability: 0.08
+      # - name: denovo_ligand_condensed
+        # probability: 0.08
 
 # define p(dataset|task) coupling (assume static for simplicity)
 dataset_task_coupling:
   fixed_protein_ligand_denovo_condensed:
     - [plinder, 1.0]
-  denovo_ligand_condensed:
-    - [pharmit, 1.0]
+  # denovo_ligand_condensed:
+    # - [pharmit, 1.0]
