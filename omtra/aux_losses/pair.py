@@ -148,7 +148,9 @@ class LigPairLoss(nn.Module):
         x_diff_gen = x_1_pred[src_idxs[d_mask]] - x_1_pred[dst_idxs[d_mask]]
         dij_pred = _norm_no_nan(x_diff_gen)
 
-        time_scaled_loss = time_weights is not None
+        disable_pair_loss = 'protein_identity' not in task.groups_present
+
+        time_scaled_loss = time_weights is not None and not disable_pair_loss
         reduction = 'none' if time_scaled_loss else 'mean'
         loss = F.mse_loss(dij_pred, dij_true, reduction=reduction)
 
