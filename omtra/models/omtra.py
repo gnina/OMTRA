@@ -48,6 +48,7 @@ from omtra.priors.sample import sample_priors
 from omtra.eval.register import get_eval
 from omtra.eval.utils import add_task_prefix
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
+import traceback
 
 # from line_profiler import profile
 
@@ -354,7 +355,14 @@ class OMTRA(pl.LightningModule):
                 if not config.get("train", False):
                     continue
                 eval_fn = get_eval(eval_name)
-                metrics.update(eval_fn(samples, config.get("params", {})))
+                try:
+                    eval_output = eval_fn(samples, config.get("params", {}))
+                except Exception as e:
+                    print(f"WARNING: error occurred while evaluating {eval_name} for task {task_name}")
+                    traceback.print_exc()
+                    print(f"Full error details for {eval_name}: {str(e)}")
+                    continue
+                metrics.update(eval_output)
         
         if metrics:
             metrics = add_task_prefix(metrics, task_name)
