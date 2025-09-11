@@ -190,11 +190,11 @@ def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[st
         n_edges = n_edges_per_src_node*src_n
         n_edges = n_edges.long()
         if (n_edges < 0).any().item():
-            min_val = n_edges.min().item()
+            # min_val = n_edges.min().item()
             neg_mask = (n_edges < 0)
-            frac_neg = neg_mask.float().mean().item()
-            print(f"WARNING: negative number of edges estimated for edge type {etype}. min val: {min_val:.2f}, percent negative: {frac_neg*100:.3f}%")
-            print(f"Setting graphs with negative number of edges to zero.", flush=True)
+            # frac_neg = neg_mask.float().mean().item()
+            # print(f"WARNING: negative number of edges estimated for edge type {etype}. min val: {min_val:.2f}, percent negative: {frac_neg*100:.3f}%")
+            # print(f"Setting graphs with negative number of edges to zero.", flush=True)
             n_edges[neg_mask] = 0
             # raise ValueError(f"Negative number of edges estimated for edge type {etype}.")
     else:
