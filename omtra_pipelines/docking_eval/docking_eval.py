@@ -469,6 +469,7 @@ def sample_system(ckpt_path: Path,
                   dataset: str,
                   split: str,
                   max_batch_size: int,
+                  dataset_name: str,
                   plinder_path: Path = None):
     
     if not ckpt_path.exists():
@@ -494,7 +495,6 @@ def sample_system(ckpt_path: Path,
     dataset_idxs = range(dataset_start_idx, dataset_start_idx + n_samples) 
     sys_info = None
 
-    # get raw dataset object
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
         dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
@@ -504,6 +504,16 @@ def sample_system(ckpt_path: Path,
         sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
         sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
         sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'sys_id']]
+
+    elif dataset == 'crossdocked':
+        dataset = multitask_dataset.datasets['crossdocked']
+        dataset_name = 'crossdocked'
+
+        # system info
+        sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
+        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
+        sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb', 'sys_id']]
+        dataset_name = 'crossdocked'
 
     elif dataset == 'pharmit':
         raise ValueError(f"Pharmit dataset does not include proteins!")
@@ -773,6 +783,7 @@ def main(args):
                                                           dataset=args.dataset,
                                                           split=args.split,
                                                           max_batch_size=args.max_batch_size,
+                                                          dataset_name=args.dataset,
                                                           plinder_path=args.plinder_path)
         
         print("Finished sampling. Clearing torch GPU cache...\n")

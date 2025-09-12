@@ -23,6 +23,13 @@ default_config_path = str(default_config_path)
 from rdkit import Chem
 import argparse
 
+from rdkit import RDLogger
+
+# Disable all standard RDKit logs
+RDLogger.DisableLog('rdApp.*')
+
+# Also silence everything below CRITICAL
+lg = RDLogger.logger()
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -280,6 +287,8 @@ def main(args):
         dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
     elif args.dataset == 'pharmit':
         dataset = multitask_dataset.datasets['pharmit']
+    elif args.dataset == 'crossdocked':
+        dataset = multitask_dataset.datasets['crossdocked']
     else:
         raise ValueError(f"Unknown dataset {args.dataset}")
 
@@ -313,7 +322,8 @@ def main(args):
     )
 
     if args.output_dir is None:
-        output_dir = ckpt_path.parent.parent / 'samples'
+        vis_str = 'vis' if args.visualize else 'novis'
+        output_dir = ckpt_path.parent.parent / f'samples_{args.task}_{vis_str}'
     else:
         output_dir = args.output_dir
     output_dir = output_dir.resolve()
