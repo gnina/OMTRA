@@ -45,7 +45,7 @@ This script evaluates models on a user-specified protein-conditioned (+pharm-con
 |----------|-------------|-------------| 
 | `--timeout` | `12000` | Maximum running time in seconds for any eval metric. |
 | `--disable_pb_valid` | `False` | Disables PoseBusters validity check. |
-| `--disable_gnina` | '`False` | Disables GNINA docking score calculation. |
+| `--disable_gnina` | `False` | Disables GNINA docking score calculation. |
 | `--disable_posecheck` | `False`| Disables strain, clashes, and pocket-ligand interaction computation. |
 | `--disable_rmsd` | `False` | Disables RMSD computation between generated ligand and ground truth ligand. |
 | `--disable_interaction_recovery` | `False` | Disables analysis of interaction recovery by generated ligands. |
@@ -58,68 +58,73 @@ This script evaluates models on a user-specified protein-conditioned (+pharm-con
 The script will sample the model when passed the `--ckpt_path` and write sample files to `output_dir/samples/`. The format of the outputted files depends on the task. See below.
 
 #### Fixed protein (protein structure fixed)
-output_dir/samples <br>
-├── sys_1_gt <br>
-│   ├── gen_ligands.sdf <br>
-│   ├── ligand.sdf <br>
-│   ├── protein_0.pdb <br>
-│   └── pharmacophore.xyz   (if applicable) <br>
-│ <br>
-├── sys_2_gt <br>
-│   ├── gen_ligands.sdf <br>
-│   ├── ligand.sdf <br>
-│   ├── protein_0.pdb  <br>
-│   └── pharmacophore.xyz   (if applicable) <br>
-... <br>
-│ <br>
-└── sys_N_SAMPLES_gt <br>
-    ├── gen_ligands.sdf <br>
-    ├── ligand.sdf <br>
-    ├── protein_0.pdb <br>
-    └── pharmacophore.xyz   (if applicable)  <br>
+```text
+output_dir/samples
+├── sys_1_gt
+│   ├── gen_ligands.sdf
+│   ├── ligand.sdf
+│   ├── protein_0.pdb
+│   └── pharmacophore.xyz   (if applicable)
+│
+├── sys_2_gt
+│   ├── gen_ligands.sdf
+│   ├── ligand.sdf
+│   ├── protein_0.pdb
+│   └── pharmacophore.xyz   (if applicable) 
+... 
+│
+└── sys_N_SAMPLES_gt
+    ├── gen_ligands.sdf
+    ├── ligand.sdf
+    ├── protein_0.pdb
+    └── pharmacophore.xyz   (if applicable)
+```
 
+Note: In the case of a fixed protein, all generated ligands are in one sdf file.
 
 #### Flexible protein (protein structure generated)
-output_dir/samples <br>
-├── sys_1_gt <br>
-│   ├── gen_ligands_0.sdf <br>
-│   ├── gen_ligands_1.sdf <br>
-│   ... <br>
-│   ├── gen_ligands_N_REPLICATES.sdf <br>
-│   ├── gen_prot_0.sdf <br>
-│   ├── gen_prot_1.sdf <br>
-│   ... <br>
-│   ├── gen_prot_N_REPLICATES.sdf <br>
-│   ├── ligand.sdf <br>
-│   ├── protein_0.pdb  <br>
-│   └── pharmacophore.xyz   (if applicable) <br>
-│ <br>
-├── sys_2_gt <br>
-│   ├── gen_ligands_0.sdf <br>
-│   ├── gen_ligands_1.sdf <br>
-│   ... <br>
-│   ├── gen_ligands_N_REPLICATES.sdf <br>
-│   ├── gen_prot_0.sdf <br>
-│   ├── gen_prot_1.sdf <br>
-│   ... <br>
-│   ├── gen_prot_N_REPLICATES.sdf <br>
-│   ├── ligand.sdf <br>
-│   ├── protein_0.pdb <br>
-│   └── pharmacophore.xyz   (if applicable) <br>
-... <br>
-│ <br>
-└── sys_N_SAMPLES_gt <br>
-    ├── gen_ligands_0.sdf <br>
-    ├── gen_ligands_1.sdf <br>
-    ... <br>
-    ├── gen_ligands_N_REPLICATES.sdf <br>
-    ├── gen_prot_0.sdf <br>
-    ├── gen_prot_1.sdf <br>
-    ... <br>
-    ├── gen_prot_N_REPLICATES.sdf <br>
-    ├── ligand.sdf <br>
-    ├── protein_0.pdb  <br>
-    └── pharmacophore.xyz   (if applicable) <br>
+```text
+output_dir/samples
+├── sys_1_gt 
+│   ├── gen_ligands_0.sdf
+│   ├── gen_ligands_1.sdf
+│   ... 
+│   ├── gen_ligands_N_REPLICATES.sdf 
+│   ├── gen_prot_0.sdf 
+│   ├── gen_prot_1.sdf 
+│   ... 
+│   ├── gen_prot_N_REPLICATES.sdf 
+│   ├── ligand.sdf 
+│   ├── protein_0.pdb  
+│   └── pharmacophore.xyz   (if applicable) 
+│ 
+├── sys_2_gt 
+│   ├── gen_ligands_0.sdf 
+│   ├── gen_ligands_1.sdf 
+│   ... 
+│   ├── gen_ligands_N_REPLICATES.sdf 
+│   ├── gen_prot_0.sdf 
+│   ├── gen_prot_1.sdf 
+│   ... 
+│   ├── gen_prot_N_REPLICATES.sdf 
+│   ├── ligand.sdf 
+│   ├── protein_0.pdb 
+│   └── pharmacophore.xyz   (if applicable) 
+...
+│ 
+└── sys_N_SAMPLES_gt 
+    ├── gen_ligands_0.sdf
+    ├── gen_ligands_1.sdf 
+    ... 
+    ├── gen_ligands_N_REPLICATES.sdf 
+    ├── gen_prot_0.sdf 
+    ├── gen_prot_1.sdf 
+    ... 
+    ├── gen_prot_N_REPLICATES.sdf 
+    ├── ligand.sdf 
+    ├── protein_0.pdb  
+    └── pharmacophore.xyz   (if applicable) 
+```
 
 #### Example Usage:
 ``` console
@@ -133,17 +138,28 @@ python docking_eval.py \
 ```
 
 ### 2. From Samples Directory
-If  `--samples_dir` is passed, the script reads in files from the directory. Given the task, there is a strict required format for the files in said directory that should match the above section.
+If  `--samples_dir` is passed, the script reads in files from the directory. Given the task, there is a strict required format for the files in said directory. This should match the above section.
+
+Note: Every generated ligand should have a property `_Name` set to `gen_ligands_IDX` 
 
 #### Example Usage:
 ```console
 python docking_eval.py \
     --samples_dir OMTRA_ROOT/omtra_pipelines/docking_eval/outputs/rigid_docking_condensed/samples \
-    --sys_info_file OMTRA_ROOT/omtra_pipelines/docking_eval/outputs/rigid_docking_condensed/\
+    --sys_info_file OMTRA_ROOT/omtra_pipelines/docking_eval/outputs/rigid_docking_condensed/rigid_docking_condensed_sys_info.csv \
     --task rigid_docking_condensed \
     --n_samples 10 \
     --n_replicates 10 \
     --max_batch_size 600 \
     --timeout 1200 
 ```
+
+## Outputs
+| Name | Type | Description | 
+|----------|-------------|-------------| 
+| `OUTPUT_DIR/TASK_NAME_metrics.csv` | `csv` | All of the computed metrics. Metrics for the ground truth ligand are followed by a `_true` tag. Note: some metrics cannot be computed if the ligand fails to sanitize. These metrics are set to `NaN` values. |
+| `OUTPUT_DIR/samples/TASK_NAME_sys_info.csv` | `csv` | File with system information. This is automatically configured when sampling from the Plinder or Crossdocked dataset. No system info file is created if we  (not sampling from a checkpoint).  |
+
+
+Useful tip: The notebook `notebooks/docking_evaluation.ipynb` contains code for analyzing the models across the various computed metrics.
 

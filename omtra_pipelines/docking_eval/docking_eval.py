@@ -26,7 +26,7 @@ import omtra.load.quick as quick_load
 from omtra.eval.system import SampledSystem, write_arrays_to_pdb, write_mols_to_sdf
 from routines.sample import write_ground_truth, generate_sample_names, group_samples_by_system 
 from omtra.data.pharmacophores import get_pharmacophores
-from omtra.constants import ph_type_to_idx
+from omtra.constants import ph_idx_to_elem
 
 
 
@@ -665,7 +665,7 @@ def system_pairs_from_path(samples_dir: Path,
 
         sys_pair = {}
 
-        true_lig_file = sys_dir / f"ligand.sdf"
+        true_lig_file = sys_dir / "ligand.sdf"
         true_lig = Chem.SDMolSupplier(str(true_lig_file), sanitize=False, removeHs=False)[0]
 
         true_prot_file = sys_dir / "protein_0.pdb"
@@ -673,8 +673,13 @@ def system_pairs_from_path(samples_dir: Path,
 
         if 'pharmacophore' in task.groups_present:
             pharm = {}
-            pharm_data = np.loadtxt("pharmacophore.xyz", skiprows=1, dtype=str)
-            pharm['types_idx'] = [ph_type_to_idx[p] for p in pharm_data[:, 0].tolist()]
+            true_pharm_file = sys_dir / "pharmacophore.xyz"
+            pharm_data = np.loadtxt(true_pharm_file, skiprows=1, dtype=str)
+
+            if pharm_data.ndim == 1:
+                pharm_data = pharm_data.reshape(1, -1)
+
+            pharm['types_idx'] = [ph_idx_to_elem.index(p) for p in pharm_data[:, 0].tolist()]
             pharm['coords'] = pharm_data[:, 1:].astype(float)
 
         if 'protein_structure' in task.groups_generated:   # Flexible protein tasks
@@ -777,7 +782,7 @@ def main(args):
         # torch.cuda.ipc_collect()
 
         if isinstance(sys_info, pd.DataFrame) and not sys_info.empty:
-            sys_info.to_csv(f"{output_dir}/{task_name}_sys_info.csv", index=False)
+            sys_info.to_csv(f"{samples_dir}/{task_name}_sys_info.csv", index=False)
         
         # write samples to output files and configure dictionary of system pairs
         system_pairs = write_system_pairs(g_list=g_list,
