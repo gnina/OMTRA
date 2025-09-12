@@ -31,6 +31,7 @@ class MolXACE:
     hyb: Optional[Union[np.ndarray, torch.Tensor]] = None
     ring: Optional[Union[np.ndarray, torch.Tensor]] = None
     chiral: Optional[Union[np.ndarray, torch.Tensor]] = None
+    rdkit_mol: Optional[Chem.Mol] = None  # RDKit molecule
 
     cond_a: Optional[Union[np.ndarray, torch.Tensor]] = None    # condensed atom typing
 
@@ -221,6 +222,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         e=bond_types,
         edge_idxs=bond_idxs,
         tcv_counts=tcv_counts,
+        rdkit_mol=molecule
     )
 
 def add_fake_atoms(mol: MolXACE, fake_atom_p: float, cond_a_typer: CondensedAtomTyper=None):
