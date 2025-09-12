@@ -8,7 +8,7 @@ This script evaluates models on a user-specified protein-conditioned (+pharm-con
 | `rigid_docking_condensed` | Rigid docking |
 | `fixed_protein_ligand_denovo_condensed` | Rigid protein, de novo ligand generation |
 | `flexible_docking_condensed` | Flexible docking |
-| `protein_ligand_denovo_condensed` | Flexible docking |
+| `protein_ligand_denovo_condensed` | Flexible protein, de novo ligand generation |
 | `rigid_docking_pharmacophore_condensed` | Pharmacophore-conditioned rigid docking |
 | `fixed_protein_pharmacophore_ligand_denovo_condensed` | Pharmacophore-conditioned, rigid protein, de novo ligand generation |
 | `flexible_docking_pharmacophore_condensed` | Pharmacophore-conditioned flexible docking |
@@ -38,7 +38,7 @@ This script evaluates models on a user-specified protein-conditioned (+pharm-con
 | `--dataset` | `plinder` | Dataset. Options: Plinder or Crossdocked |
 | `--split` | `val` | Data split (i.e., train, val). |
 | `--dataset_start_idx` | `0` | Index in the dataset to start sampling from. |
-| `--plinder_path` | 'None' | Path to the Plinder dataset (optional). |
+| `--plinder_path` | `None` | Path to the Plinder dataset (optional). |
 
 #### Metrics
 | Argument | Default | Description | 
@@ -161,5 +161,5 @@ python docking_eval.py \
 | `OUTPUT_DIR/samples/TASK_NAME_sys_info.csv` | `csv` | File with system information. This is automatically configured when sampling from the Plinder or Crossdocked dataset. No system info file is created if we  (not sampling from a checkpoint).  |
 
 
-Useful tip: The notebook `notebooks/docking_evaluation.ipynb` contains code for analyzing the models across the various computed metrics.
+Useful tip: The notebook `notebooks/docking_evaluation.ipynb` contains code for visualizing the computed metrics and comparing models/tasks.
 
