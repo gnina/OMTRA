@@ -85,15 +85,16 @@ def sample_priors(
     pharm_gen = 'pharmacophore' in groups_generated
     lig_gen = 'ligand_structure' in groups_generated
     if training and pharm_gen and lig_gen:
-        # get the pharmacophore prior COM
-        ph_com = dgl.readout_nodes(g, feat='x_0', op='mean', ntype='pharm')
+        if g.num_nodes('pharm') > 0:
+            # get the pharmacophore prior COM
+            ph_com = dgl.readout_nodes(g, feat='x_0', op='mean', ntype='pharm')
 
-        # get the ligand prior COM
-        com = dgl.readout_nodes(g, feat='x_0', op='mean', ntype='lig')
+            # get the ligand prior COM
+            com = dgl.readout_nodes(g, feat='x_0', op='mean', ntype='lig')
 
-        # move the pharmacophore prior to the ligand prior COM
-        node_batch_idxs = get_node_batch_idxs_ntype(g, 'pharm')
-        g.nodes['pharm'].data['x_0'] += (com - ph_com)[node_batch_idxs]
+            # move the pharmacophore prior to the ligand prior COM
+            node_batch_idxs = get_node_batch_idxs_ntype(g, 'pharm')
+            g.nodes['pharm'].data['x_0'] += (com - ph_com)[node_batch_idxs]
     
     if not training and lig_gen:
         assert com.shape == (g.batch_size, 3)
@@ -104,9 +105,9 @@ def sample_priors(
         g.nodes['lig'].data['x_0'] += (com - current_lig_com)[node_batch_idxs]
 
     if not training and pharm_gen:
-        node_batch_idxs = get_node_batch_idxs_ntype(g, 'pharm')
-        current_pharm_com = dgl.readout_nodes(g, feat='x_0', op='mean', ntype='pharm')
-        g.nodes['pharm'].data['x_0'] += (com - current_pharm_com)[node_batch_idxs]
-
+        if g.num_nodes('pharm') > 0:
+            node_batch_idxs = get_node_batch_idxs_ntype(g, 'pharm')
+            current_pharm_com = dgl.readout_nodes(g, feat='x_0', op='mean', ntype='pharm')
+            g.nodes['pharm'].data['x_0'] += (com - current_pharm_com)[node_batch_idxs]
 
     return g

@@ -8,8 +8,8 @@ from omtra.constants import lig_atom_type_map, charge_map, extra_feats_map
 
 class CondensedAtomTyper():
     def __init__(self,
-                 fake_atoms: bool, 
-                 include_crossdocked: bool):
+                 fake_atoms: bool = True, 
+                 include_crossdocked: bool = False):
         
         # load tuple counts for Pharmit
         cond_a_path = omtra_root() + '/omtra/constants/pharmit_condensed_atom_types.pkl'

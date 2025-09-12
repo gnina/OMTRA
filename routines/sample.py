@@ -23,6 +23,13 @@ default_config_path = str(default_config_path)
 from rdkit import Chem
 import argparse
 
+from rdkit import RDLogger
+
+# Disable all standard RDKit logs
+RDLogger.DisableLog('rdApp.*')
+
+# Also silence everything below CRITICAL
+lg = RDLogger.logger()
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -95,6 +102,23 @@ def parse_args():
         type=str,
         default=None,
         help="Path to the Plinder dataset (optional)"
+    )
+    p.add_argument(
+        "--stochastic_sampling",
+        action="store_true",
+        help="If set, perform stochastic sampling."
+    )
+    p.add_argument(
+        "--noise_scaler",
+        type=float,
+        default=1.0,
+        help="Scaling factor for noise (stochasticity)"
+    )
+    p.add_argument(
+        "--eps",
+        type=float,
+        default=0.01,
+        help="Scaling factor for noise (stochasticity)"
     )
     p.add_argument('--split', type=str, default='val', help='Which data split to use')
 
@@ -292,10 +316,14 @@ def main(args):
         n_timesteps=args.n_timesteps,
         visualize=args.visualize,
         coms=coms,
+        stochastic_sampling=args.stochastic_sampling,
+        noise_scaler=args.noise_scaler, # for stochastic sampling 
+        eps=args.eps,
     )
 
     if args.output_dir is None:
-        output_dir = ckpt_path.parent.parent / 'samples'
+        vis_str = 'vis' if args.visualize else 'novis'
+        output_dir = ckpt_path.parent.parent / f'samples_{args.task}_{vis_str}'
     else:
         output_dir = args.output_dir
     output_dir = output_dir.resolve()

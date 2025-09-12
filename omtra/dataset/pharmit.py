@@ -28,12 +28,14 @@ class PharmitDataset(ZarrDataset):
                  graph_config: DictConfig,
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
+                 max_pharms_sampled: int = 8,
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
         self.prior_config = prior_config
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = fake_atom_p > 0
+        self.max_pharms_sampled = max_pharms_sampled
 
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
@@ -193,19 +195,26 @@ class PharmitDataset(ZarrDataset):
         if include_pharmacophore:
             # read pharmacophore data from zarr store
             start_idx, end_idx = self.slice_array('pharm/node/graph_lookup', idx)
-            pharm_x = self.slice_array('pharm/node/x', start_idx, end_idx)
-            pharm_a = self.slice_array('pharm/node/a', start_idx, end_idx)
-            pharm_v = self.slice_array('pharm/node/v', start_idx, end_idx)
-            pharm_x = torch.from_numpy(pharm_x).float()
-            pharm_a = torch.from_numpy(pharm_a).long()
-            pharm_v = torch.from_numpy(pharm_v).float()
 
-            # add target pharmacophore data to graph
-            g_node_data['pharm'] =  {
-                'x_1_true': pharm_x, 
-                'a_1_true': pharm_a, 
-                'v_1_true': pharm_v
-            }
+            pharm_idxs = np.arange(start_idx, end_idx)
+
+            if len(pharm_idxs) == 0:
+                print(f"Warning: No pharmacophores in system {index}.")
+
+            else:
+                pharm_sample_size = np.random.randint(1, min(self.max_pharms_sampled, len(pharm_idxs)) + 1)
+                pharm_sample = np.random.choice(pharm_idxs, size=pharm_sample_size, replace=False)
+
+                pharm_x = torch.from_numpy(np.stack([self.slice_array('pharm/node/x', i, i+1) for i in pharm_sample], axis=0)).float().squeeze(1)
+                pharm_a = torch.from_numpy(np.stack([self.slice_array('pharm/node/a', i, i+1) for i in pharm_sample], axis=0)).long().squeeze(1)
+                pharm_v = torch.from_numpy(np.stack([self.slice_array('pharm/node/v', i, i+1) for i in pharm_sample], axis=0)).float().squeeze(1)
+
+                # add target pharmacophore data to graph
+                g_node_data['pharm'] =  {
+                    'x_1_true': pharm_x, 
+                    'a_1_true': pharm_a, 
+                    'v_1_true': pharm_v
+                }
 
         g = build_complex_graph(
             node_data=g_node_data, 
@@ -265,6 +274,8 @@ class PharmitDataset(ZarrDataset):
             if ntype == 'lig' and self.use_fake_atoms:
                 mean_fake_atoms = self.fake_atom_p/2 * ntype_node_counts
                 ntype_node_counts = ntype_node_counts + mean_fake_atoms.astype(int)
+            elif ntype == 'pharm':
+                ntype_node_counts = np.round(np.minimum(self.max_pharms_sampled, ntype_node_counts) / 2).astype(int)  # we sample between 1 and max_pharms_sampled pharmacophores, so (1+max_pharms_sampled)/2 pharms in expectation
             node_counts.append(ntype_node_counts)
 
         if per_ntype:

@@ -24,7 +24,14 @@ from omtra.utils import omtra_root
 import yaml
 from rdkit import Chem
 
+from rdkit import RDLogger
 
+# Disable all standard RDKit logs
+RDLogger.DisableLog('rdApp.*')
+
+# Also silence everything below CRITICAL
+lg = RDLogger.logger()
+lg.setLevel(RDLogger.CRITICAL)
 
 @register_eval("validity")
 def validity(
@@ -269,3 +276,10 @@ def pb_valid_pocket(
         metrics['pb_valid_pocket'] = n_pb_valid / len(sampled_systems) 
     
     return metrics
+
+
+@register_eval("pharm_match")
+def check_pharm_match(
+    sampled_systems: List[SampledSystem], params: Dict[str, Any]
+) -> Dict[str, Any]:
+    return compute_pharmacophore_match(sampled_systems, **params)

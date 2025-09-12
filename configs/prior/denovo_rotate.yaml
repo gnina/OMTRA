@@ -1,42 +1,31 @@
-ligand_conformer_condensed:
-  lig_x:
-    type: gaussian
-    params:
-      std: 2.573
-      ot: True
-      permutation: False
 denovo_ligand_condensed:
   lig_x:
     type: gaussian
     params:
       std: 2.573
       ot: True
-rigid_docking_condensed:
-  lig_x:
-    type: gaussian
-    params:
-      std: 2.573
-      ot: True
+      rigid_body: True
       permutation: False
+      translation: True
 fixed_protein_ligand_denovo_condensed:
   lig_x:
     type: gaussian
     params:
       std: 2.573
       ot: True
-flexible_docking_condensed:
-  lig_x:
-    type: gaussian
-    params:
-      std: 2.573
-      ot: True
+      rigid_body: True
       permutation: False
+      translation: True
+
 protein_ligand_denovo_condensed:
   lig_x:
     type: gaussian
     params:
       std: 2.573
       ot: True
+      rigid_body: True
+      permutation: False
+      translation: True
 
 denovo_ligand_from_pharmacophore_condensed:
   lig_x:
@@ -44,12 +33,7 @@ denovo_ligand_from_pharmacophore_condensed:
     params:
       std: 2.573
       ot: True
-
-ligand_conformer_from_pharmacophore_condensed:
-  lig_x:
-    type: gaussian
-    params:
-      std: 2.573
-      ot: True
+      rigid_body: True
       permutation: False
+      translation: True
 

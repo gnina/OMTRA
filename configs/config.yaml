@@ -5,7 +5,9 @@ defaults:
   - trainer: default
   - task_group: protein
   - graph: default
-  - prior: default
+  - prior: 
+    - conformer_indep
+    - denovo_permute
   - callbacks: no_checkpoint
   - wandb_conf: default
   - eval: default
