@@ -776,10 +776,10 @@ def main(args):
                                                           plinder_path=args.plinder_path)
         
         print("Finished sampling. Clearing torch GPU cache...\n")
-        # torch.cuda.synchronize()
-        # gc.collect()
-        # torch.cuda.empty_cache()
-        # torch.cuda.ipc_collect()
+        torch.cuda.synchronize()
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
         if isinstance(sys_info, pd.DataFrame) and not sys_info.empty:
             sys_info.to_csv(f"{samples_dir}/{task_name}_sys_info.csv", index=False)
