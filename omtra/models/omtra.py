@@ -48,6 +48,7 @@ from omtra.priors.sample import sample_priors
 from omtra.eval.register import get_eval
 from omtra.eval.utils import add_task_prefix
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
+import traceback
 
 # from line_profiler import profile
 
@@ -77,6 +78,7 @@ class OMTRA(pl.LightningModule):
         t_alpha: float = 1.8,
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
+        pharm_var: float = 0.0,
 
     ):
         super().__init__()
@@ -98,6 +100,7 @@ class OMTRA(pl.LightningModule):
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
+        self.pharm_var = pharm_var
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -165,7 +168,9 @@ class OMTRA(pl.LightningModule):
 
         self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
 
-        self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0)
+        # TODO: don't hard-code crossdocked inclusion
+        include_crossdocked = 'crossdocked' in self.td_coupling.dataset_space
+        self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0, include_crossdocked=include_crossdocked)
 
         # configure train t distribution 
         if train_t_dist == 'uniform':
@@ -255,7 +260,6 @@ class OMTRA(pl.LightningModule):
         for aux_loss_name, aux_loss_cfg in self.aux_loss_cfg.items():
             aux_loss_class = aux_loss_name_to_class(aux_loss_name)
             self.aux_loss_fn_dict[aux_loss_name] = aux_loss_class(
-                time_scaled_loss=self.time_scaled_loss,
                 **aux_loss_cfg.get('params', {})
             )
 
@@ -350,7 +354,14 @@ class OMTRA(pl.LightningModule):
                 if not config.get("train", False):
                     continue
                 eval_fn = get_eval(eval_name)
-                metrics.update(eval_fn(samples, config.get("params", {})))
+                try:
+                    eval_output = eval_fn(samples, config.get("params", {}))
+                except Exception as e:
+                    print(f"WARNING: error occurred while evaluating {eval_name} for task {task_name}")
+                    traceback.print_exc()
+                    print(f"Full error details for {eval_name}: {str(e)}")
+                    continue
+                metrics.update(eval_output)
         
         if metrics:
             metrics = add_task_prefix(metrics, task_name)
@@ -386,6 +397,10 @@ class OMTRA(pl.LightningModule):
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
             distort_mask = distort_mask & t_mask.unsqueeze(-1)
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
+        
+        # add noise to pharmacophore coordinates
+        if self.pharm_var > 0.0:
+            g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**0.5
 
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
@@ -417,16 +432,15 @@ class OMTRA(pl.LightningModule):
                 target[xt_idxs != n_categories] = -100
             targets[modality.name] = target
 
+        # determine if we need to disable time-scale our losses
+        disable_time_scaled_loss = self.time_scaled_loss and ('protein_identity' not in task_class.groups_present)
+
         # get weights for time-scaled losses
         if self.time_scaled_loss:
-            weights = 1.0 / ((1.0 - t).clamp(min=1e-6)) ** 2    # clamp to avoid division by 0 error
-            weights = torch.clamp(weights, max=100.0)
-
-            time_weights = {}
-            for modality in task_class.modalities_generated:
-                time_weights[modality.name] = weights
+            t_weights = 1.0 / ((1.0 - t).clamp(min=1e-6)) ** 2    # clamp to avoid division by 0 error
+            t_weights = torch.clamp(t_weights, max=100.0)
         else:
-            weights = None
+            t_weights = None
 
         # compute all flow matching losses
         losses = {}
@@ -434,32 +448,43 @@ class OMTRA(pl.LightningModule):
             is_categorical = modality.is_categorical
 
             if self.time_scaled_loss:
-                weight = time_weights[modality.name]
+                mod_weight = t_weights
 
                 if is_categorical:
-                    weight = weight * self.cat_loss_weight
+                    mod_weight = mod_weight * self.cat_loss_weight
 
                 if modality.graph_entity == "edge":
-                    weight = weight[edge_batch_idxs[modality.entity_name]][
+                    mod_weight = mod_weight[edge_batch_idxs[modality.entity_name]][
                         upper_edge_mask[modality.entity_name]
                     ]
                 else:
-                    weight = weight[node_batch_idxs[modality.entity_name]]
-                weight = weight.unsqueeze(-1)
+                    mod_weight = mod_weight[node_batch_idxs[modality.entity_name]]
+                mod_weight = mod_weight.unsqueeze(-1)
 
             elif is_categorical:
-                weight = self.cat_loss_weight
+                mod_weight = self.cat_loss_weight
             else:
-                weight = 1.0
+                mod_weight = 1.0
 
+
+            inp = vf_output[modality.name]
             target = targets[modality.name]
+
+            # skip loss if there are no nodes of this type
             if modality.is_node and g.num_nodes(modality.entity_name) == 0:
                 losses[modality.name] = torch.tensor(0.0, device=g.device)
                 continue
-            losses[modality.name] = (
-                self.loss_fn_dict[modality.name](vf_output[modality.name], target)
-                * weight
-            )
+
+            if disable_time_scaled_loss and modality.is_categorical:
+                mod_loss = fn.cross_entropy(
+                    inp, target, reduction="mean", ignore_index=-100
+                )
+            elif disable_time_scaled_loss and not modality.is_categorical:
+                mod_loss = fn.mse_loss(inp, target, reduction="mean")
+            else:
+                mod_loss = self.loss_fn_dict[modality.name](inp, target)
+
+            losses[modality.name] = mod_loss
             if self.time_scaled_loss:
                 losses[modality.name] = losses[modality.name].mean()
 
@@ -473,7 +498,7 @@ class OMTRA(pl.LightningModule):
                 task_class, 
                 node_batch_idxs,
                 lig_ue_mask,
-                time_weights=weights
+                time_weights=None if disable_time_scaled_loss else t_weights
                 )
             if self.time_scaled_loss:
                 aux_loss = aux_loss.mean()
@@ -844,11 +869,8 @@ class OMTRA(pl.LightningModule):
         last_batch_reps = n_replicates % reps_per_batch
 
         sampled_systems = [[] for _ in range(n_samples)]
-        #sample_names = []
 
         for i in range(n_full_batches):
-            #sample_names += [f"sys_{sys_idx}_rep_{(i*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(reps_per_batch)]
-
             batch_results = self.sample(g_list=g_list,
                                         n_replicates=reps_per_batch,
                                         task_name=task_name,
@@ -870,8 +892,6 @@ class OMTRA(pl.LightningModule):
             
         # last batch
         if last_batch_reps > 0:
-            #sample_names += [f"sys_{sys_idx}_rep_{(n_full_batches*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(last_batch_reps)]
-
             batch_results = self.sample(g_list=g_list,
                                         n_replicates=last_batch_reps,
                                         task_name=task_name,

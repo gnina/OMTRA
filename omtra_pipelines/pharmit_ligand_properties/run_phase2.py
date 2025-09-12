@@ -107,7 +107,7 @@ def worker_initializer(pharmit_path, store_name):
     """ Sets pharmit dataset instance as a global variable """
     global pharmit_dataset
 
-    cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
+    cfg = quick_load.load_cfg(overrides=['task_group=no_protein', 'fake_atom_p=0.0'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
     dataset = datamodule.load_dataset(store_name)
     pharmit_dataset = dataset.datasets['pharmit']
@@ -220,7 +220,7 @@ def run_single(pharmit_path: Path,
     # Load Pharmit dataset (also needed for number of ligands)
     global pharmit_dataset
 
-    cfg = quick_load.load_cfg(overrides=['task_group=no_protein'], pharmit_path=pharmit_path)
+    cfg = quick_load.load_cfg(overrides=['task_group=no_protein', 'fake_atom_p=0.0'], pharmit_path=pharmit_path)
     datamodule = datamodule_from_config(cfg)
     dataset = datamodule.load_dataset(store_name)
     pharmit_dataset = dataset.datasets['pharmit']

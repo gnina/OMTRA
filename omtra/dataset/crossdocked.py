@@ -160,7 +160,7 @@ class CrossdockedDataset(ZarrDataset):
     
     @functools.lru_cache()
     def get_condensed_atom_typer(self):
-        return CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0)
+        return CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0, include_crossdocked=False)
     
     def get_system(
         self, index: int, include_pharmacophore: bool, include_protein: bool, include_extra_feats: bool, condensed_atom_typing: bool
@@ -352,7 +352,6 @@ class CrossdockedDataset(ZarrDataset):
             lig_extra_feats = lig_extra_feats[:, :-1]
 
             cond_a_typer = self.get_condensed_atom_typer()
-
             ligand.atom_cond_a = torch.from_numpy(cond_a_typer.feats_to_cond_a(ligand.atom_types, ligand.atom_charges, lig_extra_feats)).long() 
 
         elif include_extra_feats:

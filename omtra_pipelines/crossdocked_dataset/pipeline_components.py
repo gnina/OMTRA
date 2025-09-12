@@ -679,6 +679,13 @@ class SystemProcessor:
             )
             return None
 
+        #check if ligand_mol has more than 6 atoms
+        if ligand_mol.GetNumAtoms() < 6:
+            logger.warning(
+                f"Skipping due to small ligand size: {ligand_mol.GetNumAtoms()} atoms"
+            )
+            return None
+
         return result
     #process_structure_no_links processes receptor, extracts pockets, saves pockets as PDBs, and creates a list of 
     #systemdata objects to pass to model training
