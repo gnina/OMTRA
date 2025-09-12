@@ -98,9 +98,8 @@ def parse_args():
     )
     p.add_argument(
         "--stochastic_sampling",
-        type=bool,
-        default=False,
-        help="Whether to perform stochastic sampling."
+        action="store_true",
+        help="If set, perform stochastic sampling."
     )
     p.add_argument(
         "--noise_scaler",
