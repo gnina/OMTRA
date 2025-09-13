@@ -6,6 +6,7 @@ The dataset includes internal splits (created by our lab using `.types` files) a
 The fully processed data can be located at: 
 
 **External Splits:** /net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_split
+
 **Internal Splits:** 
 
 ## File Directory
