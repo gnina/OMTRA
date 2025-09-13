@@ -1,5 +1,5 @@
 # Processing the Crossdocked Dataset
-The CrossDocked2020 dataset is a large-scale structure-based machine learning dataset containing 22.5 million poses of ligands cross-docked into 18,450 protein complexes from the Protein Data Bank. This approach provides a more realistic evaluation of model performance by testing on protein structures different from those used in training, better reflecting real-world drug discovery scenarios.
+The CrossDocked2020 dataset is a large-scale structure-based machine learning dataset containing 22.5 million poses of ligands cross-docked into 18,450 protein complexes from the Protein Data Bank.
 
 The dataset includes internal splits (created by our lab using `.types` files) and external splits (alternative partitioning by other researchers via `split_by_name.pt`) for training and validation.
 
