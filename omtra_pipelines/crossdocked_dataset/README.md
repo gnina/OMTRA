@@ -10,7 +10,33 @@ The fully processed data can be located at:
 
 ## File Directory
 
+### Processing Pipeline Overview
 
+The pipeline uses different entry points based on the split type: `run_crossdocked_processing.py` for internal splits or `run_crossdocked_processing_external_splits.py` for external splits. Both scripts instantiate the `CrossdockedNoLinksZarrConverter` class from `crossdocked_unlink_zarr.py`, which in turn uses the `SystemProcessor` class from `pipeline_components.py` for molecular feature extraction.
+
+### Core Processing Files
+
+- **`crossdocked_unlink_zarr.py`**: Handles batch creation from receptor and ligand file paths, coordinates batch processing, and manages writing processed data to Zarr format
+- **`pipeline_components.py`**: Core processing module that extracts and calculates molecular features from ligand and receptor structures for storage
+- **`run_crossdocked_processing.py`**: Main script for processing internal splits of the CrossDocked dataset using `.types` files
+- **`run_crossdocked_processing_external_splits.py`**: Main script for processing external splits using the `split_by_name.pt` file
+
+### Utilities and Testing
+
+- **`test_crossdocked.py`**: Testing script for inspecting and validating processed dataset outputs
+- **`README.md`**: Documentation for the dataset processing pipeline
+
+### External Splits
+
+- **`crossdocked_external_splits/`**: Directory containing external split definitions and related files
+  - **`split_by_name.pt`**: PyTorch file defining custom train/test splits created by external researchers
+
+### Processing Workflow
+
+1. **Script Entry**: Choose `run_crossdocked_processing.py` (internal) or `run_crossdocked_processing_external_splits.py` (external)
+2. **Data Reading**: `CrossdockedNoLinksZarrConverter` reads file paths and creates processing batches
+3. **Feature Extraction**: `SystemProcessor` processes molecular structures and calculates features
+4. **Batch Processing & Storage**: `CrossdockedNoLinksZarrConverter` coordinates parallel batch processing and writes to Zarr format
 
 ## External Split Processing
 
