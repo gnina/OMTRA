@@ -104,6 +104,12 @@ def parse_args():
         help="Path to the Plinder dataset (optional)"
     )
     p.add_argument(
+        "--crossdocked_path",
+        type=str,
+        default=None,
+        help="Path to the CrossDocked dataset (optional)"
+    )
+    p.add_argument(
         "--stochastic_sampling",
         action="store_true",
         help="If set, perform stochastic sampling."
@@ -268,6 +274,8 @@ def main(args):
         train_cfg.pharmit_path = args.pharmit_path
     if args.plinder_path:
         train_cfg.plinder_path = args.plinder_path
+    if args.crossdocked_path:
+        train_cfg.crossdocked_path = args.crossdocked_path
 
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
