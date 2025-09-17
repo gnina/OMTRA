@@ -171,7 +171,8 @@ def generate_commands(
                 "--pharmit_path", str(args.pharmit_path),
                 "--plinder_path", str(args.plinder_path),
                 "--crossdocked_path", str(args.crossdocked_path),
-                "--dataset_start_idx", str(dataset_start_idx)
+                "--dataset_start_idx", str(dataset_start_idx),
+                "--use_gt_n_lig_atoms",
             ]
             
             commands.append(" ".join(cmd_parts))
