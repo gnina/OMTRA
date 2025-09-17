@@ -592,6 +592,8 @@ class OMTRA(pl.LightningModule):
         stochastic_sampling: bool = False,
         noise_scaler: float = 1.0,
         eps: float = 0.01,
+        use_gt_n_lig_atoms: bool = False,
+        n_lig_atom_margin: float = 0.15
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
@@ -650,17 +652,29 @@ class OMTRA(pl.LightningModule):
 
         # TODO: sample number of ligand atoms
         add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"])
+        
         if protein_present and add_ligand:
             n_prot_atoms = torch.tensor([g.num_nodes("prot_atom") for g in g_flat])
             if "pharmacophore" in groups_fixed:
                 n_pharms = torch.tensor([g.num_nodes("pharm") for g in g_flat])
             else:
                 n_pharms = None
-            n_lig_atoms = sample_n_lig_atoms_plinder(
-                n_prot_atoms=n_prot_atoms, n_pharms=n_pharms
-            )
-            # if protein is present, sample ligand atoms from p(n_ligand_atoms|n_protein_atoms,n_pharm_atoms)
-            # if pharm atoms not present, we marginalize over n_pharm_atoms - this distribution from plinder dataset
+            
+            # use ground truth number of lig atoms
+            if use_gt_n_lig_atoms:
+                n_lig_atoms = torch.tensor([g.num_nodes("lig") +
+                                            torch.randint(-max(1, int(n_lig_atom_margin * g.num_nodes("lig"))),     # random margin within +/- n_lig_atom_margin % of the ground truth number of ligand atoms
+                                                          max(1, int(n_lig_atom_margin * g.num_nodes("lig"))) + 1,
+                                                          (1,)).item()
+                                            for g in g_flat])
+            
+            else:
+                n_lig_atoms = sample_n_lig_atoms_plinder(
+                    n_prot_atoms=n_prot_atoms, n_pharms=n_pharms
+                )
+
+        # if protein is present, sample ligand atoms from p(n_ligand_atoms|n_protein_atoms,n_pharm_atoms)
+        # if pharm atoms not present, we marginalize over n_pharm_atoms - this distribution from plinder dataset
         elif not protein_present and add_ligand:
             if "pharmacophore" in groups_fixed:
                 n_pharms = torch.tensor([g.num_nodes("pharm") for g in g_flat])
@@ -669,7 +683,15 @@ class OMTRA(pl.LightningModule):
                 n_pharms = None
                 n_samples = len(g_flat)
 
-            if unconditional_n_atoms_dist == "plinder":
+            # use ground truth number of lig atoms
+            if use_gt_n_lig_atoms:
+                n_lig_atoms = torch.tensor([g.num_nodes("lig") +
+                                            torch.randint(-max(1, int(n_lig_atom_margin * g.num_nodes("lig"))),     # random margin within +/- n_lig_atom_margin % of the ground truth number of ligand atoms
+                                                          max(1, int(n_lig_atom_margin * g.num_nodes("lig"))) + 1,
+                                                          (1,)).item()
+                                            for g in g_flat])
+
+            elif unconditional_n_atoms_dist == "plinder":
                 n_lig_atoms = sample_n_lig_atoms_plinder(
                     n_pharms=n_pharms, n_samples=n_samples
                 )
@@ -684,7 +706,7 @@ class OMTRA(pl.LightningModule):
 
         if add_ligand:
 
-            if self.fake_atom_p > 0.0:
+            if (self.fake_atom_p > 0.0) and not use_gt_n_lig_atoms: # don't add fake atoms 
                 n_real_atoms = n_lig_atoms
                 max_num_fake_atoms = torch.ceil(n_real_atoms*self.fake_atom_p).float()
                 frac = torch.rand_like(max_num_fake_atoms)
@@ -860,6 +882,8 @@ class OMTRA(pl.LightningModule):
         stochastic_sampling: bool = False,
         noise_scaler: float = 1.0,
         eps: float = 0.01,
+        use_gt_n_lig_atoms: bool = False,
+        n_lig_atom_margin: float = 0.15
     ) -> List[SampledSystem]:
         
         n_samples = len(g_list) if g_list is not None else 1
@@ -883,6 +907,9 @@ class OMTRA(pl.LightningModule):
                                         time_spacing=time_spacing,
                                         stochastic_sampling=stochastic_sampling,
                                         noise_scaler=noise_scaler,
+                                        eps=eps,
+                                        use_gt_n_lig_atoms=use_gt_n_lig_atoms,
+                                        n_lig_atom_margin=n_lig_atom_margin,
                                         )
             # re-order samples
             for i in range(n_samples):

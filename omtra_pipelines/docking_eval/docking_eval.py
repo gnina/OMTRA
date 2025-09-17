@@ -13,15 +13,19 @@ import multiprocessing as mp
 import tempfile
 from collections import defaultdict
 from scipy.spatial.distance import cdist
+from natsort import natsorted
 
 from rdkit import Chem
 import posebusters as pb
 from posebusters.modules.rmsd import check_rmsd
 from posecheck import PoseCheck
+from posecheck.utils.chem import remove_radicals
+
 
 from omtra.utils import omtra_root
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
+from omtra.load.quick import datamodule_from_config
 import omtra.load.quick as quick_load
 from omtra.eval.system import SampledSystem, write_arrays_to_pdb, write_mols_to_sdf
 from routines.sample import write_ground_truth, generate_sample_names, group_samples_by_system 
@@ -53,12 +57,15 @@ def parse_args():
     sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
     sampling.add_argument("--noise_scaler", type=float, default=1.0, help="Noise scaling param for stochastic sampling.")
     sampling.add_argument("--eps", type=float, default=0.01, help="g(t) param for stochastic sampling.")
+    sampling.add_argument("--use_gt_n_lig_atoms", action="store_true", help="When enabled, use the number of ground truth ligand atoms for de novo design.")
+    sampling.add_argument("--n_lig_atom_margin", type=float, default=0.15, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
 
     sampling.add_argument("--max_batch_size", type=int, default=500, help='Maximum number of systems to sample per batch.')
     sampling.add_argument("--dataset", type=str, default="plinder", help='Dataset.')
-    sampling.add_argument("--split", type=str, default="val", help='Data split (i.e., train, val).')
+    sampling.add_argument("--split", type=str, default="test", help='Data split (i.e., train, val).')
     sampling.add_argument("--dataset_start_idx", type=int, default=0, help="Index in the dataset to start sampling from.")
     sampling.add_argument("--plinder_path", type=str, default=None, help="Path to the Plinder dataset (optional).")
+    sampling.add_argument("--crossdocked_path", type=str, default=None, help="Path to the Crossdocked dataset (optional).")
 
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
@@ -176,7 +183,7 @@ def gnina(lig_file, prot_file, env):
     return results
 
 
-def posecheck(ligs, prot_file, true_lig=None, interaction_recovery=False):
+def posecheck(ligs, prot_file, true_lig=None, true_prot_file=None, interaction_recovery=False):
     
     # initialize the PoseCheck object
     pc = PoseCheck()
@@ -207,7 +214,7 @@ def posecheck(ligs, prot_file, true_lig=None, interaction_recovery=False):
         fingerprint_interaction_types = ['HBAcceptor', 'HBDonor', 'PiStacking', 'XBDonor', 'CationPi', 'PiCation', 'Cationic', 'Anionic']
 
         pc = PoseCheck()
-        pc.load_protein_from_pdb(prot_file)
+        pc.load_protein_from_pdb(true_prot_file)
         pc.load_ligands_from_mols([true_lig])
         true_interactions = pc.calculate_interactions()
         cols = [col for col in true_interactions.columns if col[2] in fingerprint_interaction_types]
@@ -298,6 +305,19 @@ def run_with_timeout(func, *args, timeout, **kwargs):
     return result
 
 
+def repair_and_sanitize(mol, i):
+    for atom in mol.GetAtoms():
+        atom.SetNumRadicalElectrons(0)
+        atom.SetNoImplicit(False)
+    try:
+        Chem.SanitizeMol(mol)
+        Chem.Kekulize(mol, clearAromaticFlags=False)
+        mol = remove_radicals(mol)
+    except Exception as e:
+        print(f"An error occurred during sanitization of ligand {i}: {e}")
+        return None
+    return mol
+
 def compute_metrics(system_pairs: List[SampledSystem], 
                     task: Task, 
                     metrics_to_run: Dict[str, bool], 
@@ -333,14 +353,13 @@ def compute_metrics(system_pairs: List[SampledSystem],
             valid_gen_lig_ids = []
 
             for i, lig in enumerate(data['gen_ligs']):
-                try:
-                    Chem.SanitizeMol(lig)
+                lig = repair_and_sanitize(lig, i)
+                if lig is not None:
                     valid_gen_ligs.append(lig)
                     valid_gen_lig_ids.append(data['gen_ligs_ids'][i])
-                except Exception as e:
-                    print(f"An error encountered during sanitization of generated ligand {i}: {e}")
+            
 
-            # Sanitize ground truth ligand and keep track
+            # Sanitize ground truth ligand
             true_lig = data['true_lig']
             try:
                 Chem.SanitizeMol(true_lig)
@@ -372,7 +391,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
                                                        timeout=timeout,
                                                        gen_ligs=true_lig,
                                                        true_lig=None,
-                                                       prot_file=data['gen_prot_file'],
+                                                       prot_file=data['true_prot_file'],
                                                        task=task)
                     
                     if pb_true_results is not None:
@@ -388,6 +407,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
                                                    ligs=valid_gen_ligs,
                                                    prot_file=data['gen_prot_file'],
                                                    true_lig=true_lig,
+                                                   true_prot_file=data['true_prot_file'],
                                                    interaction_recovery=metrics_to_run['interaction_recovery'])
                 
                 if posechk_results is not None:
@@ -470,7 +490,10 @@ def sample_system(ckpt_path: Path,
                   split: str,
                   max_batch_size: int,
                   dataset_name: str,
-                  plinder_path: Path = None):
+                  plinder_path: Path = None,
+                  crossdocked_path: Path = None,
+                  **kwargs
+                  ):
     
     if not ckpt_path.exists():
         raise FileNotFoundError(f"{ckpt_path} not found")
@@ -483,6 +506,8 @@ def sample_system(ckpt_path: Path,
     train_cfg.num_workers = 0
     if plinder_path:
         train_cfg.plinder_path = plinder_path
+    if crossdocked_path:
+        train_cfg.crossdocked_path = crossdocked_path
 
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -506,14 +531,28 @@ def sample_system(ckpt_path: Path,
         sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'sys_id']]
 
     elif dataset == 'crossdocked':
-        dataset = multitask_dataset.datasets['crossdocked']
+
+        # TODO: remove once we have a model trained on crossdocked for protein-conditioned tasks 
+        cfg = quick_load.load_cfg(overrides=['task_group=fixed_crossdocked'], crossdocked_path=crossdocked_path)
+        crossdocked_datamodule = datamodule_from_config(cfg)    
+        dataset = crossdocked_datamodule.load_dataset(split).datasets['crossdocked']
+                               
+        #dataset = multitask_dataset.datasets['crossdocked']
         dataset_name = 'crossdocked'
 
         # system info
         sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
-        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
-        sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb', 'sys_id']]
-        dataset_name = 'crossdocked'
+        sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb']]
+        sys_info['lig_id'] = sys_info['lig_sdf'].apply(lambda x: Path(Path(x).stem).stem)
+
+        # sort systems
+        sorted_idx = natsorted(sys_info.index, key=lambda i: sys_info.loc[i, "lig_id"])
+        sys_info = sys_info.iloc[sorted_idx].reset_index(drop=True)
+        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in range(sys_info.shape[0])]
+        
+        # sort dataset indices to match sys_info
+        dataset_idxs = list(dataset_idxs)
+        dataset_idxs = [dataset_idxs[i] for i in sorted_idx]
 
     elif dataset == 'pharmit':
         raise ValueError(f"Pharmit dataset does not include proteins!")
@@ -538,7 +577,10 @@ def sample_system(ckpt_path: Path,
                                               device=device,
                                               n_timesteps=n_timesteps,
                                               visualize=False,
-                                              coms=coms)
+                                              coms=coms,
+                                              **kwargs,
+                                              )
+    
 
     return g_list, sampled_systems, sys_info
 
@@ -743,8 +785,9 @@ def system_pairs_from_path(samples_dir: Path,
             pair["gen_prot_id"] = true_prot_id
 
             # true protein
+            # TODO: change back for non-reference analysis
             pair["true_prot_file"] = true_prot_file
-            pair["true_prot_id"] = true_prot_id
+            pair["true_prot_id"] =  true_prot_id
 
             # true pharmacophores
             if 'pharmacophore' in task.groups_present:
@@ -760,11 +803,11 @@ def main(args):
     task_name: str = args.task
     task: Task = task_name_to_class(task_name)
 
-    if task.unconditional:
-        raise ValueError("This script is for docking evaluation, a conditional task.")
+    if task.unconditional or ('protein_identity' not in task.groups_present):
+        raise ValueError("This script is for evaluating models on protein-conditioned tasks.")
 
     if args.max_batch_size < args.n_samples:
-        raise ValueError("Maximum number of systems to sample per batch must be greater than the number of graphs")
+        raise ValueError("Maximum number of systems to sample per batch must be greater than the number of graphs.")
        
     output_dir = args.output_dir or Path(omtra_root()) / 'omtra_pipelines' / 'docking_eval' / 'outputs' / task_name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -772,6 +815,13 @@ def main(args):
     if args.samples_dir is None:
         samples_dir = output_dir / 'samples' 
         samples_dir.mkdir(parents=True, exist_ok=True)
+
+        # Additional keyword arguments for special types of sampling
+        kwargs = {'stochastic_sampling': args.stochastic_sampling,
+                  'noise_scaler': args.noise_scaler,
+                  'eps': args.eps,
+                  'use_gt_n_lig_atoms': args.use_gt_n_lig_atoms,
+                  'n_lig_atom_margin': args.n_lig_atom_margin}
 
         # Get samples from checkpoint
         g_list, sampled_systems, sys_info = sample_system(ckpt_path=args.ckpt_path,
@@ -784,7 +834,9 @@ def main(args):
                                                           split=args.split,
                                                           max_batch_size=args.max_batch_size,
                                                           dataset_name=args.dataset,
-                                                          plinder_path=args.plinder_path)
+                                                          plinder_path=args.plinder_path,
+                                                          crossdocked_path=args.crossdocked_path,
+                                                          **kwargs)
         
         print("Finished sampling. Clearing torch GPU cache...\n")
         torch.cuda.synchronize()

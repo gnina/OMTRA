@@ -91,7 +91,6 @@ def plinder_n_nodes_dist_smoothed(sigma=(3.0, 3.0, 3.0), mode='constant'):
     return raw_output
 
 def sample_n_lig_atoms_plinder(n_prot_atoms: torch.Tensor = None, n_pharms: torch.Tensor = None, n_samples: int = None) -> torch.Tensor:
-
     joint_dist = plinder_n_nodes_dist_smoothed()
     var_order = joint_dist['var_order']
     supports = joint_dist['supports']
