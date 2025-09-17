@@ -58,6 +58,13 @@ def parse_args():
         default = Path(omtra_root()) / 'data' / 'pharmit',
         help='Path to pharmit dataset'
     )
+    parser.add_argument(
+        '--crossdocked_path',
+        type=Path,
+        default=Path(omtra_root()) / 'data' / 'crossdocked',
+        help='Path to crossdocked dataset'
+    )
+    parser.add_argument('--dataset_start_idx', type=int, default=0, help='Index to start sampling from')
     
     return parser.parse_args()
 
@@ -144,6 +151,7 @@ def generate_commands(
         n_samples = item.get('n_samples', args.default_n_samples)
         n_replicates = item.get('n_replicates', args.default_n_replicates)
         dataset = item.get('dataset', args.default_dataset)
+        dataset_start_idx = item.get('dataset_start_idx', args.dataset_start_idx)
         
         try:
             checkpoint_path = find_best_checkpoint(model_dir)
@@ -161,7 +169,9 @@ def generate_commands(
                 "--n_samples", str(n_samples),
                 "--n_replicates", str(n_replicates),
                 "--pharmit_path", str(args.pharmit_path),
-                "--plinder_path", str(args.plinder_path)
+                "--plinder_path", str(args.plinder_path),
+                "--crossdocked_path", str(args.crossdocked_path),
+                "--dataset_start_idx", str(dataset_start_idx)
             ]
             
             commands.append(" ".join(cmd_parts))
