@@ -820,8 +820,7 @@ def main(args):
         kwargs = {'stochastic_sampling': args.stochastic_sampling,
                   'noise_scaler': args.noise_scaler,
                   'eps': args.eps,
-                  'use_gt_n_lig_atoms': args.use_gt_n_lig_atoms,
-                  'n_lig_atom_margin': args.n_lig_atom_margin}
+                  'n_lig_atom_margin': args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None}
 
         # Get samples from checkpoint
         g_list, sampled_systems, sys_info = sample_system(ckpt_path=args.ckpt_path,

@@ -654,6 +654,22 @@ class OMTRA(pl.LightningModule):
 
         # TODO: sample number of ligand atoms
         add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"])
+
+        # find number of fake atoms added to each system by the dataset class
+        
+        if add_ligand and use_gt_n_lig_atoms and self.fake_atom_p > 0.0:
+            n_fake_atoms_gt = []
+            for g in g_flat:
+                if 'cond_a_1_true' not in g.nodes['lig'].data:
+                    raise NotImplementedError('expected there to be a ground-truth ligand, and expected condensed atom types to be used')
+
+                n_fake_atoms_gt.append(
+                    (g.nodes['lig'].data['cond_a_1_true'] == self.cond_a_typer.fake_atom_idx).sum().item()
+                )
+            n_fake_atoms_gt = torch.tensor(n_fake_atoms_gt)
+        else:
+            n_fake_atoms_gt = torch.zeros(len(g_flat), dtype=torch.long)
+
         
         if protein_present and add_ligand:
             n_prot_atoms = torch.tensor([g.num_nodes("prot_atom") for g in g_flat])
@@ -664,11 +680,18 @@ class OMTRA(pl.LightningModule):
             
             # use ground truth number of lig atoms
             if use_gt_n_lig_atoms:
-                n_lig_atoms = torch.tensor([g.num_nodes("lig") +
-                                            torch.randint(-max(1, int(n_lig_atom_margin * g.num_nodes("lig"))),     # random margin within +/- n_lig_atom_margin % of the ground truth number of ligand atoms
-                                                          max(1, int(n_lig_atom_margin * g.num_nodes("lig"))) + 1,
-                                                          (1,)).item()
-                                            for g in g_flat])
+
+                base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
+                base_n_atoms = base_n_atoms - n_fake_atoms_gt
+                max_margins = torch.clamp(base_n_atoms * n_lig_atom_margin, min=0).int()
+                margins = torch.stack([
+                    torch.randint(0, int(m.item()) + 1, (1,))
+                    for m in max_margins
+                    ]).squeeze()
+                offset_sign = torch.randint(0, 2, (len(g_flat),)) * 2 - 1
+                random_offsets = margins * offset_sign
+                n_lig_atoms = base_n_atoms + random_offsets
+                n_lig_atoms = torch.clamp(n_lig_atoms, min=4)
             
             else:
                 n_lig_atoms = sample_n_lig_atoms_plinder(
@@ -687,11 +710,14 @@ class OMTRA(pl.LightningModule):
 
             # use ground truth number of lig atoms
             if use_gt_n_lig_atoms:
-                n_lig_atoms = torch.tensor([g.num_nodes("lig") +
-                                            torch.randint(-max(1, int(n_lig_atom_margin * g.num_nodes("lig"))),     # random margin within +/- n_lig_atom_margin % of the ground truth number of ligand atoms
-                                                          max(1, int(n_lig_atom_margin * g.num_nodes("lig"))) + 1,
-                                                          (1,)).item()
-                                            for g in g_flat])
+                base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
+                base_n_atoms = base_n_atoms - n_fake_atoms_gt
+                margins = torch.clamp(base_n_atoms * n_lig_atom_margin, min=1).int()
+                random_offsets = torch.randint(-margins.max(), margins.max() + 1, (len(g_flat),))
+                # Clamp the offsets to respect per-sample margins
+                random_offsets = torch.clamp(random_offsets, -margins, margins)
+                n_lig_atoms = base_n_atoms + random_offsets
+                n_lig_atoms = torch.clamp(n_lig_atoms, min=4)
 
             elif unconditional_n_atoms_dist == "plinder":
                 n_lig_atoms = sample_n_lig_atoms_plinder(
@@ -884,8 +910,7 @@ class OMTRA(pl.LightningModule):
         stochastic_sampling: bool = False,
         noise_scaler: float = 1.0,
         eps: float = 0.01,
-        use_gt_n_lig_atoms: bool = False,
-        n_lig_atom_margin: float = 0.15
+        n_lig_atom_margin: Union[float, None] = None,
     ) -> List[SampledSystem]:
         
         n_samples = len(g_list) if g_list is not None else 1
@@ -910,7 +935,6 @@ class OMTRA(pl.LightningModule):
                                         stochastic_sampling=stochastic_sampling,
                                         noise_scaler=noise_scaler,
                                         eps=eps,
-                                        use_gt_n_lig_atoms=use_gt_n_lig_atoms,
                                         n_lig_atom_margin=n_lig_atom_margin,
                                         )
             # re-order samples
@@ -934,6 +958,7 @@ class OMTRA(pl.LightningModule):
                                         stochastic_sampling=stochastic_sampling,
                                         noise_scaler=noise_scaler,
                                         eps=eps,
+                                        n_lig_atom_margin=n_lig_atom_margin,
                                         )
 
             for i in range(n_samples):

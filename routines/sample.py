@@ -126,11 +126,12 @@ def parse_args():
         default=0.01,
         help="Scaling factor for noise (stochasticity)"
     )
+    p.add_argument("--use_gt_n_lig_atoms", action="store_true", help="When enabled, use the number of ground truth ligand atoms for de novo design.")
     p.add_argument(
         '--n_lig_atom_margin',
         type=float,
-        default=None,
-        help='If set, number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand'
+        default=15,
+        help='number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set (default: 0.15, i.e. +/- 15%)'
     )
     p.add_argument('--split', type=str, default='val', help='Which data split to use')
 
@@ -333,7 +334,7 @@ def main(args):
         stochastic_sampling=args.stochastic_sampling,
         noise_scaler=args.noise_scaler, # for stochastic sampling 
         eps=args.eps,
-        n_lig_atom_margin=args.n_lig_atom_margin
+        n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None
     )
 
     if args.output_dir is None:
