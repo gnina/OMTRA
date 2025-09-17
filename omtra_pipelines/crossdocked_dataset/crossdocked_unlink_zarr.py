@@ -28,11 +28,16 @@ from omtra.data.plinder import (
 from omtra_pipelines.crossdocked_dataset.pipeline_components import SystemProcessor
 from omtra.constants import lig_atom_type_map, npnde_atom_type_map
 from tqdm import tqdm
+from omtra.utils import omtra_root
+import numpy as np
+import pickle
+import torch
 
 logger = setup_logger(
     __name__,
 )
 logging.getLogger().setLevel(logging.CRITICAL)
+#crossdocked_invalid_tuples = [(6, 0, 0, 0, 7, 0, 1)] #we throw out systems with these tuples
 class CrossdockedNoLinksZarrConverter:
     def __init__(
         self,
@@ -536,8 +541,10 @@ class CrossdockedNoLinksZarrConverter:
                 
                 result = processor.process_system(save_pockets=False)
                 if result:
-                    sysdata = result["systems_list"]
-                    system_data_list.append(sysdata)
+                    # Check for invalid tuples in extra ligand features (only append if no invalid tuples)
+                    if self.invalid_tuple_check(result) == False: #means there isnt an invalid tuple
+                        sysdata = result["systems_list"]
+                        system_data_list.append(sysdata)
             except Exception as e:
                 logger.critical(f"Error processing system {rec_path}, {lig_path}: {e}")
                 logger.critical(traceback.format_exc())
@@ -797,3 +804,48 @@ class CrossdockedNoLinksZarrConverter:
             self.write_queue()
 
         progressBar.close()
+    
+    def invalid_tuple_check(self, result: Dict[str, Any]) -> bool:
+        #Get all valid tuples from pharmit condensed atom types and plinder condensed atom types
+        cond_a_path = omtra_root() + '/omtra/constants/pharmit_condensed_atom_types.pkl'
+
+        with open(cond_a_path, 'rb') as f:
+            cond_a_counts = pickle.load(f)    
+
+        # convert list of unique tuples into a numpy array, cond_to_uncond
+        cond_a_list = list(cond_a_counts.keys())
+        cond_to_uncond = np.array(cond_a_list, dtype=np.int64)  # array of shape (n_types, n_feats)
+
+        # load tuple counts for Plinder
+        plinder_cond_a_path = omtra_root() + '/omtra/constants/plinder_condensed_atom_types.pkl'
+        with open(plinder_cond_a_path, 'rb') as f:
+            plinder_cond_a_counts = pickle.load(f)    
+
+        # unpack unique tuples from each version of the plinder dataset
+        plinder_uncond_tuples = []
+        for plinder_version_cond_a in plinder_cond_a_counts.values():
+            plinder_uncond_tuples.append(np.array(list(plinder_version_cond_a.keys()), dtype=np.int64))
+
+        # Concatenate arrays and find unique atom uncondensed feature tuples
+        all_tuples = np.vstack([cond_to_uncond] + plinder_uncond_tuples)
+
+        # Convert all_tuples to a set of tuples for efficient lookup
+        valid_tuples_set = set(map(tuple, all_tuples))
+ 
+        # Check if the ligand has any of the invalid tuples
+        ligand_data = result['systems_list'].ligand
+
+        atom_feature_tuples = list(zip(
+            ligand_data.atom_types,
+            ligand_data.atom_charges, 
+            ligand_data.atom_impl_H,
+            ligand_data.atom_aro,
+            ligand_data.atom_hyb,
+            ligand_data.atom_ring,
+            ligand_data.atom_chiral
+        ))
+        for ligand_tuple in atom_feature_tuples:
+            if ligand_tuple not in valid_tuples_set:
+                logger.warning(f"Skipping system {result['systems_list'].system_id} due to invalid ligand tuple: {ligand_tuple}")
+                return True #invalid tuple found
+        return False #no invalid tuple found

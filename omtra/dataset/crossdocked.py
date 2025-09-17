@@ -160,7 +160,7 @@ class CrossdockedDataset(ZarrDataset):
     
     @functools.lru_cache()
     def get_condensed_atom_typer(self):
-        return CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0, include_crossdocked=False)
+        return CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0, include_crossdocked=True)
     
     def get_system(
         self, index: int, include_pharmacophore: bool, include_protein: bool, include_extra_feats: bool, condensed_atom_typing: bool

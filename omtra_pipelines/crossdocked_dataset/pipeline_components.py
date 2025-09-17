@@ -399,7 +399,7 @@ class SystemProcessor:
         self, ligand_mol: Chem.rdchem.Mol, receptor_array: Chem.rdchem.Mol, ligand_path: str # ligand_mol is an rdkit mol
     ) -> Tuple[LigandData, PharmacophoreData]: #output is a LigandData object
         logger.info("Processing ligand to tensor format")
-        
+
         (xace_mols, failed_idxs, _, _) = ( #got rid of failure counts ad tcv_counts as we have 1 ligand
             self.ligand_tensorizer.featurize_molecules([ligand_mol]) #wrap ligand_mol in list for this function
         )
@@ -411,7 +411,7 @@ class SystemProcessor:
         if not receptor_mol:
             receptor_mol = Chem.MolFromPDBFile(self.receptor_path, sanitize=False)
 
-        P, X, V, I = get_pharmacophores(mol=ligand_mol, rec=receptor_mol)
+        P, X, V, I = get_pharmacophores(mol=xace_mols[0].rdkit_mol, rec=receptor_mol) #shall i change this line?
         if not np.isfinite(V).all():
             logger.warning(
                 f"Non-finite pharmacophore vectors found in ligand"
@@ -435,12 +435,10 @@ class SystemProcessor:
         )
         logger.info("Extracted pharmacophore data")
         #Calculate extra ligand features
-        extra_lig_features = ligand_properties(ligand_mol)
+        extra_lig_features = ligand_properties(xace_mols[0].rdkit_mol)
 
-        lig_fragments = fragment_molecule(ligand_mol)
-
-        logger.info("Extracted extra ligand features")
-
+        lig_fragments = fragment_molecule(xace_mols[0].rdkit_mol)
+        
         ligand_data = LigandData(
                 sdf=ligand_path,
                 ccd=None, #not defining this
