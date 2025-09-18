@@ -1005,16 +1005,17 @@ class PlinderDataset(ZarrDataset):
             graph_config=self.graph_config,
         )
 
-        # standardize residue ids (ensure all residue ids start at 0 across chains)
-        # node_data contains chain_ds, and prot_res_ids
-        prot_res_ids = node_data["prot_atom"]["res_id"] #starting indices 
-        prot_chain_ids = node_data["prot_atom"]["chain_id"] # protein chain ids
-        residue_idxs = self.standardize_residue_ids(prot_res_ids, prot_chain_ids)
-        # create protein position embeddings
-        protein_position_encodings = residue_sinusoidal_encoding(residue_idxs, self.res_id_embed_dim)
-        
-        # Add the position embeddings to the graph's protein atom nodes
-        g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
+        if include_protein:
+            # standardize residue ids (ensure all residue ids start at 0 across chains)
+            # node_data contains chain_ds, and prot_res_ids
+            prot_res_ids = node_data["prot_atom"]["res_id"] #starting indices 
+            prot_chain_ids = node_data["prot_atom"]["chain_id"] # protein chain ids
+            residue_idxs = self.standardize_residue_ids(prot_res_ids, prot_chain_ids)
+            # create protein position embeddings
+            protein_position_encodings = residue_sinusoidal_encoding(residue_idxs, self.res_id_embed_dim)
+            
+            # Add the position embeddings to the graph's protein atom nodes
+            g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
 
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)
