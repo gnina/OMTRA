@@ -478,7 +478,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
                                                           env=env)
                     
                     if gnina_true_results is not None:
-                        flat_row = {k: v[""] for k, v in gnina_true_results.items()}
+                        flat_row = {k: v[true_lig.GetProp('_Name')] for k, v in gnina_true_results.items()}
                         gnina_true_results = pd.DataFrame([flat_row]*len(all_indices), index=all_indices)
                         gnina_true_results.columns = [f"{col}_true" for col in gnina_true_results.columns]
                         metrics.loc[all_indices, gnina_true_results.columns] = gnina_true_results
