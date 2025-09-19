@@ -26,7 +26,7 @@ if __name__ == '__main__':
         print(f"Creating Zarr array for Plinder version '{version}'")
 
         store_path = args.plinder_path+'/'+version+'/'+args.store_name+'.zarr'
-        root = zarr.open(store_path, mode='a')
+        root = zarr.open(store_path, mode='r+')
 
         lig_node_group = root['ligand']
         n_atoms = lig_node_group['coords'].shape[0]

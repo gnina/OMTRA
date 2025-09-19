@@ -108,7 +108,7 @@ def worker_initializer(plinder_path, version, store_name):
     """ Sets plinder dataset instance as a global variable """
     global plinder_dataset
 
-    cfg = quick_load.load_cfg(overrides=['task_group=protein'], plinder_path=plinder_path)
+    cfg = quick_load.load_cfg(overrides=['task_group=protein', 'fake_atom_p=0.0'], plinder_path=plinder_path)
     datamodule = datamodule_from_config(cfg)
     dataset = datamodule.load_dataset(store_name)
     plinder_dataset = dataset.datasets['plinder'][version]
@@ -168,7 +168,7 @@ def run_parallel(plinder_path: Path,
         max_pending = n_cpus * 2 
 
     # Load Plinder dataset 
-    cfg = quick_load.load_cfg(overrides=['task_group=protein'], plinder_path=plinder_path)
+    cfg = quick_load.load_cfg(overrides=['task_group=protein', 'fake_atom_p=0.0'], plinder_path=plinder_path)
     datamodule = datamodule_from_config(cfg)
     dataset = datamodule.load_dataset(store_name)
     plinder_dataset = dataset.datasets['plinder'][version]
@@ -229,7 +229,7 @@ def run_single(plinder_path: Path,
     # Load Plinder dataset
     global plinder_dataset
 
-    cfg = quick_load.load_cfg(overrides=['task_group=protein'], plinder_path=plinder_path)
+    cfg = quick_load.load_cfg(overrides=['task_group=protein', 'fake_atom_p=0.0'], plinder_path=plinder_path)
     datamodule = datamodule_from_config(cfg)
     dataset = datamodule.load_dataset(store_name)
     plinder_dataset = dataset.datasets['plinder'][version]

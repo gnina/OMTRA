@@ -7,6 +7,7 @@ from rdkit.Chem import BRICS
 
 from omtra.tasks.register import task_name_to_class
 from omtra.eval.system import SampledSystem
+from omtra.tasks.tasks import Task
 
 
 def ligand_properties(mol: Chem.Mol) -> np.ndarray:
@@ -102,8 +103,11 @@ def move_feats_to_t1(task_name: str, g: dgl.DGLHeteroGraph, t: str = '0'):
 def dgl_to_rdkit(g):
     """ Converts one DGL molecule to RDKit ligand """
 
-    g = move_feats_to_t1('denovo_ligand', g, '1_true')
-    rdkit_ligand = SampledSystem(g).get_rdkit_ligand()
+    task_name: str = 'denovo_ligand'
+    task: Task = task_name_to_class(task_name)
+
+    g = move_feats_to_t1(task_name, g, '1_true')
+    rdkit_ligand = SampledSystem(g, task=task).get_rdkit_ligand()
     return rdkit_ligand
 
 
