@@ -676,6 +676,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
             lig.SetProp("_Name", f"gen_ligands_{i}")
 
         true_lig = replicates[0].get_gt_ligand(g=g_list[sys_id].to('cpu')) 
+        true_lig.SetProp("_Name", "ground_truth")
         true_lig_file = sys_gt_dir / "ligand.sdf"
 
         true_prot_file = sys_gt_dir / "protein_0.pdb"
