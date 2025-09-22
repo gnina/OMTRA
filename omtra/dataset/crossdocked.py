@@ -428,7 +428,7 @@ class CrossdockedDataset(ZarrDataset):
         unique_elems, inverse = np.unique(elements, return_inverse=True)
 
         unique_codes = np.array(
-            [self.encode_element[elem] for elem in unique_elems],
+            [self.encode_element[elem.upper()] for elem in unique_elems], #TODO: Se vs SE failure in Posebusters benchmarkset
             dtype=np.int64
         )
         return unique_codes[inverse]
