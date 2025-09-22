@@ -90,6 +90,12 @@ def parse_args():
         default=2700, 
         help='Amount of time in seconds to wait before timing out eval metric.'
     )
+    parser.add_argument('--eval_output_dir', 
+        type=str, 
+        default=None, 
+        help='Output directory for the docking eval script.'
+    )
+
     
     return parser.parse_args()
 
@@ -191,6 +197,7 @@ def generate_commands(
         max_batch_size = item.get('max_batch_size', args.max_batch_size)
         timeout = item.get('timeout', args.timeout)
         sys_idx_file = item.get('sys_idx_file', args.sys_idx_file)
+        eval_output_dir = item.get('eval_output_file', args.eval_output_dir)
         
 
         if samples_dir is None:
@@ -218,6 +225,7 @@ def generate_commands(
 
                 add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
                 add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
+                add_if_not_none(cmd_parts, "--output_dir", eval_output_dir)
                 
                 commands.append(" ".join(cmd_parts))
         else:
@@ -241,6 +249,7 @@ def generate_commands(
 
                 add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
                 add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
+                add_if_not_none(cmd_parts, "--output_dir", eval_output_dir)
                 
                 commands.append(" ".join(cmd_parts))
 

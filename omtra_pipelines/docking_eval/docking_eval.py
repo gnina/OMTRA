@@ -389,7 +389,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 else:
                     for i, gen_lig in enumerate(valid_gen_ligs):
                         pb_result_single = run_with_timeout(pb_valid, 
-                                                            timeout=120, 
+                                                            timeout=600, 
                                                             gen_ligs=gen_lig,
                                                             true_lig=true_lig, 
                                                             prot_file=data['gen_prot_file'], 
@@ -430,7 +430,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 else:
                     for i, gen_lig in enumerate(valid_gen_ligs):
                         posechk_result_single = run_with_timeout(posecheck, 
-                                                                 timeout=120,
+                                                                 timeout=600,
                                                                  ligs=[gen_lig],
                                                                  prot_file=data['gen_prot_file'],
                                                                  true_lig=true_lig,
