@@ -73,7 +73,8 @@ class VectorField(nn.Module):
         dst_feat_msg_reduction_factor: float = 4,
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
-        res_id_embed_dim: int = 64
+        res_id_embed_dim: int = 64,
+        learnable_vec_norm: bool = False,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -252,6 +253,7 @@ class VectorField(nn.Module):
                     dropout=dropout,
                     use_dst_feats=use_dst_feats,
                     dst_feat_msg_reduction_factor=dst_feat_msg_reduction_factor,
+                    learnable_vec_norm=learnable_vec_norm
                 )
             )
         self.conv_layers = nn.ModuleList(self.conv_layers)
