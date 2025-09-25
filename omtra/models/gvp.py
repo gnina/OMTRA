@@ -501,6 +501,10 @@ class HeteroGVPConv(nn.Module):
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(scalar_size, 6 * scalar_size, bias=True)
         )
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        raise NotImplementedError('need to do a thinky and implementy about weight initialization')
 
     @g_local_scope
     def forward(
