@@ -10,6 +10,7 @@ from torch_scatter import scatter_softmax
 from omtra.utils.graph import g_local_scope
 
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
+from omtra.data.graph.utils import get_node_batch_idxs, get_edge_batch_idxs
 
 
 # most taken from flowmol gvp (moreflowmol branch)
@@ -565,6 +566,11 @@ class HeteroGVPConv(nn.Module):
             for ntype in self.node_types:
                 self.message_expansion[ntype] = nn.Identity()
 
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(), nn.Linear(scalar_size, 6 * s_message_dim, bias=True)
+        )
+        raise ValueError('not sure whether to use s_message_dim or scalar_size for adaln')
+
     @g_local_scope
     def forward(
         self,
@@ -572,10 +578,13 @@ class HeteroGVPConv(nn.Module):
         scalar_feats: Dict[str, torch.Tensor],
         coord_feats: Dict[str, torch.Tensor],
         vec_feats: Dict[str, torch.Tensor],
+        global_conditioning: torch.Tensor,
         edge_feats: Optional[Dict[str, torch.Tensor]] = None,
         x_diff: Optional[Dict[str, torch.Tensor]] = None,
         d: Optional[Dict[str, torch.Tensor]] = None,
         passing_edges: Optional[List[str]] = None,
+        node_batch_idxs: Optional[Dict[str, torch.Tensor]] = None,
+        edge_batch_idxs: Optional[Dict[str, torch.Tensor]] = None,
     ):
         # vec_feat has shape (n_nodes, n_vectors, 3)å
         for ntype in self.node_types:
@@ -615,6 +624,24 @@ class HeteroGVPConv(nn.Module):
                 g.edges[etype].data["d"] = _rbf(
                     dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim
                 )
+
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(
+            global_conditioning
+        ).chunk(6, dim=1)
+        if node_batch_idxs is None:
+            node_batch_idxs = get_node_batch_idxs(g)
+        if edge_batch_idxs is None:
+            edge_batch_idxs = get_edge_batch_idxs(g)
+
+        # apply modulation to initial node scalar embeddings
+        for ntype in self.node_types:
+            if g.num_nodes(ntype) == 0:
+                continue
+            g.nodes[ntype].data["s"] = modulate(
+                g.nodes[ntype].data["s"], 
+                shift_msa[node_batch_idxs[ntype]], 
+                scale_msa[node_batch_idxs[ntype]],
+            )
 
         # apply node compression
         for ntype in self.node_types:
@@ -845,3 +872,7 @@ class HeteroGVPConv(nn.Module):
         )
 
         return {"scalar_msg": scalar_message, "vec_msg": vector_message}
+
+
+def modulate(x, shift, scale):
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)

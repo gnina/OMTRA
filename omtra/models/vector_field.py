@@ -30,6 +30,7 @@ from omtra.constants import (
     protein_element_map,
     protein_atom_map,
 )
+from omtra.models.embed import TimestepEmbedder
 
 
 from omtra.data.graph.utils import get_batch_idxs
@@ -185,6 +186,12 @@ class VectorField(nn.Module):
         # create a task embedding
         self.task_embedding = nn.Embedding(
             len(td_coupling.task_space), self.task_embedding_dim
+        )
+
+        # create time embedding layer
+        self.time_embedder = TimestepEmbedder(
+            hidden_dim=n_hidden_scalars,
+            frequency_embedding_dim=time_embedding_dim,
         )
 
         # for each node type, create a function for initial node embeddings
@@ -462,6 +469,10 @@ class VectorField(nn.Module):
             task_idx
         )  # tensor of shape (batch_size, token_dim)
 
+        t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
+        t_emb = self.time_embedder(t_emb)
+        global_conditioning = task_embedding_batch + t_emb
+
         # add time and task embedding to node scalar features
         for ntype in node_scalar_features.keys():
             # add time embedding to node scalar features
@@ -518,6 +529,7 @@ class VectorField(nn.Module):
                         edge_features_clone,
                         node_batch_idx,
                         upper_edge_mask,
+                        global_conditioning=global_conditioning,
                         apply_softmax=True,
                         remove_com=False,
                     )
@@ -549,8 +561,9 @@ class VectorField(nn.Module):
             edge_features,
             node_batch_idx,
             upper_edge_mask,
-            apply_softmax,
-            remove_com,
+            global_conditioning=global_conditioning,
+            apply_softmax=apply_softmax,
+            remove_com=remove_com,
             extract_latents_for_confidence=extract_latents_for_confidence,
         )
 
@@ -574,6 +587,7 @@ class VectorField(nn.Module):
         edge_features: Dict[str, torch.Tensor],
         node_batch_idx: Dict[str, torch.Tensor],
         upper_edge_mask: Dict[str, torch.Tensor],
+        global_conditioning: torch.Tensor,
         apply_softmax: bool = False,
         remove_com: bool = False,
         extract_latents_for_confidence=False,
@@ -587,6 +601,7 @@ class VectorField(nn.Module):
                     scalar_feats=node_scalar_features,
                     coord_feats=node_positions,
                     vec_feats=node_vec_features,
+                    global_conditioning=global_conditioning,
                     edge_feats=edge_features,
                     x_diff=x_diff,
                     d=d,
