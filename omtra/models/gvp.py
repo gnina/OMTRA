@@ -624,20 +624,7 @@ class HeteroGVPConv(nn.Module):
         for etype in passing_edges:
             if etype not in g.etypes or g.num_edges(etype) == 0:
                 continue
-            """
-            g.update_all(
-                fn.copy_e("scalar_msg", "m"),
-                self.agg_func("m", "scalar_msg"),
-                etype=etype,
-            )
-            g.update_all(
-                fn.copy_e("vec_msg", "m"),
-                self.agg_func("m", "vec_msg"),
-                etype=etype,
-            )
-            """
-            
-            
+    
             scalar_agg_fns[etype] = (
                 fn.copy_e("scalar_msg", "m"),
                 self.agg_func("m", "scalar_msg"),
@@ -656,8 +643,6 @@ class HeteroGVPConv(nn.Module):
         else:
             z = self.message_norm
 
-        updated_scalar_feats = {}
-        updated_vec_feats = {}
         s_2, v_2 = {}, {}
         for ntype in self.node_types:
             if g.num_nodes(ntype) == 0:
