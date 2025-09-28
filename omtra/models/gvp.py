@@ -515,7 +515,6 @@ class HeteroGVPConv(nn.Module):
         d: Optional[Dict[str, torch.Tensor]] = None,
         passing_edges: Optional[List[str]] = None,
         node_batch_idxs: Optional[Dict[str, torch.Tensor]] = None,
-        edge_batch_idxs: Optional[Dict[str, torch.Tensor]] = None,
     ):
         # vec_feat has shape (n_nodes, n_vectors, 3)
         for ntype in self.node_types:
@@ -565,8 +564,6 @@ class HeteroGVPConv(nn.Module):
         if node_batch_idxs is None:
             print('WARNING: node_batch_idxs not provided, recomputing, this is inefficient')
             node_batch_idxs = get_node_batch_idxs(g)
-        if edge_batch_idxs is None:
-            edge_batch_idxs = get_edge_batch_idxs(g)
 
         # apply pre-message layernorm
         s_1, v_1 = {}, {}

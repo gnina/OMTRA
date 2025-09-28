@@ -592,6 +592,7 @@ class VectorField(nn.Module):
                     vec_feats=node_vec_features,
                     global_conditioning=global_conditioning,
                     edge_feats=edge_features,
+                    node_batch_idxs=node_batch_idx,
                     x_diff=x_diff,
                     d=d,
                 )
@@ -623,8 +624,6 @@ class VectorField(nn.Module):
                             node_scalar_features[ntype],
                             node_positions[ntype],
                             node_vec_features[ntype],
-                            global_conditioning,
-                            node_batch_idx[ntype],
                         )
                         ntypes_updated.add(ntype)
 
@@ -659,8 +658,6 @@ class VectorField(nn.Module):
                             edge_features[etype],
                             d=d[etype],
                             etype=etype,
-                            global_context=global_conditioning,
-                            batch_idxs=node_batch_idxs,
                         )
 
                     if self.rebuild_edges and not last_update:
@@ -1193,9 +1190,6 @@ class NodePositionUpdate(nn.Module):
         self.n_vec_channels = n_vec_channels
 
         self.layer_norm = GVPLayerNorm(n_scalars, n_vec_channels, learnable_vec_norm=True)
-        self.adaln_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(n_scalars, n_scalars*2 + n_vec_channels)
-        )
 
         self.gvps = []
         for i in range(n_gvps):
@@ -1223,19 +1217,9 @@ class NodePositionUpdate(nn.Module):
         scalars: torch.Tensor, 
         positions: torch.Tensor, 
         vectors: torch.Tensor, 
-        global_context: torch.Tensor, 
-        batch_idxs: torch.Tensor
     ):
 
         scalars, vectors = self.layer_norm((scalars, vectors))
-
-        adaln_params = self.adaln_modulation(global_context).chunk(2, dim=-1)
-        scale_vecs = adaln_params[-self.n_vec_channels:]
-        shift_s, scale_s = adaln_params[:-self.n_vec_channels].chunk(2, dim=-1)
-
-        scalars = modulate(scalars, shift_s[batch_idxs], scale_s[batch_idxs])
-        vectors = vectors * scale_vecs[batch_idxs].unsqueeze(1)
-
         _, vector_updates = self.gvps((scalars, vectors))
         return positions + vector_updates.squeeze(1)
 
@@ -1251,17 +1235,6 @@ class EdgeUpdate(nn.Module):
         super().__init__()
         src_ntype, _, dst_ntype = to_canonical_etype(etype)
 
-        self.src_inp_norm = nn.LayerNorm(n_node_scalars)
-        if src_ntype == dst_ntype:
-            self.dst_inp_norm = None
-        else:
-            self.dst_inp_norm = nn.LayerNorm(n_node_scalars)
-
-        m = 1 if src_ntype == dst_ntype else 2
-        self.adaln_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(n_node_scalars, n_node_scalars*2*m)
-        )
-
         input_dim = n_node_scalars * 2 + n_edge_feats + rbf_dim
 
         self.edge_update_fn = nn.Sequential(
@@ -1272,22 +1245,8 @@ class EdgeUpdate(nn.Module):
         )
         self.edge_norm = nn.LayerNorm(n_edge_feats)
 
-    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, etype, global_context: torch.Tensor, batch_idxs: torch.Tensor):
+    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, etype):
         src_ntype, _, dst_ntype = to_canonical_etype(etype)
-
-        src_node_scalars = node_scalars[src_ntype]
-        dst_node_scalars = node_scalars[dst_ntype]
-
-        # apply adaptive LN to src and dst node scalar features
-        s_shift_src, s_scale_src, s_shift_dst, s_scale_dst = self.adaln_modulation(global_context).chunk(4, dim=-1)
-        src_node_scalars = modulate(
-            self.src_inp_norm(src_node_scalars), 
-            s_shift_src[batch_idxs[src_ntype]], 
-            s_scale_src[batch_idxs[src_ntype]])
-        dst_node_scalars = modulate(
-            self.dst_inp_norm(dst_node_scalars), 
-            s_shift_dst[batch_idxs[dst_ntype]], 
-            s_scale_dst[batch_idxs[dst_ntype]])
 
         # get indicies of source and destination nodes
         src_idxs, dst_idxs = g.edges(etype=etype)

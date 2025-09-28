@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class AdaLNWeightGenerator(nn.Module):
-    def __init__(self, scalar_size, vector_size, s_ratio=1.0, v_ratio=1.0):
+    def __init__(self, scalar_size, vector_size, s_ratio: int = 1, v_ratio: int = 1):
         super().__init__()
         self.scalar_size = scalar_size
         self.vector_size = vector_size
@@ -13,6 +13,8 @@ class AdaLNWeightGenerator(nn.Module):
         # enforce scalar size and vector size divid evenly by ratios
         assert scalar_size % s_ratio == 0
         assert vector_size % v_ratio == 0
+        assert isinstance(s_ratio, int) and s_ratio >= 1
+        assert isinstance(v_ratio, int) and v_ratio >= 1
 
         self.n_s_params_gen = self.scalar_size // self.s_ratio
         self.n_v_params_gen = self.vector_size // self.v_ratio
