@@ -201,7 +201,7 @@ class VectorField(nn.Module):
             n_cat_feats = self.ntype_cat_feats[
                 ntype
             ]  # number of categorical features for this node type
-            input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
+            input_dim = n_cat_feats * token_dim
             if res_id_embed_dim is not None and ntype == 'prot_atom':
                 input_dim += res_id_embed_dim
 
@@ -476,23 +476,9 @@ class VectorField(nn.Module):
         t_emb = self.time_embedder(t_emb)
         global_conditioning = task_embedding_batch + t_emb
 
-        # add time and task embedding to node scalar features
+        # concatenate all initial node scalar features and pass through the embedding layer
         for ntype in node_scalar_features.keys():
-            # add time embedding to node scalar features
-            if self.time_embedding_dim == 1:
-                node_scalar_features[ntype].append(
-                    t[node_batch_idx[ntype]].unsqueeze(-1)
-                )
-            else:
-                t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
-                t_emb = t_emb[node_batch_idx[ntype]]
-                node_scalar_features[ntype].append(t_emb)
-
-            node_scalar_features[ntype].append(
-                task_embedding_batch[node_batch_idx[ntype]]
-            )  # expand task embedding for each node in the batch
-
-            # concatenate all initial node scalar features and pass through the embedding layer
+            
             node_scalar_features[ntype] = torch.cat(
                 node_scalar_features[ntype], dim=-1
             )
