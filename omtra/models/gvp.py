@@ -498,9 +498,13 @@ class HeteroGVPConv(nn.Module):
             for ntype in self.node_types:
                 self.message_expansion[ntype] = nn.Identity()
 
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(scalar_size, 6 * scalar_size, bias=True)
-        )
+        self.adaln_modulators = nn.ModuleDict()
+        for ntype in self.node_types:
+            self.adaln_modulators[ntype] = nn.Sequential(
+                nn.SiLU(), nn.Linear(scalar_size, 7 * (scalar_size+vector_size), bias=True)
+                # TODO: 7*(scalar_size+vector_size) assumes shift+scale for vector too but we only ever apply scale to vector, need to adjust
+            )
+
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -560,9 +564,22 @@ class HeteroGVPConv(nn.Module):
         # generate shift/scale/gate for adaLN (this is the normalization that incorporates global context, i.e., timestep and task embedding)
         # TODO: currently these are already embedded in node feats. since we are doing this, can we drop global conditioning from node feats?
         # this is an edit made to VectorField, not GVPHeteroConv
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(
-            global_conditioning
-        ).chunk(6, dim=1)
+        adaln_params = {}
+        for ntype in self.node_types:
+            if g.num_nodes(ntype) == 0:
+                continue
+            adaln_output = self.adaln_modulators[ntype](global_conditioning)
+            adaln_params_ntype = {}
+            params = adaln_output.chunk(7, dim=1)
+            adaln_params_ntype['shift_msa'] = params[0]
+            adaln_params_ntype['scale_msa'] = params[1]
+            adaln_params_ntype['gate_msa'] = params[2]
+            adaln_params_ntype['shift_mlp'] = params[3]
+            adaln_params_ntype['scale_mlp'] = params[4]
+            adaln_params_ntype['gate_mlp'] = params[5]
+            adaln_params_ntype['msg_norm'] = params[6]
+            adaln_params[ntype] = adaln_params_ntype
+            
         if node_batch_idxs is None:
             print('WARNING: node_batch_idxs not provided, recomputing, this is inefficient')
             node_batch_idxs = get_node_batch_idxs(g)
@@ -583,10 +600,14 @@ class HeteroGVPConv(nn.Module):
         for ntype in self.node_types:
             if g.num_nodes(ntype) == 0:
                 continue
+            scale_params = adaln_params[ntype]['scale_msa']
+            shift_params = adaln_params[ntype]['shift_msa']
+            scale_params_s = scale_params[:, self.scalar_size] # TODO: shift params generated for s but not v, adjust dims and how we unpack them
+            scale_params_v = scale_params[:, self.scalar_size:]
             s_1[ntype] = modulate(
                 s_1[ntype], 
-                shift_msa[node_batch_idxs[ntype]], 
-                scale_msa[node_batch_idxs[ntype]],
+                shift_params[node_batch_idxs[ntype]], 
+                scale_params[node_batch_idxs[ntype]],
             )
 
         if self.use_dst_feats:
@@ -654,6 +675,8 @@ class HeteroGVPConv(nn.Module):
 
             # dropout scalar and vector messages
             scalar_msg, vec_msg = self.dropout_layers[ntype](scalar_msg, vec_msg)
+
+            s_msg_norm
 
             # TODO: obtain learned message norm somehow
             s_1[ntype] = s_1[ntype] + scalar_msg*s_msg_norm

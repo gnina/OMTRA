@@ -674,7 +674,7 @@ class VectorField(nn.Module):
                             d=d[etype],
                             etype=etype,
                             global_context=global_conditioning,
-                            batch_idxs=node_batch_idx[]
+                            batch_idxs=node_batch_idxs,
                         )
 
                     if self.rebuild_edges and not last_update:
