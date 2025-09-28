@@ -1189,6 +1189,7 @@ class NodePositionUpdate(nn.Module):
         self.n_scalars = n_scalars
         self.n_vec_channels = n_vec_channels
 
+        # TODO: would we want adaptive layernorms for node position updates?
         self.layer_norm = GVPLayerNorm(n_scalars, n_vec_channels, learnable_vec_norm=True)
 
         self.gvps = []

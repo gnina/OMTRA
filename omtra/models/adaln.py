@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 
-
+def modulate(x, shift, scale):
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 class AdaLNWeightGenerator(nn.Module):
     def __init__(self, scalar_size, vector_size, s_ratio: int = 1, v_ratio: int = 1):
         super().__init__()
@@ -50,5 +51,9 @@ class AdaLNWeightGenerator(nn.Module):
         
         return params_dict
     
-def modulate(x, shift, scale):
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+class FinalLayer(nn.Module):
+    def __init__(self, n_scalars: int, n_vec_channels: int, n_edge_feats: int):
+        super().__init__()
+
+        pass
