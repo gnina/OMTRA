@@ -74,6 +74,7 @@ def parse_args():
         default=0,
         help="Index in the dataset to start sampling from"
     )
+    p.add_argument("--sys_idx_file", type=str, default=None, help='Path to a file with pre-selected system indices.')
     p.add_argument(
         "--n_timesteps",
         type=int,
@@ -312,7 +313,16 @@ def main(args):
         g_list = None
         n_replicates = args.n_samples
     else:
-        dataset_idxs = range(args.dataset_start_idx, args.dataset_start_idx + args.n_samples)
+
+        if args.sys_idx_file is None:
+            dataset_idxs = range(args.dataset_start_idx, args.dataset_start_idx + args.n_samples)
+        else:
+            # read in pre-determined index file
+            with open(args.sys_idx_file, "r") as f:
+                line = f.readline().strip()
+                dataset_idxs = [int(i) for i in line.split(",")]
+                dataset_idxs = dataset_idxs[:args.n_samples]
+
         g_list = [ dataset[(task_name, i)].to(device) for i in dataset_idxs ]
         n_replicates = args.n_replicates
 
