@@ -11,7 +11,7 @@ from omtra.utils.graph import g_local_scope
 
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 from omtra.data.graph.utils import get_node_batch_idxs, get_edge_batch_idxs
-from omtra.models.adaln import AdaLNWeightGenerator, modulate
+from omtra.models.adaln import GraphConvAdaLN, modulate
 
 
 # most taken from flowmol gvp (moreflowmol branch)
@@ -494,12 +494,8 @@ class HeteroGVPConv(nn.Module):
 
         self.adaln_modulators = nn.ModuleDict()
         for ntype in self.node_types:
-            self.adaln_modulators[ntype] = AdaLNWeightGenerator(scalar_size, vector_size)
+            self.adaln_modulators[ntype] = GraphConvAdaLN(scalar_size, vector_size)
 
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        raise NotImplementedError('need to do a thinky and implementy about weight initialization')
 
     @g_local_scope
     def forward(
@@ -577,14 +573,14 @@ class HeteroGVPConv(nn.Module):
         for ntype in self.node_types:
             if g.num_nodes(ntype) == 0:
                 continue
-            scale_params = adaln_params_dict[ntype]['s_scale_msa']
-            shift_params = adaln_params_dict[ntype]['s_shift_msa']
+            scale_params = adaln_params_dict[ntype]['s_msa_shift']
+            shift_params = adaln_params_dict[ntype]['s_msa_scale']
             s_1[ntype] = modulate(
                 s_1[ntype], 
                 shift_params[node_batch_idxs[ntype]], 
                 scale_params[node_batch_idxs[ntype]],
             )
-            v_scale_params = adaln_params_dict[ntype]['v_scale_msa']
+            v_scale_params = adaln_params_dict[ntype]['v_msa_scale'].unsqueeze(-1) + 1
             v_1[ntype] = v_1[ntype]*v_scale_params[node_batch_idxs[ntype]]
 
         if self.use_dst_feats:
@@ -657,8 +653,8 @@ class HeteroGVPConv(nn.Module):
             scalar_msg, vec_msg = self.dropout_layers[ntype](scalar_msg, vec_msg)
 
             # obtain learned message norm and apply
-            s_msg_norm = adaln_params['s_msg_norm'][node_batch_idxs[ntype]]
-            v_msg_norm = adaln_params['v_msg_norm'][node_batch_idxs[ntype]]
+            s_msg_norm = adaln_params['s_msg_norm'][node_batch_idxs[ntype]] + 1
+            v_msg_norm = adaln_params['v_msg_norm'][node_batch_idxs[ntype]].unsqueeze(-1) + 1
             s_1[ntype] = s_1[ntype] + scalar_msg*s_msg_norm
             v_1[ntype] = v_1[ntype] + vec_msg*v_msg_norm
 
@@ -666,7 +662,7 @@ class HeteroGVPConv(nn.Module):
             # apply global-context gating to s_1, v_1
             # TODO: shouldn't use same gating for scalar and vecs
             s_gate_msa = adaln_params['s_msa_gate'][node_batch_idxs[ntype]]
-            v_gate_msa = adaln_params['v_msa_gate'][node_batch_idxs[ntype]]
+            v_gate_msa = adaln_params['v_msa_gate'][node_batch_idxs[ntype]].unsqueeze(-1)
             s_1[ntype] = s_1[ntype] * s_gate_msa
             v_1[ntype] = v_1[ntype] * v_gate_msa
 
@@ -682,7 +678,7 @@ class HeteroGVPConv(nn.Module):
             # TODO: need separate scale parameters for vector features!
             s_ff_shift = adaln_params['s_ff_shift'][node_batch_idxs[ntype]]
             s_ff_scale = adaln_params['s_ff_scale'][node_batch_idxs[ntype]]
-            v_ff_scale = adaln_params['v_ff_scale'][node_batch_idxs[ntype]]
+            v_ff_scale = adaln_params['v_ff_scale'][node_batch_idxs[ntype]].unsqueeze(-1) + 1
             s_2[ntype] = modulate(
                 s_2[ntype], 
                 s_ff_shift, 
@@ -696,7 +692,7 @@ class HeteroGVPConv(nn.Module):
             # apply adaln gate for global context
             # TODO: need separate gate parameters for vector features! and node type?
             s_ff_gate = adaln_params['s_ff_gate'][node_batch_idxs[ntype]]
-            v_ff_gate = adaln_params['v_ff_gate'][node_batch_idxs[ntype]]
+            v_ff_gate = adaln_params['v_ff_gate'][node_batch_idxs[ntype]].unsqueeze(-1)
             s_2[ntype] = s_2[ntype] * s_ff_gate
             v_2[ntype] = v_2[ntype] * v_ff_gate
 

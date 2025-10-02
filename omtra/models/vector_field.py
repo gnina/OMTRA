@@ -80,7 +80,6 @@ class VectorField(nn.Module):
         super().__init__()
         self.graph_config = graph_config
         self.token_dim = token_dim
-        self.task_embedding_dim = token_dim
         self.n_hidden_scalars = n_hidden_scalars
         self.n_hidden_edge_feats = n_hidden_edge_feats
         self.n_vec_channels = n_vec_channels
@@ -187,7 +186,7 @@ class VectorField(nn.Module):
 
         # create a task embedding
         self.task_embedding = nn.Embedding(
-            len(td_coupling.task_space), self.task_embedding_dim
+            len(td_coupling.task_space), n_hidden_scalars
         )
 
         # create time embedding layer
@@ -323,6 +322,7 @@ class VectorField(nn.Module):
                     m.n_categories+int(has_fake_atoms)
                 )
             elif m.data_key == "v":  # if a node vector feature
+                raise NotImplementedError("node vector feature generation not implemented yet")
                 # TODO: hard-coded assumption that this situation only applies to pharm
                 # vector features, need to make this more general
                 # also need to avoid hard-coding number of vec features out
@@ -346,10 +346,9 @@ class VectorField(nn.Module):
             is_edge_feat = m.graph_entity == "edge"
             if not (is_edge_feat and m.is_categorical):
                 continue
-            self.edge_output_heads[m.name] = nn.Sequential(
-                nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
-                nn.SiLU(),
-                nn.Linear(n_hidden_edge_feats, m.n_categories),
+            self.edge_output_heads[m.name] = CategoricalOutputHead(
+                n_hidden_edge_feats,
+                m.n_categories
             )
 
         if self.self_conditioning:
@@ -364,6 +363,69 @@ class VectorField(nn.Module):
                 res_id_embed_dim=res_id_embed_dim,
                 fake_atoms=fake_atoms,
             )
+
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        # Initialize transformer layers:
+        # TODO: this conficts with GVP modules which explicit have their own intialization scheme...be aware if this causes issues
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        self.apply(_basic_init)
+
+        # Initialize task embedding table:
+        nn.init.normal_(self.task_embedding.weight, std=0.02)
+
+        # intialize embedding tables for all categorical modalities
+        for mod in self.token_embeddings.values():
+            nn.init.normal_(mod.weight, std=0.02)
+
+        # Initialize timestep embedding MLP:
+        nn.init.normal_(self.time_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.time_embedder.mlp[2].weight, std=0.02)
+
+        # Zero-out adaLN modulation layers HeteroGraphConv blocks:
+        for conv in self.conv_layers:
+            for adaln_fn in conv.adaln_modulators.values():
+                nn.init.constant_(adaln_fn.mlp[-1].weight, 0)
+                nn.init.constant_(adaln_fn.mlp[-1].bias, 0)
+
+        # zero-out adaln for node position updaters
+        for ntype in self.node_position_updaters:
+            for updater in self.node_position_updaters[ntype]:
+                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].weight, 0)
+                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].bias, 0)
+
+        # zero out edge feature updaters
+        for etype in self.edge_updaters:
+            for updater in self.edge_updaters[etype]:
+                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].weight, 0)
+                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].bias, 0)
+
+        # zero out categorical output heads
+        for m_name in self.node_output_heads:
+            modality = name_to_modality(m_name)
+            if not modality.is_categorical:
+                continue
+            # zero out the AdaLN weight generators
+            nn.init.constant_(self.node_output_heads[m_name].adaln_params_mlp.mlp[-1].weight, 0)
+            nn.init.constant_(self.node_output_heads[m_name].adaln_params_mlp.mlp[-1].bias, 0)
+
+        for m_name in self.edge_output_heads:
+            modality = name_to_modality(m_name)
+            if not modality.is_categorical:
+                continue
+            # zero out the AdaLN weight generators
+            nn.init.constant_(self.edge_output_heads[m_name].adaln_params_mlp.mlp[-1].weight, 0)
+            nn.init.constant_(self.edge_output_heads[m_name].adaln_params_mlp.mlp[-1].bias, 0)
+
+        # TODO: note in regular DiT, all final layers have weights set to zero
+        # our "output layers" are sometimes gvps (node positions updates) and sometimes mlps (categorical features, edge feature updates)
+        # we don't do this part, we just zero-out adaptive layer norms only
 
     @g_local_scope
     def forward(
@@ -472,8 +534,7 @@ class VectorField(nn.Module):
             task_idx
         )  # tensor of shape (batch_size, token_dim)
 
-        t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
-        t_emb = self.time_embedder(t_emb)
+        t_emb = self.time_embedder(t)
         global_conditioning = task_embedding_batch + t_emb
 
         # concatenate all initial node scalar features and pass through the embedding layer
@@ -550,6 +611,7 @@ class VectorField(nn.Module):
             node_positions,
             edge_features,
             node_batch_idx,
+            edge_batch_idx,
             upper_edge_mask,
             global_conditioning=global_conditioning,
             apply_softmax=apply_softmax,
@@ -662,6 +724,7 @@ class VectorField(nn.Module):
                             edge_features[etype],
                             d=d[etype],
                             global_conditioning=global_conditioning,
+                            node_batch_idxs=node_batch_idx,
                         )
 
                     if self.rebuild_edges and not last_update:
@@ -1287,10 +1350,10 @@ class EdgeUpdate(nn.Module):
         )
         self.edge_norm = nn.LayerNorm(n_edge_feats)
 
-    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, global_conditioning, edge_batch_idxs: Dict[str, torch.Tensor]):
+    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, global_conditioning, node_batch_idxs: Dict[str, torch.Tensor]):
 
-        src_batch_idxs = edge_batch_idxs[self.src_ntype]
-        dst_batch_idxs = edge_batch_idxs[self.dst_ntype]
+        src_batch_idxs = node_batch_idxs[self.src_ntype]
+        dst_batch_idxs = node_batch_idxs[self.dst_ntype]
 
         if self.n_ntypes == 1:
             src_feats = self.src_norm(node_scalars[self.src_ntype])

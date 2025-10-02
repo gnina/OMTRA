@@ -3,13 +3,6 @@ from typing import List, Literal, Optional, Dict, Type
 import torch
 from torch import nn
 
-
-
-
-#################
-
-
-
 Domain = Literal["s", "v"]
 
 @dataclass(frozen=True)
@@ -164,7 +157,7 @@ def make_adaln(preset: str, **kwargs) -> AdaLNWeightGenerator:
 #################
 
 def modulate(x, shift, scale):
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+    return x * (1 + scale) + shift
 
 class FinalLayer(nn.Module):
     def __init__(self, n_scalars: int, n_vec_channels: int, n_edge_feats: int):
