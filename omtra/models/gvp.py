@@ -250,13 +250,13 @@ class GVPDropout(nn.Module):
 class GVPLayerNorm(nn.Module):
     """Normal layer norm for scalars, nontrainable norm for vectors."""
 
-    def __init__(self, feats_h_size, n_vecs: int, eps=1e-5, learnable_vec_norm=False):
+    def __init__(self, feats_h_size, n_vecs: int, eps=1e-5, affine=False):
         super().__init__()
         self.eps = eps
-        self.feat_norm = nn.LayerNorm(feats_h_size)
-        self.learnable_vec_norm = learnable_vec_norm
+        self.feat_norm = nn.LayerNorm(feats_h_size, elementwise_affine=affine)
+        self.affine = affine
 
-        if self.learnable_vec_norm:
+        if self.affine:
             self.vec_scale = nn.Parameter(torch.ones(1, n_vecs, 1))
 
     def forward(self, data):
@@ -270,7 +270,7 @@ class GVPLayerNorm(nn.Module):
         vn = torch.sqrt(torch.mean(vn, dim=-2, keepdim=True) + self.eps) + self.eps
         normed_vectors = vectors / vn
 
-        if self.learnable_vec_norm:
+        if self.affine:
             normed_vectors = normed_vectors * self.vec_scale
 
         return normed_feats, normed_vectors
@@ -301,7 +301,6 @@ class HeteroGVPConv(nn.Module):
         edge_feat_size: Optional[Dict[str, int]] = None,
         message_norm: Union[float, str] = 10,
         dropout: float = 0.0,
-        learnable_vec_norm: bool = False,
     ):
         super().__init__()
 
@@ -465,8 +464,8 @@ class HeteroGVPConv(nn.Module):
 
             self.node_update_fns[ntype] = nn.Sequential(*update_gvps)
             self.dropout_layers[ntype] = GVPDropout(self.dropout_rate)
-            self.message_layer_norms[ntype] = GVPLayerNorm(self.scalar_size, self.vector_size, learnable_vec_norm=learnable_vec_norm)
-            self.update_layer_norms[ntype] = GVPLayerNorm(self.scalar_size, self.vector_size, learnable_vec_norm=learnable_vec_norm)
+            self.message_layer_norms[ntype] = GVPLayerNorm(self.scalar_size, self.vector_size, affine=False)
+            self.update_layer_norms[ntype] = GVPLayerNorm(self.scalar_size, self.vector_size, affine=False)
 
         if isinstance(self.message_norm, str) and self.message_norm not in [
             "mean",

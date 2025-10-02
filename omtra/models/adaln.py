@@ -1,59 +1,170 @@
+from dataclasses import dataclass
+from typing import List, Literal, Optional, Dict, Type
 import torch
-import torch.nn as nn
+from torch import nn
 
-def modulate(x, shift, scale):
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+
+
+#################
+
+
+
+Domain = Literal["s", "v"]
+
+@dataclass(frozen=True)
+class ChunkSpec:
+    key: str
+    domain: Domain
+    ratio_override: Optional[int] = None
+
+@dataclass(frozen=True)
+class AdaLNSpec:
+    chunks: List[ChunkSpec]
+    @property
+    def n_s(self) -> int: return sum(c.domain == "s" for c in self.chunks)
+    @property
+    def n_v(self) -> int: return sum(c.domain == "v" for c in self.chunks)
+    @property
+    def keys(self) -> List[str]: return [c.key for c in self.chunks]
+
+class AdaLNParams(dict):
+    """Dict[str, torch.Tensor] with tensors shaped to scalar_size or vector_size."""
+    pass
+
+# ------- Specs -------
+GRAPH_CONV_SPEC = AdaLNSpec([
+    ChunkSpec("s_msa_shift","s"), ChunkSpec("s_msa_scale","s"),
+    ChunkSpec("s_msg_norm","s"),  ChunkSpec("s_msa_gate","s"),
+    ChunkSpec("s_ff_shift","s"),  ChunkSpec("s_ff_scale","s"),
+    ChunkSpec("s_ff_gate","s"),
+    ChunkSpec("v_msa_scale","v"), ChunkSpec("v_msg_norm","v"),
+    ChunkSpec("v_msa_gate","v"),  ChunkSpec("v_ff_scale","v"),
+    ChunkSpec("v_ff_gate","v"),
+])
+
+POSITION_UPDATE_SPEC = AdaLNSpec([
+    ChunkSpec("s_shift","s"), ChunkSpec("s_scale","s"),
+    ChunkSpec("v_scale","v"),
+])
+
+# ------- Base generator (spec-driven) -------
 class AdaLNWeightGenerator(nn.Module):
-    def __init__(self, scalar_size, vector_size, s_ratio: int = 1, v_ratio: int = 1):
+    spec: AdaLNSpec  # subclasses set this
+
+    def __init__(
+        self,
+        scalar_size: int,
+        vector_size: int,
+        *,
+        s_ratio: int = 1,
+        v_ratio: int = 1,
+        mlp_hidden: Optional[int] = None,
+    ):
         super().__init__()
+        if not hasattr(self, "spec"):
+            raise TypeError("Subclass must set class attribute 'spec' to an AdaLNSpec.")
+
+        assert isinstance(s_ratio, int) and s_ratio >= 1
+        assert isinstance(v_ratio, int) and v_ratio >= 1
+        assert scalar_size % s_ratio == 0
+        assert vector_size % v_ratio == 0
+
         self.scalar_size = scalar_size
         self.vector_size = vector_size
         self.s_ratio = s_ratio
         self.v_ratio = v_ratio
 
-        # enforce scalar size and vector size divid evenly by ratios
-        assert scalar_size % s_ratio == 0
-        assert vector_size % v_ratio == 0
-        assert isinstance(s_ratio, int) and s_ratio >= 1
-        assert isinstance(v_ratio, int) and v_ratio >= 1
+        n_s_gen = (scalar_size // s_ratio) if scalar_size > 0 else 0
+        n_v_gen = (vector_size // v_ratio) if vector_size > 0 else 0
+        self._n_s_gen = n_s_gen
+        self._n_v_gen = n_v_gen
 
-        self.n_s_params_gen = self.scalar_size // self.s_ratio
-        self.n_v_params_gen = self.vector_size // self.v_ratio
+        out_dim = self.spec.n_s * n_s_gen + self.spec.n_v * n_v_gen
 
-        self.mlp = nn.Sequential(
-                nn.SiLU(), nn.Linear(scalar_size, 7*self.n_s_params_gen + 5*self.n_v_params_gen, bias=True)
+        if mlp_hidden is None:
+            self.mlp = nn.Sequential(nn.SiLU(), nn.Linear(scalar_size, out_dim, bias=True))
+        else:
+            self.mlp = nn.Sequential(
+                nn.Linear(scalar_size, mlp_hidden), nn.SiLU(),
+                nn.Linear(mlp_hidden, out_dim, bias=True),
             )
 
-    def forward(self, x):
-        # x has shape (batch_size, scalar_size)
+    @property
+    def keys(self) -> List[str]:
+        return self.spec.keys
 
-        params = self.mlp(x)
-        scalar_params = params[:, :7*self.n_s_params_gen]
-        vector_params = params[:, 7*self.n_s_params_gen:]
+    def forward(self, x: torch.Tensor) -> AdaLNParams:
+        B = x.shape[0]
+        flat = self.mlp(x)  # [B, out_dim]
 
-        scalar_params = scalar_params.repeat_interleave(self.s_ratio, dim=-1).chunk(7, dim=-1)
-        vector_params = vector_params.repeat_interleave(self.v_ratio, dim=-1).chunk(5, dim=-1)
+        # ordered split: all scalar-domain chunks (spec order), then vector-domain chunks
+        s_chunks = [c for c in self.spec.chunks if c.domain == "s"]
+        v_chunks = [c for c in self.spec.chunks if c.domain == "v"]
 
-        params_dict = {
-            's_msa_shift': scalar_params[0],
-            's_msa_scale': scalar_params[1],
-            's_msg_norm': scalar_params[2],
-            's_msa_gate': scalar_params[3],
-            's_ff_shift': scalar_params[4],
-            's_ff_scale': scalar_params[5],
-            's_ff_gate': scalar_params[6],
-            'v_msa_scale': vector_params[0],
-            'v_msg_norm': vector_params[1],
-            'v_msa_gate': vector_params[2],
-            'v_ff_scale': vector_params[3],
-            'v_ff_gate': vector_params[4],
-        }
-        
-        return params_dict
-    
+        s_total = len(s_chunks) * self._n_s_gen
+        s_flat, v_flat = flat[:, :s_total], flat[:, s_total:]
+
+        s_parts = list(torch.split(s_flat, self._n_s_gen, dim=-1)) if s_total > 0 else []
+        v_parts = list(torch.split(v_flat, self._n_v_gen, dim=-1)) if v_flat.shape[-1] > 0 else []
+
+        out = AdaLNParams()
+
+        for part, ch in zip(s_parts, s_chunks):
+            r = ch.ratio_override or self.s_ratio
+            exp = part.repeat_interleave(r, dim=-1)  # -> [B, scalar_size]
+            if exp.shape[-1] != self.scalar_size:
+                raise ValueError(f"{ch.key}: expanded {exp.shape[-1]} != scalar_size {self.scalar_size}")
+            out[ch.key] = exp
+
+        for part, ch in zip(v_parts, v_chunks):
+            r = ch.ratio_override or self.v_ratio
+            exp = part.repeat_interleave(r, dim=-1)  # -> [B, vector_size]
+            if exp.shape[-1] != self.vector_size:
+                raise ValueError(f"{ch.key}: expanded {exp.shape[-1]} != vector_size {self.vector_size}")
+            out[ch.key] = exp
+
+        return out
+
+# ------- Preset subclasses (no spec knowledge required by callers) -------
+class GraphConvAdaLN(AdaLNWeightGenerator):
+    spec = GRAPH_CONV_SPEC
+
+class PositionUpdateAdaLN(AdaLNWeightGenerator):
+    spec = POSITION_UPDATE_SPEC
+
+class HomoEdgeUpdateAdaLN(AdaLNWeightGenerator):
+    spec = AdaLNSpec([
+        ChunkSpec('s_shift',"s"),
+        ChunkSpec('s_scale',"s"),
+    ])
+
+class HeteroEdgeUpdateAdaLN(AdaLNWeightGenerator):
+    spec = AdaLNSpec([
+        ChunkSpec('s_shift_src',"s"),
+        ChunkSpec('s_scale_src',"s"),
+        ChunkSpec('s_shift_dst',"s"),
+        ChunkSpec('s_scale_dst',"s"),
+    ])
+
+# ------- Optional: registry + factory for string presets -------
+_ADALN_REGISTRY: Dict[str, Type[AdaLNWeightGenerator]] = {
+    "graph_conv": GraphConvAdaLN,
+    "position_update":  PositionUpdateAdaLN,
+}
+
+def make_adaln(preset: str, **kwargs) -> AdaLNWeightGenerator:
+    cls = _ADALN_REGISTRY[preset]
+    return cls(**kwargs)
+
+#################
+
+def modulate(x, shift, scale):
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 class FinalLayer(nn.Module):
     def __init__(self, n_scalars: int, n_vec_channels: int, n_edge_feats: int):
         super().__init__()
 
         pass
+

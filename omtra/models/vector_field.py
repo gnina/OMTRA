@@ -8,7 +8,7 @@ from collections import defaultdict
 from typing import Union, Callable, Dict, Optional
 from typing import List
 from omegaconf import DictConfig
-from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf, GVPLayerNorm, modulate
+from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf, GVPLayerNorm
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.models.self_conditioning import SelfConditioningResidualLayer
 from omtra.tasks.tasks import Task
@@ -31,6 +31,8 @@ from omtra.constants import (
     protein_atom_map,
 )
 from omtra.models.embed import TimestepEmbedder
+# from omtra.models.adaln import PositionUpdateAdaLN, EdgeUpdateAdaLN, modulate
+import omtra.models.adaln as adaln_module
 
 
 from omtra.data.graph.utils import get_batch_idxs
@@ -624,6 +626,8 @@ class VectorField(nn.Module):
                             node_scalar_features[ntype],
                             node_positions[ntype],
                             node_vec_features[ntype],
+                            global_conditioning,
+                            batch_idxs=node_batch_idx[ntype],
                         )
                         ntypes_updated.add(ntype)
 
@@ -1189,8 +1193,10 @@ class NodePositionUpdate(nn.Module):
         self.n_scalars = n_scalars
         self.n_vec_channels = n_vec_channels
 
-        # TODO: would we want adaptive layernorms for node position updates?
-        self.layer_norm = GVPLayerNorm(n_scalars, n_vec_channels, learnable_vec_norm=True)
+        # TODO: would we want adaptive layernorms for node position updates?scp
+        self.layer_norm = GVPLayerNorm(n_scalars, n_vec_channels, affine=False)
+        self.adaln_params_mlp = adaln_module.PositionUpdateAdaLN(n_scalars, n_vec_channels)
+
 
         self.gvps = []
         for i in range(n_gvps):
@@ -1218,9 +1224,18 @@ class NodePositionUpdate(nn.Module):
         scalars: torch.Tensor, 
         positions: torch.Tensor, 
         vectors: torch.Tensor, 
+        global_conditioning: torch.Tensor,
+        batch_idxs: torch.Tensor,
     ):
 
         scalars, vectors = self.layer_norm((scalars, vectors))
+        adaln_params = self.adaln_params_mlp(global_conditioning)
+        scalars = adaln_module.modulate(scalars, 
+                           adaln_params['s_shift'][batch_idxs], 
+                           adaln_params['s_scale'][batch_idxs]
+                           )
+        vectors = vectors * adaln_params['v_scale'][batch_idxs].unsqueeze(-1)
+
         _, vector_updates = self.gvps((scalars, vectors))
         return positions + vector_updates.squeeze(1)
 
@@ -1231,13 +1246,30 @@ class EdgeUpdate(nn.Module):
         n_node_scalars,
         n_edge_feats,
         etype: str,
+        ratio: int = 1,
         rbf_dim=16,
     ):
         super().__init__()
+        self.etype = etype
         src_ntype, _, dst_ntype = to_canonical_etype(etype)
+        self.src_ntype = src_ntype
+        self.dst_ntype = dst_ntype
+
+        self.n_ntypes = 1 + int(src_ntype != dst_ntype)
+        if self.n_ntypes == 1:
+            self.adaln_params_mlp = adaln_module.HomoEdgeUpdateAdaLN(
+                scalar_size=n_node_scalars,
+                vector_size=0,
+                s_ratio=ratio,
+            )
+        else:
+            self.adaln_params_mlp = adaln_module.HeteroEdgeUpdateAdaLN(
+                scalar_size=n_node_scalars,
+                vector_size=0,
+                s_ratio=ratio,
+            )
 
         input_dim = n_node_scalars * 2 + n_edge_feats + rbf_dim
-
         self.edge_update_fn = nn.Sequential(
             nn.Linear(input_dim, n_edge_feats),
             nn.SiLU(),
@@ -1246,15 +1278,39 @@ class EdgeUpdate(nn.Module):
         )
         self.edge_norm = nn.LayerNorm(n_edge_feats)
 
-    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, etype):
-        src_ntype, _, dst_ntype = to_canonical_etype(etype)
+    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, global_conditioning):
+
+        if self.n_ntypes == 1:
+            src_feats = node_scalars[self.src_ntype]
+            dst_feats = src_feats
+        else:
+            src_feats = node_scalars[self.src_ntype]
+            dst_feats = node_scalars[self.dst_ntype]
+
+        adaln_params = self.adaln_params_mlp(global_conditioning)
+
+        if self.n_ntypes == 1:
+            src_feats = adaln_module.modulate(src_feats, 
+                                    adaln_params['s_shift'][src_idxs], 
+                                    adaln_params['s_scale'][src_idxs]
+                                    )
+            dst_feats = src_feats
+        else:
+            src_feats = adaln_module.modulate(src_feats, 
+                                    adaln_params['s_shift_src'][src_idxs], 
+                                    adaln_params['s_scale_src'][src_idxs]
+                                    )
+            dst_feats = adaln_module.modulate(dst_feats, 
+                                    adaln_params['s_shift_dst'][dst_idxs], 
+                                    adaln_params['s_scale_dst'][dst_idxs]
+                                    )
 
         # get indicies of source and destination nodes
-        src_idxs, dst_idxs = g.edges(etype=etype)
+        src_idxs, dst_idxs = g.edges(etype=self.etype)
 
         mlp_inputs = [
-            node_scalars[src_ntype][src_idxs],
-            node_scalars[dst_ntype][dst_idxs],
+            src_feats[src_idxs],
+            dst_feats[dst_idxs],
             edge_feats,
             d
         ]
