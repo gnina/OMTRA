@@ -456,7 +456,7 @@ class HeteroGVPConv(nn.Module):
                         n_cp_feats=n_cp_feats,
                         dim_feats_in=scalar_size,
                         dim_feats_out=scalar_size,
-                        feats_activation=scalar_activation(),
+                        feats_activation=nn.GELU(approximate='tanh'),
                         vectors_activation=vector_activation(),
                         vector_gating=True,
                     )

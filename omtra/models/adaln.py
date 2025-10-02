@@ -133,11 +133,15 @@ class GraphConvAdaLN(AdaLNWeightGenerator):
 class PositionUpdateAdaLN(AdaLNWeightGenerator):
     spec = POSITION_UPDATE_SPEC
 
-class HomoEdgeUpdateAdaLN(AdaLNWeightGenerator):
+
+class ScalarAdaLN(AdaLNWeightGenerator):
     spec = AdaLNSpec([
         ChunkSpec('s_shift',"s"),
         ChunkSpec('s_scale',"s"),
     ])
+
+class HomoEdgeUpdateAdaLN(ScalarAdaLN):
+    pass
 
 class HeteroEdgeUpdateAdaLN(AdaLNWeightGenerator):
     spec = AdaLNSpec([
