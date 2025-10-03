@@ -64,6 +64,7 @@ class PlinderDataset(ZarrDataset):
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
         res_id_embed_dim: int = 64,
         max_pharms_sampled: int = 8,
+        pharm_idxs: Optional[List] = None,
     ):
         super().__init__(
             split,
@@ -83,6 +84,7 @@ class PlinderDataset(ZarrDataset):
         self.res_id_embed_dim = res_id_embed_dim
 
         self.max_pharms_sampled = max_pharms_sampled
+        self.pharm_idxs = pharm_idxs
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
@@ -399,8 +401,14 @@ class PlinderDataset(ZarrDataset):
                 pharmacophore = None
                 
             else:
-                pharm_sample_size =  np.random.randint(1, min(self.max_pharms_sampled, len(interacting_pharms)) + 1)
-                pharm_sample = np.random.choice(interacting_pharms, size=pharm_sample_size, replace=False)
+                if self.pharm_idxs is None:
+                    pharm_sample_size =  np.random.randint(1, min(self.max_pharms_sampled, len(interacting_pharms)) + 1)
+                    pharm_sample = np.random.choice(interacting_pharms, size=pharm_sample_size, replace=False)
+                else:
+                    if len(self.pharm_idxs) < len(interacting_pharms):
+                        pharm_sample = interacting_pharms[self.pharm_idxs]       
+                    else:
+                        pharm_sample = interacting_pharms   
 
                 coords = np.array([self.slice_array("pharmacophore/coords", i, i+1) for i in pharm_sample]).squeeze(1)
                 types = np.array([self.slice_array("pharmacophore/types", i, i+1) for i in pharm_sample]).squeeze(1)

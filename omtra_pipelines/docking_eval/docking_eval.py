@@ -56,6 +56,7 @@ def parse_args():
     sampling.add_argument("--n_replicates", type=int, help="Number of replicates per input sample.", required=True)
     sampling.add_argument("--n_timesteps", type=int, default=250, help="Number of integration steps to take when sampling.")
 
+    sampling.add_argument("--pharm_idxs",type=int,nargs="+",default=None,help="List of ground truth pharmacophore indices to sample.")
     sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
     sampling.add_argument("--noise_scaler", type=float, default=1.0, help="Noise scaling param for stochastic sampling.")
     sampling.add_argument("--eps", type=float, default=0.01, help="g(t) param for stochastic sampling.")
@@ -416,10 +417,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
 
             # PoseCheck
             if metrics_to_run['posecheck']:
-
-                if sys_id == 'sys_227_gt':  # TODO: remove this after posebusters processing
-                    continue
-
+                        
                 # generated ligand
                 posechk_results = run_with_timeout(posecheck, 
                                                 timeout=timeout,
@@ -526,6 +524,7 @@ def sample_system(ckpt_path: Path,
                   sys_idx_file: Path = None,
                   plinder_path: Path = None,
                   crossdocked_path: Path = None,
+                  pharm_idxs: List = None,
                   **kwargs
                   ):
     
@@ -546,9 +545,7 @@ def sample_system(ckpt_path: Path,
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
-    # 4) instantiate datamodule & model
-    #dm  = quick_load.datamodule_from_config(train_cfg)
-    #multitask_dataset = dm.load_dataset(split)
+    # 4) instantiate model
     model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
 
     if sys_idx_file is None:
@@ -567,7 +564,7 @@ def sample_system(ckpt_path: Path,
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
         
-        cfg = quick_load.load_cfg(overrides=['task_group=protein'], plinder_path=plinder_path)
+        cfg = quick_load.load_cfg(overrides=['task_group=protein', f'pharm_idxs={pharm_idxs}'], plinder_path=plinder_path)
         plinder_datamodule = datamodule_from_config(cfg)    
         dataset = plinder_datamodule.load_dataset(split).datasets['plinder'][plinder_link_version]
         
@@ -587,7 +584,6 @@ def sample_system(ckpt_path: Path,
         crossdocked_datamodule = datamodule_from_config(cfg)    
         dataset = crossdocked_datamodule.load_dataset(split).datasets['crossdocked']
                                
-        #dataset = multitask_dataset.datasets['crossdocked']
         dataset_name = 'crossdocked'
 
         # system info
@@ -853,9 +849,9 @@ def system_pairs_from_path(samples_dir: Path,
                 continue
 
             gen_ligs = [mol for mol in Chem.SDMolSupplier(str(gen_lig_file), sanitize=False, removeHs=False) if mol is not None]
-            pair['gen_ligs'] = gen_ligs
+            pair['gen_ligs'] = gen_ligs[:n_replicates]
             pair['gen_ligs_file'] = gen_lig_file
-            pair['gen_ligs_ids'] = [mol.GetProp("_Name") for mol in gen_ligs]
+            pair['gen_ligs_ids'] = [mol.GetProp("_Name") for mol in gen_ligs][:n_replicates]
 
             # true ligand 
             pair['true_lig'] = true_lig
@@ -919,6 +915,7 @@ def main(args):
                                                           dataset_name=args.dataset,
                                                           plinder_path=args.plinder_path,
                                                           crossdocked_path=args.crossdocked_path,
+                                                          pharm_idxs=args.pharm_idxs,
                                                           **kwargs)
         
         print("Finished sampling. Clearing torch GPU cache...\n")
