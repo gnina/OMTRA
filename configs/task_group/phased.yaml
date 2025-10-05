@@ -1,0 +1,43 @@
+# this block must be included in all task_group configs
+# especially the datamodule: default attribue
+defaults:
+  - _self_
+  - datamodule: default
+
+
+# Define tasks with time-varying probabilities
+# this is p(task) but p(task) can change through the course of training
+task_phases:
+  - duration_batches: 300000
+    tasks:
+      - name: rigid_docking_condensed
+        probability: 0.075
+      - name: fixed_protein_ligand_denovo_condensed
+        probability: 0.075
+      - name: denovo_ligand_condensed
+        probability: 0.425
+      - name: ligand_conformer_condensed
+        probability: 0.425
+  - duration_batches: null
+    tasks:
+      - name: rigid_docking_condensed
+        probability: 0.475
+      - name: fixed_protein_ligand_denovo_condensed
+        probability: 0.475
+      - name: denovo_ligand_condensed
+        probability: 0.025
+      - name: ligand_conformer_condensed
+        probability: 0.025
+
+# define p(dataset|task) coupling (assume static for simplicity)
+dataset_task_coupling:
+  rigid_docking_condensed:
+    - [plinder, 1.0]
+  fixed_protein_ligand_denovo_condensed:
+    - [plinder, 1.0]
+  denovo_ligand_condensed:
+    - [pharmit, 0.85]
+    - [plinder, 0.15]
+  ligand_conformer_condensed:
+    - [pharmit, 0.85]
+    - [plinder, 0.15]
