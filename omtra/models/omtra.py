@@ -915,58 +915,73 @@ class OMTRA(pl.LightningModule):
     ) -> List[SampledSystem]:
         
         n_samples = len(g_list) if g_list is not None else 1
+
+        sampled_systems = [[] for _ in range(n_samples)]    # Sampled_systems[i] are the list of replicates for system i
+
+        chunk_size = min(n_samples, max_batch_size) # handle case where max_batch_size < # samples
+
+        for start_idx in range(0, n_samples, chunk_size):
+            end_idx = min(start_idx + chunk_size, n_samples)
+            g_chunk = g_list[start_idx:end_idx]
+            coms_chunk = coms[start_idx:end_idx]
+            n_chunk = len(g_chunk)
+
+            # Determine reps per batch for this chunk
+            reps_per_batch = max(1, max_batch_size // n_chunk)
+            n_full_batches = n_replicates // reps_per_batch
+            last_batch_reps = n_replicates % reps_per_batch
+
+            for i in range(n_full_batches):
+                batch_results = self.sample(g_list=g_chunk,
+                                            n_replicates=reps_per_batch,
+                                            task_name=task_name,
+                                            unconditional_n_atoms_dist=unconditional_n_atoms_dist,
+                                            device=device,
+                                            n_timesteps=n_timesteps,
+                                            visualize=visualize,
+                                            coms=coms_chunk,
+                                            extract_latents_for_confidence=extract_latents_for_confidence,
+                                            time_spacing=time_spacing,
+                                            stochastic_sampling=stochastic_sampling,
+                                            noise_scaler=noise_scaler,
+                                            eps=eps,
+                                            n_lig_atom_margin=n_lig_atom_margin,
+                                            )
+                # re-order samples
+                for i, sys_idx in enumerate(range(start_idx, end_idx)):
+                    start = i * reps_per_batch  # starting index in the chunk results
+                    end = start + reps_per_batch    # ending index in the chunk results
+                    sampled_systems[sys_idx].extend(batch_results[start:end])   # sys_idx is the index relative to all samples
+                
+            # last batch
+            if last_batch_reps > 0:
+                batch_results = self.sample(g_list=g_chunk,
+                                            n_replicates=last_batch_reps,
+                                            task_name=task_name,
+                                            unconditional_n_atoms_dist=unconditional_n_atoms_dist,
+                                            device=device,
+                                            n_timesteps=n_timesteps,
+                                            visualize=visualize,
+                                            coms=coms_chunk,
+                                            extract_latents_for_confidence=extract_latents_for_confidence,
+                                            time_spacing=time_spacing,
+                                            stochastic_sampling=stochastic_sampling,
+                                            noise_scaler=noise_scaler,
+                                            eps=eps,
+                                            n_lig_atom_margin=n_lig_atom_margin,
+                                            )
+
+                for i, sys_idx in enumerate(range(start_idx, end_idx)):
+                    start = i * last_batch_reps
+                    end = start + last_batch_reps
+                    sampled_systems[sys_idx].extend(batch_results[start:end])
         
-        reps_per_batch = min(max_batch_size // n_samples, n_replicates)
-        n_full_batches = n_replicates // reps_per_batch
-        last_batch_reps = n_replicates % reps_per_batch
-
-        sampled_systems = [[] for _ in range(n_samples)]
-
-        for i in range(n_full_batches):
-            batch_results = self.sample(g_list=g_list,
-                                        n_replicates=reps_per_batch,
-                                        task_name=task_name,
-                                        unconditional_n_atoms_dist=unconditional_n_atoms_dist,
-                                        device=device,
-                                        n_timesteps=n_timesteps,
-                                        visualize=visualize,
-                                        coms=coms,
-                                        extract_latents_for_confidence=extract_latents_for_confidence,
-                                        time_spacing=time_spacing,
-                                        stochastic_sampling=stochastic_sampling,
-                                        noise_scaler=noise_scaler,
-                                        eps=eps,
-                                        n_lig_atom_margin=n_lig_atom_margin,
-                                        )
-            # re-order samples
-            for i in range(n_samples):
-                start_idx = i * reps_per_batch
-                end_idx = start_idx + reps_per_batch
-                sampled_systems[i].extend(batch_results[start_idx:end_idx])
-            
-        # last batch
-        if last_batch_reps > 0:
-            batch_results = self.sample(g_list=g_list,
-                                        n_replicates=last_batch_reps,
-                                        task_name=task_name,
-                                        unconditional_n_atoms_dist=unconditional_n_atoms_dist,
-                                        device=device,
-                                        n_timesteps=n_timesteps,
-                                        visualize=visualize,
-                                        coms=coms,
-                                        extract_latents_for_confidence=extract_latents_for_confidence,
-                                        time_spacing=time_spacing,
-                                        stochastic_sampling=stochastic_sampling,
-                                        noise_scaler=noise_scaler,
-                                        eps=eps,
-                                        n_lig_atom_margin=n_lig_atom_margin,
-                                        )
-
-            for i in range(n_samples):
-                start_idx = i * last_batch_reps
-                end_idx = start_idx + last_batch_reps
-                sampled_systems[i].extend(batch_results[start_idx:end_idx])
-
+        # Check that each system has expected number of replicates
+        for i, sys_reps in enumerate(sampled_systems):
+            if len(sys_reps) != n_replicates:
+                raise ValueError(f"System {i} has {len(sys_reps)} replicates, expected {n_replicates}")
+    
+        # flatten list of lists
         sampled_systems = [rep for sys in sampled_systems for rep in sys]
         
         return sampled_systems
