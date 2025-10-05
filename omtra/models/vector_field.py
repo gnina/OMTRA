@@ -319,7 +319,8 @@ class VectorField(nn.Module):
                 has_fake_atoms = (m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
                 self.node_output_heads[m.name] = CategoricalOutputHead(
                     n_hidden_scalars,
-                    m.n_categories+int(has_fake_atoms)
+                    m.n_categories+int(has_fake_atoms),
+                    c_dim=n_hidden_scalars # the dimensionality of the global condiitoning information is that of node scalars
                 )
             elif m.data_key == "v":  # if a node vector feature
                 raise NotImplementedError("node vector feature generation not implemented yet")
@@ -348,7 +349,8 @@ class VectorField(nn.Module):
                 continue
             self.edge_output_heads[m.name] = CategoricalOutputHead(
                 n_hidden_edge_feats,
-                m.n_categories
+                m.n_categories,
+                c_dim=n_hidden_scalars # the dimensionality of the global condiitoning information is that of node scalars
             )
 
         if self.self_conditioning:
@@ -1397,11 +1399,11 @@ class EdgeUpdate(nn.Module):
         return edge_feats
 
 class CategoricalOutputHead(nn.Module):
-    def __init__(self, n_in, n_out):
+    def __init__(self, n_in, n_out, c_dim):
         super().__init__()
 
         self.norm = nn.LayerNorm(n_in, elementwise_affine=False)
-        self.adaln_params_mlp = adaln_module.ScalarAdaLN(n_in, 0)
+        self.adaln_params_mlp = adaln_module.ScalarAdaLN(c_dim, 0)
 
         self.mlp = nn.Sequential(
             nn.Linear(n_in, n_in),
