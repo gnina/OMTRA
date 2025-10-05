@@ -53,6 +53,8 @@ class AdaLNWeightGenerator(nn.Module):
         s_ratio: int = 1,
         v_ratio: int = 1,
         mlp_hidden: Optional[int] = None,
+        s_out_dim = None,
+        v_out_dim = None,
     ):
         super().__init__()
         if not hasattr(self, "spec"):
@@ -68,8 +70,16 @@ class AdaLNWeightGenerator(nn.Module):
         self.s_ratio = s_ratio
         self.v_ratio = v_ratio
 
-        n_s_gen = (scalar_size // s_ratio) if scalar_size > 0 else 0
-        n_v_gen = (vector_size // v_ratio) if vector_size > 0 else 0
+        if s_out_dim is not None:
+            assert s_out_dim % s_ratio == 0
+            n_s_gen = s_out_dim // s_ratio
+        else:
+            n_s_gen = (scalar_size // s_ratio) if scalar_size > 0 else 0
+        if v_out_dim is not None:
+            assert v_out_dim % v_ratio == 0
+            n_v_gen = v_out_dim // v_ratio
+        else:
+            n_v_gen = (vector_size // v_ratio) if vector_size > 0 else 0
         self._n_s_gen = n_s_gen
         self._n_v_gen = n_v_gen
 

@@ -1403,7 +1403,7 @@ class CategoricalOutputHead(nn.Module):
         super().__init__()
 
         self.norm = nn.LayerNorm(n_in, elementwise_affine=False)
-        self.adaln_params_mlp = adaln_module.ScalarAdaLN(c_dim, 0)
+        self.adaln_params_mlp = adaln_module.ScalarAdaLN(c_dim, 0, s_out_dim=n_in)
 
         self.mlp = nn.Sequential(
             nn.Linear(n_in, n_in),
