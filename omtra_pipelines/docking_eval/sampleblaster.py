@@ -76,7 +76,7 @@ def parse_args():
     parser.add_argument(
         '--additional_args', 
         type=str, 
-        default='--disable_gnina --disable_pb_valid --disable_rmsd --disable_strain',
+        default='--disable_gnina --disable_rmsd --disable_strain',
         help='Additional arguments to pass to docking_eval.py (default: --disable_gnina --disable_pb_valid --disable_rmsd)'
     )
     
@@ -115,6 +115,7 @@ def generate_commands(chunks, chunk_files, args):
     commands = []
 
     docking_eval_output_dir = args.output_dir / f'samples_{args.task}'
+    docking_eval_output_dir = docking_eval_output_dir.resolve()
     docking_eval_output_dir.mkdir(parents=True, exist_ok=True)
 
     for chunk_idx, chunk_file in enumerate(chunk_files):
@@ -133,7 +134,9 @@ def generate_commands(chunks, chunk_files, args):
                 f'--n_replicates={args.reps_per_cmd}',  # Each command handles 1 replicate
                 f'--n_samples={len(chunks[chunk_idx])}',  # Number of systems in this chunk
                 f'--bs_per_gbmem=5',  # Example fixed argument; adjust as needed
-                f'--output_dir={cmd_output_dir}'  # Output directory for this chunk and replicate
+                f'--output_dir={cmd_output_dir}',  # Output directory for this chunk and replicate
+                f'--plinder_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder',
+                f'--split=test'
             ]
             
             # Add additional arguments
@@ -141,9 +144,9 @@ def generate_commands(chunks, chunk_files, args):
                 cmd_parts.extend(args.additional_args.split())
             
             # Add replicate-specific output directory if multiple replicates
-            if args.n_replicates > 1:
-                output_suffix = f'_chunk{chunk_idx}_rep{replicate}'
-                cmd_parts.append(f'--output_dir=eval_output{output_suffix}')
+            # if args.n_replicates > 1:
+            #     output_suffix = f'_chunk{chunk_idx}_rep{replicate}'
+            #     cmd_parts.append(f'--output_dir=eval_output{output_suffix}')
             
             command = ' '.join(cmd_parts)
             commands.append(command)
