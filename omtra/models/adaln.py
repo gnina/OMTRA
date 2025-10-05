@@ -73,13 +73,17 @@ class AdaLNWeightGenerator(nn.Module):
         if s_out_dim is not None:
             assert s_out_dim % s_ratio == 0
             n_s_gen = s_out_dim // s_ratio
+            self.s_out_dim = s_out_dim
         else:
             n_s_gen = (scalar_size // s_ratio) if scalar_size > 0 else 0
+            self.s_out_dim = scalar_size
         if v_out_dim is not None:
             assert v_out_dim % v_ratio == 0
             n_v_gen = v_out_dim // v_ratio
+            self.v_out_dim = v_out_dim
         else:
             n_v_gen = (vector_size // v_ratio) if vector_size > 0 else 0
+            self.v_out_dim = vector_size
         self._n_s_gen = n_s_gen
         self._n_v_gen = n_v_gen
 
@@ -116,14 +120,14 @@ class AdaLNWeightGenerator(nn.Module):
         for part, ch in zip(s_parts, s_chunks):
             r = ch.ratio_override or self.s_ratio
             exp = part.repeat_interleave(r, dim=-1)  # -> [B, scalar_size]
-            if exp.shape[-1] != self.scalar_size:
+            if exp.shape[-1] != self.s_out_dim:
                 raise ValueError(f"{ch.key}: expanded {exp.shape[-1]} != scalar_size {self.scalar_size}")
             out[ch.key] = exp
 
         for part, ch in zip(v_parts, v_chunks):
             r = ch.ratio_override or self.v_ratio
             exp = part.repeat_interleave(r, dim=-1)  # -> [B, vector_size]
-            if exp.shape[-1] != self.vector_size:
+            if exp.shape[-1] != self.v_out_dim:
                 raise ValueError(f"{ch.key}: expanded {exp.shape[-1]} != vector_size {self.vector_size}")
             out[ch.key] = exp
 
