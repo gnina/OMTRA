@@ -1303,7 +1303,8 @@ class NodePositionUpdate(nn.Module):
                            adaln_params['s_shift'][batch_idxs], 
                            adaln_params['s_scale'][batch_idxs]
                            )
-        vectors = vectors * adaln_params['v_scale'][batch_idxs].unsqueeze(-1)
+        v_gate = adaln_params['v_gate'][batch_idxs].unsqueeze(-1) + 1
+        vectors = vectors * v_gate
 
         _, vector_updates = self.gvps((scalars, vectors))
         return positions + vector_updates.squeeze(1)
