@@ -83,7 +83,9 @@ def parse_args():
     metrics.add_argument("--disable_ground_truth_metrics", action="store_true", help='Disables all relevant metrics on the truth ligand.')
     metrics.add_argument('--disable_strain', action='store_true', help='Disables strain energy calculation.')
 
-    return p.parse_args()
+    args = p.parse_args()
+
+    return args
 
 
 def pb_valid(
@@ -905,7 +907,10 @@ def main(args):
     if args.samples_dir is None:
         
         model_ckpt = Path(args.ckpt_path)
-        output_dir = args.output_dir or model_ckpt.parent.parent / f"samples_{task_name}_{args.dataset}"
+        if args.output_dir is None:
+            output_dir = model_ckpt.parent.parent / f"samples_{task_name}_{args.dataset}"
+        else:
+            output_dir = args.output_dir 
         output_dir.mkdir(parents=True, exist_ok=True, mode=0o777)
 
         # Additional keyword arguments for special types of sampling
