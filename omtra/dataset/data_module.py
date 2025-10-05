@@ -27,6 +27,9 @@ class MultiTaskDataModule(pl.LightningDataModule):
         max_steps: int = None, 
         pin_memory: bool = True,
         fake_atom_p: float = 0.0,
+        val_reweight_param: float = 0.2,
+        val_check_interval: int = 1,
+        limit_val_batches: int = 1,
     ):
         super().__init__()
         self.dataset_config = dataset_config
@@ -38,6 +41,10 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self.max_steps = max_steps
         self.pin_memory = pin_memory
         self.fake_atom_p = fake_atom_p
+
+        self.val_reweight_param = val_reweight_param
+        self.val_check_interval = val_check_interval
+        self.limit_val_batches = limit_val_batches
 
 
         self.td_coupling: TaskDatasetCoupling = build_td_coupling(task_phases, dataset_task_coupling)
@@ -66,7 +73,15 @@ class MultiTaskDataModule(pl.LightningDataModule):
             p_uniform = mask.float() / mask.sum()
             p_dataset_task = torch.zeros_like(val_td_coupling.p_dataset_task)
             p_dataset_task = p_dataset_task + p_uniform.unsqueeze(0)
+
+            # interpolate between uniform and training coupling according to val_reweight_param
+            p_dataset_task = self.val_reweight_param*p_dataset_task + (1 - self.val_reweight_param)*val_td_coupling.p_dataset_task
             val_td_coupling.p_dataset_task = p_dataset_task
+
+            # adjust phase durations
+            val_td_coupling.phase_durations = val_td_coupling.phase_durations * self.limit_val_batches/(self.val_check_interval+int(self.val_check_interval==0))
+
+            
 
 
             # TODO: how exactly do we want to sample data for validation? we don't actually
