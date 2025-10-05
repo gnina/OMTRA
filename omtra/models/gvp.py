@@ -661,8 +661,8 @@ class HeteroGVPConv(nn.Module):
 
             # apply global-context gating to s_1, v_1
             # TODO: shouldn't use same gating for scalar and vecs
-            s_gate_msa = adaln_params['s_msa_gate'][node_batch_idxs[ntype]] + 1
-            v_gate_msa = adaln_params['v_msa_gate'][node_batch_idxs[ntype]].unsqueeze(-1) + 1
+            s_gate_msa = adaln_params['s_msa_gate'][node_batch_idxs[ntype]]
+            v_gate_msa = adaln_params['v_msa_gate'][node_batch_idxs[ntype]].unsqueeze(-1)
             s_1[ntype] = s_1[ntype] * s_gate_msa
             v_1[ntype] = v_1[ntype] * v_gate_msa
 
@@ -691,8 +691,8 @@ class HeteroGVPConv(nn.Module):
 
             # apply adaln gate for global context
             # TODO: need separate gate parameters for vector features! and node type?
-            s_ff_gate = adaln_params['s_ff_gate'][node_batch_idxs[ntype]] + 1
-            v_ff_gate = adaln_params['v_ff_gate'][node_batch_idxs[ntype]].unsqueeze(-1) + 1
+            s_ff_gate = adaln_params['s_ff_gate'][node_batch_idxs[ntype]]
+            v_ff_gate = adaln_params['v_ff_gate'][node_batch_idxs[ntype]].unsqueeze(-1)
             s_2[ntype] = s_2[ntype] * s_ff_gate
             v_2[ntype] = v_2[ntype] * v_ff_gate
 
