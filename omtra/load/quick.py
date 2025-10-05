@@ -64,6 +64,8 @@ def datamodule_from_config(cfg: DictConfig, **kwargs) -> MultiTaskDataModule:
     # load data module
     datamodule: MultiTaskDataModule = hydra.utils.instantiate(
         cfg.task_group.datamodule, 
+        val_check_interval=cfg.trainer.val_check_interval,
+        limit_val_batches=cfg.trainer.limit_val_batches,
         **kwargs,
     )
 
