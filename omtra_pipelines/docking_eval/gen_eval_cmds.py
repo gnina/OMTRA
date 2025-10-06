@@ -23,6 +23,12 @@ def parse_args():
         help="Default number of samples if not specified in config"
     )
     parser.add_argument(
+        "--sample_only",
+        type=bool,
+        default=False,
+        help="Only sample the system. Do not compute metrics."
+    )
+    parser.add_argument(
         "--sys_idx_file",
         type=Path,
         default=None,
@@ -75,6 +81,11 @@ def parse_args():
         default=None, 
         help='Index to start sampling from'
     )
+    parser.add_argument('--batch_size', 
+        type=int, 
+        default=None, 
+        help='Process in batches of size batch_size'
+    )
     parser.add_argument('--split', 
         type=str, 
         default='test', 
@@ -90,7 +101,11 @@ def parse_args():
         default=2700, 
         help='Amount of time in seconds to wait before timing out eval metric.'
     )
-    
+    parser.add_argument('--eval_output_dir', 
+        type=str, 
+        default=None, 
+        help='Output directory for the docking eval script.'
+    )
     return parser.parse_args()
 
 
@@ -161,9 +176,15 @@ def load_config(config_file: Path) -> List[Dict[str, Any]]:
     return config
 
 def add_if_not_none(cmd_parts, flag, value):
-    """Helper: only add flag and value if not None."""
+    """ Only add flag and value if not None. """
     if value is not None:
         cmd_parts.extend([flag, str(value)])
+    return cmd_parts
+
+def add_flag(cmd_parts, flag, value):
+    """ Only add flag if not None."""
+    if value == True:
+        cmd_parts.append(flag)
     return cmd_parts
 
 def generate_commands(
@@ -183,6 +204,7 @@ def generate_commands(
         tasks = item['tasks']
         
         # Get optional parameters with defaults
+        sample_only =  item.get('sample_only', args.sample_only)
         n_samples = item.get('n_samples', args.default_n_samples)
         n_replicates = item.get('n_replicates', args.default_n_replicates)
         dataset = item.get('dataset', args.default_dataset)
@@ -191,7 +213,13 @@ def generate_commands(
         max_batch_size = item.get('max_batch_size', args.max_batch_size)
         timeout = item.get('timeout', args.timeout)
         sys_idx_file = item.get('sys_idx_file', args.sys_idx_file)
+        eval_output_dir = item.get('eval_output_dir', args.eval_output_dir)
+        crossdocked_path = item.get('crossdocked_path', args.crossdocked_path)
+
+        batch_size =  item.get('batch_size', args.batch_size)
         
+        if batch_size is not None:
+            batches = [(start, min(batch_size, n_samples - start)) for start in range(0, n_samples, batch_size)]
 
         if samples_dir is None:
             try:
@@ -202,47 +230,94 @@ def generate_commands(
         
             # Generate one command per task for this model
             for task in tasks:
-                cmd_parts = [
-                    "python", str(args.sample_script_path),
-                    "--ckpt_path", str(checkpoint_path),
-                    "--task", task,
-                    "--dataset", dataset,
-                    "--split", str(split),
-                    "--n_samples", str(n_samples),
-                    "--n_replicates", str(n_replicates),
-                    "--plinder_path", str(args.plinder_path),
-                    "--crossdocked_path", str(args.crossdocked_path),
-                    "--max_batch_size", str(max_batch_size),
-                    "--timeout", str(timeout),
-                ]
 
-                add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
-                add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
-                
-                commands.append(" ".join(cmd_parts))
+                if batch_size is None:
+                    cmd_parts = [
+                        "python", str(args.sample_script_path),
+                        "--ckpt_path", str(checkpoint_path),
+                        "--task", task,
+                        "--dataset", dataset,
+                        "--split", str(split),
+                        "--n_samples", str(n_samples),
+                        "--n_replicates", str(n_replicates),
+                        "--plinder_path", str(args.plinder_path),
+                        "--crossdocked_path", str(crossdocked_path),
+                        "--max_batch_size", str(max_batch_size),
+                        "--timeout", str(timeout),
+                    ]
+
+                    add_flag(cmd_parts, "--sample_only", sample_only)
+                    add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
+                    add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
+                    add_if_not_none(cmd_parts, "--output_dir", eval_output_dir)
+                    
+                    commands.append(" ".join(cmd_parts))
+                else:
+                    for batch in batches:
+                        cmd_parts = [
+                            "python", str(args.sample_script_path),
+                            "--ckpt_path", str(checkpoint_path),
+                            "--task", task,
+                            "--dataset", dataset,
+                            "--split", str(split),
+                            "--sample_start_idx", str(batch[0]),
+                            "--n_samples", str(batch[1]),
+                            "--n_replicates", str(n_replicates),
+                            "--plinder_path", str(args.plinder_path),
+                            "--crossdocked_path", str(crossdocked_path),
+                            "--max_batch_size", str(max_batch_size),
+                            "--timeout", str(timeout),
+                        ]
+
+                        add_flag(cmd_parts, "--sample_only", sample_only)
+                        add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
+                        add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
+                        add_if_not_none(cmd_parts, "--output_dir", eval_output_dir)
+                        
+                        commands.append(" ".join(cmd_parts))
         else:
             # Generate one command per task for this model
             for task in tasks:
-                cmd_parts = [
-                    "python", str(args.sample_script_path),
-                    "--samples_dir", str(samples_dir),
-                    "--task", task,
-                    "--dataset", dataset,
-                    "--split", str(split),
-                    "--n_samples", str(n_samples),
-                    "--n_replicates", str(n_replicates),
-                    "--plinder_path", str(args.plinder_path),
-                    "--crossdocked_path", str(args.crossdocked_path),
-                    "--dataset_start_idx", str(dataset_start_idx),
-                    "--sys_idx_file", str(sys_idx_file),
-                    "--max_batch_size", str(max_batch_size),
-                    "--timeout", str(timeout),
-                ]
+                if batch_size is None:
+                    cmd_parts = [
+                        "python", str(args.sample_script_path),
+                        "--samples_dir", str(samples_dir),
+                        "--task", task,
+                        "--dataset", dataset,
+                        "--split", str(split),
+                        "--n_samples", str(n_samples),
+                        "--n_replicates", str(n_replicates),
+                        "--plinder_path", str(args.plinder_path),
+                        "--crossdocked_path", str(crossdocked_path),
+                        "--max_batch_size", str(max_batch_size),
+                        "--timeout", str(timeout),
+                    ]
 
-                add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
-                add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
-                
-                commands.append(" ".join(cmd_parts))
+                    add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
+                    add_if_not_none(cmd_parts, "--output_dir", eval_output_dir)
+                    
+                    commands.append(" ".join(cmd_parts))
+                else:
+                    for batch in batches:
+                        cmd_parts = [
+                            "python", str(args.sample_script_path),
+                            "--samples_dir", str(samples_dir),
+                            "--task", task,
+                            "--dataset", dataset,
+                            "--split", str(split),
+                            "--sample_start_idx", str(batch[0]),
+                            "--n_samples", str(batch[1]),
+                            "--n_replicates", str(n_replicates),
+                            "--plinder_path", str(args.plinder_path),
+                            "--crossdocked_path", str(crossdocked_path),
+                            "--max_batch_size", str(max_batch_size),
+                            "--timeout", str(timeout),
+                        ]
+
+                        add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
+                        add_if_not_none(cmd_parts, "--output_dir", eval_output_dir)
+                        
+                        commands.append(" ".join(cmd_parts))
 
     
     return commands
