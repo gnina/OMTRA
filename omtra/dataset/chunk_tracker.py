@@ -72,7 +72,8 @@ class GraphChunkTracker:
 def adaptive_batch_loader(
     nodes_per_graph: torch.Tensor,
     max_nodes: int,
-    pskip: Optional[torch.Tensor] = None
+    pskip: Optional[torch.Tensor] = None,
+    depth=0
 ) -> torch.Tensor:
     """
     Selects a *prefix* of a random permutation of graph-indices whose cumulative
@@ -137,8 +138,11 @@ def adaptive_batch_loader(
         n_graphs_not_rejected = (~skip_mask_perm).sum().item()
         n_graphs_selected = valid_positions.shape[0]
         rejection_limited = n_graphs_not_rejected == n_graphs_selected
-        if rejection_limited:
-            return adaptive_batch_loader(nodes_per_graph, max_nodes, pskip=0.97*pskip)
+        if rejection_limited and depth < 30:
+            return adaptive_batch_loader(nodes_per_graph, max_nodes, pskip=0.97*pskip, depth=depth+1)
+        
+    if depth >= 30:
+        print(f"Warning: adaptive_batch_loader reached max recursion depth. {capacity_utilization=}, {n_nodes_selected=}, {max_nodes=}", flush=True)
 
     # 7) return the corresponding original indices
     return perm[valid_positions]
