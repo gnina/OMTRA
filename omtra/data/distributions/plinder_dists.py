@@ -91,7 +91,6 @@ def plinder_n_nodes_dist_smoothed(sigma=(3.0, 3.0, 3.0), mode='constant'):
     return raw_output
 
 def sample_n_lig_atoms_plinder(n_prot_atoms: torch.Tensor = None, n_pharms: torch.Tensor = None, n_samples: int = None) -> torch.Tensor:
-
     joint_dist = plinder_n_nodes_dist_smoothed()
     var_order = joint_dist['var_order']
     supports = joint_dist['supports']
@@ -132,7 +131,7 @@ def sample_n_lig_atoms_plinder(n_prot_atoms: torch.Tensor = None, n_pharms: torc
                  raise ValueError("n_pharms must be in the support of the distribution")
 
             # vectorized masking
-            mask_cols = torch.arange(p.shape[1]).unsqueeze(0) # (1, n_pharms_support)
+            mask_cols = torch.arange(p.shape[2]).unsqueeze(0) # (1, n_pharms_support)
             mask = mask_cols >= n_pharms_idxs.unsqueeze(1)  # (n_samples, n_pharms_support)
             mask = mask.unsqueeze(1).expand(-1, p.shape[1], -1)     # expand to match ligand atoms dimension: (n_samples, n_ligand_atoms_support, n_pharms_support)
             

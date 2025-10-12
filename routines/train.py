@@ -20,6 +20,15 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities import rank_zero_only
 from pytorch_lightning.strategies import DDPStrategy
 
+from rdkit import RDLogger
+
+# Disable all standard RDKit logs
+RDLogger.DisableLog('rdApp.*')
+
+# Also silence everything below CRITICAL
+lg = RDLogger.logger()
+lg.setLevel(RDLogger.CRITICAL)
+
 multiprocessing.set_start_method('spawn', force=True)
 mp.set_start_method("spawn", force=True)
 

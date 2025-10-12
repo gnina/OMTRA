@@ -20,17 +20,16 @@ import torch
 
 types_file_dir ="/net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types"
 root_dir = "/net/galaxy/home/koes/paf46_shared/cd2020_v1.3"
-train_zarr_output_dir = "train_external_output.zarr"
-test_zarr_output_dir = "test_external_output.zarr"
+zarr_output_dir = "test_external_output.zarr" #these are not used
 
 #load the file
-data = torch.load('crossdocked_external_splits/split_by_name.pt')
+data = torch.load('/net/galaxy/home/koes/jmgupta/omtra_2/omtra_pipelines/crossdocked_dataset/crossdocked_external_splits/split_by_name.pt')
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Test Crossdocked dataset processing")
+    parser.add_argument("--cd_directory", type=str, default=types_file_dir, help="Crossdocked types file directory")
     parser.add_argument("--pocket_cutoff", type=float, default=8.0, help="Pocket cutoff distance")
-    parser.add_argument("--train_zarr_output_dir", type=str, default=train_zarr_output_dir, help="Output Zarr directory for training")
-    parser.add_argument("--test_zarr_output_dir", type=str, default=test_zarr_output_dir, help="Output Zarr directory for testing")
+    parser.add_argument("--zarr_output_dir", type=str, default=zarr_output_dir, help="Output Zarr directory for testing")
     parser.add_argument("--root_dir", type=str, default=root_dir, help="Root directory for crossdocked data")
 
     parser.add_argument("--max_batches", type=str, default="None", help="Maximum number of batches to process")
@@ -48,12 +47,12 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    output_dir = Path(args.zarr_output_dir)
 
     # # Create converters
-    converter_train = CrossdockedNoLinksZarrConverter(output_path=args.train_zarr_output_dir, num_workers=args.n_cpus)
-    converter_test = CrossdockedNoLinksZarrConverter(output_path=args.test_zarr_output_dir, num_workers=args.n_cpus)
+    converter_train = CrossdockedNoLinksZarrConverter(output_path=str(output_dir / f"train.zarr"), num_workers=args.n_cpus)
+    converter_test = CrossdockedNoLinksZarrConverter(output_path=str(output_dir / f"val.zarr"), num_workers=args.n_cpus)
 
-    
     batches_train= converter_train.get_ligand_receptor_batches_external(
     data=data["train"],
     root_dir=args.root_dir,

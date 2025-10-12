@@ -11,6 +11,7 @@ from omtra.utils.graph import g_local_scope
 from omtra.tasks.tasks import Task
 from omtra.tasks.modalities import name_to_modality
 from omtra.models.gvp import _norm_no_nan
+import torch.nn.functional as F
 
 @register_aux_loss(name='prot_lig_pairdist')
 class ProtLigDist(nn.Module):
@@ -18,15 +19,13 @@ class ProtLigDist(nn.Module):
     # TODO: a better engineer would define a general pairwise distance class that operated across any arbitrary edge type
     # and then perhaps define separate pair distance classes as child class of this general one
 
-    def __init__(self, time_scaled_loss:bool, weight=1.0, d_max=4.5):
+    def __init__(self, 
+                 weight=1.0, 
+                 d_max=4.5
+        ):
         super().__init__()
         self.weight = weight
         self.d_max = d_max
-        self.time_scaled_loss = time_scaled_loss
-
-        self.mse_fn = nn.MSELoss(
-            reduction='none' if time_scaled_loss else 'mean'
-        )
 
     @g_local_scope
     def forward(self, 
@@ -79,10 +78,11 @@ class ProtLigDist(nn.Module):
         dij_true = _norm_no_nan(x_diff_true)
 
         # TODO: what about time-dependent weighting? 
+        time_scaled_loss = time_weights is not None
+        reduction = 'none' if time_scaled_loss else 'mean'
+        loss = F.mse_loss(dij_gen, dij_true, reduction=reduction)
 
-        loss = self.mse_fn(dij_gen, dij_true)
-
-        if self.time_scaled_loss:
+        if time_scaled_loss:
             # time_weights is a tensor of shape (batch_size,) containing the weight that needs to be applied to each graph in the batch
             # so we have to expand this out to the pairs on which this loss is being taken
             # i.e., for each pair of atoms (for each edge) - which batch item does it belong to?
@@ -107,15 +107,13 @@ class LigPairLoss(nn.Module):
     and the ground-truth ligand structure.
     """
 
-    def __init__(self, time_scaled_loss: bool, d_max: float = 4.0, weight: float = 1.0):
+    def __init__(self, 
+                 d_max: float = 4.0, 
+                 weight: float = 1.0):
         super().__init__()
         self.d_max = d_max
         self.weight = weight
-        self.time_scaled_loss = time_scaled_loss
 
-        self.mse_fn = nn.MSELoss(
-            reduction='none' if time_scaled_loss else 'mean'
-        )
 
     def forward(self, 
                 g: dgl.DGLHeteroGraph, 
@@ -150,9 +148,13 @@ class LigPairLoss(nn.Module):
         x_diff_gen = x_1_pred[src_idxs[d_mask]] - x_1_pred[dst_idxs[d_mask]]
         dij_pred = _norm_no_nan(x_diff_gen)
 
-        loss = self.mse_fn(dij_pred, dij_true)
+        disable_pair_loss = 'protein_identity' not in task.groups_present
 
-        if self.time_scaled_loss:
+        time_scaled_loss = time_weights is not None and not disable_pair_loss
+        reduction = 'none' if time_scaled_loss else 'mean'
+        loss = F.mse_loss(dij_pred, dij_true, reduction=reduction)
+
+        if time_scaled_loss:
             # time_weights is a tensor of shape (batch_size,) containing the weight that needs to be applied to each batch item
             # so we have to expand this out to the pairs on which this loss is being taken
             # i.e., for each pair of atoms (for each edge) - which batch item does it belong to?
@@ -166,4 +168,4 @@ class LigPairLoss(nn.Module):
         """
         Check if this auxiliary loss supports the given task.
         """
-        return 'ligand_identity' in task.groups_present
+        return 'ligand_identity' in task.groups_present or 'ligand_identity_condensed' in task.groups_present

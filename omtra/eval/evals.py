@@ -24,7 +24,14 @@ from omtra.utils import omtra_root
 import yaml
 from rdkit import Chem
 
+from rdkit import RDLogger
 
+# Disable all standard RDKit logs
+RDLogger.DisableLog('rdApp.*')
+
+# Also silence everything below CRITICAL
+lg = RDLogger.logger()
+lg.setLevel(RDLogger.CRITICAL)
 
 @register_eval("validity")
 def validity(

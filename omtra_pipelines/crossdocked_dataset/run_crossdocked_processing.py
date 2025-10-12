@@ -25,6 +25,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="zarr.codecs.vlen
 types_file_dir = "/net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types"
 root_dir = "/net/galaxy/home/koes/paf46_shared/cd2020_v1.3"
 zarr_output_dir = "test_output.zarr" #this is not used for the multiple types files
+test_types_file = "test.types"
 
 types_files_pairs = [("it2_tt_v1.3_0_train0.types", "it2_tt_v1.3_0_test0.types"),
         ("it2_tt_v1.3_0_train1.types", "it2_tt_v1.3_0_test1.types"),
@@ -57,9 +58,10 @@ if __name__ == "__main__":
     
     '''
     ################### ONE TYPES FILE ######################
-    types_file_path = os.path.join(args.root_dir, 'types', args.types_file)
+    types_file_path = "/net/galaxy/home/koes/jmgupta/omtra_2/omtra_pipelines/crossdocked_dataset/test_types_file.types"
     # # Create converter
-    converter = CrossdockedNoLinksZarrConverter(output_path=args.zarr_output_dir, num_workers=args.n_cpus)
+    output_dir = (args.zarr_output_dir)
+    converter = CrossdockedNoLinksZarrConverter(output_path=os.path.join(args.zarr_output_dir, "test.zarr"), num_workers=args.n_cpus)
 
     batches = converter.get_ligand_receptor_batches_types(
     types_file=types_file_path,
@@ -68,11 +70,10 @@ if __name__ == "__main__":
     max_num_batches= args.max_batches
     )
 
-    converter.process_dataset_parallel(
+    converter.process_dataset_serial(
         batches=batches,
         pocket_cutoff=args.pocket_cutoff,
-        n_cpus=args.n_cpus,           
-        max_pending=args.max_pending,
+        n_cpus=1,           
     )
     '''
     cd_directory = Path(args.cd_directory)

@@ -63,7 +63,7 @@ class PlinderDataset(ZarrDataset):
         # this is a parmaeter that controls whether/how we do weighted sampling of the the dataset
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
         res_id_embed_dim: int = 64,
-        max_pharms_sampled: int = 6
+        max_pharms_sampled: int = 8,
     ):
         super().__init__(
             split,
@@ -1005,16 +1005,17 @@ class PlinderDataset(ZarrDataset):
             graph_config=self.graph_config,
         )
 
-        # standardize residue ids (ensure all residue ids start at 0 across chains)
-        # node_data contains chain_ds, and prot_res_ids
-        prot_res_ids = node_data["prot_atom"]["res_id"] #starting indices 
-        prot_chain_ids = node_data["prot_atom"]["chain_id"] # protein chain ids
-        residue_idxs = self.standardize_residue_ids(prot_res_ids, prot_chain_ids)
-        # create protein position embeddings
-        protein_position_encodings = residue_sinusoidal_encoding(residue_idxs, self.res_id_embed_dim)
-        
-        # Add the position embeddings to the graph's protein atom nodes
-        g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
+        if include_protein:
+            # standardize residue ids (ensure all residue ids start at 0 across chains)
+            # node_data contains chain_ds, and prot_res_ids
+            prot_res_ids = node_data["prot_atom"]["res_id"] #starting indices 
+            prot_chain_ids = node_data["prot_atom"]["chain_id"] # protein chain ids
+            residue_idxs = self.standardize_residue_ids(prot_res_ids, prot_chain_ids)
+            # create protein position embeddings
+            protein_position_encodings = residue_sinusoidal_encoding(residue_idxs, self.res_id_embed_dim)
+            
+            # Add the position embeddings to the graph's protein atom nodes
+            g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
 
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)
@@ -1116,14 +1117,16 @@ class PlinderDataset(ZarrDataset):
                     counts.append(npnde_count)
                 counts = np.array(counts)
             elif ntype == "pharm":
-                counts = np.array(
-                    [
-                        row["pharm_end"] - row["pharm_start"]
-                        for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
-                            "records"
-                        )
-                    ]
-                )
+                counts = []
+                
+                for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
+                    "records"
+                ):
+                    n_gt_pharms = row["pharm_end"] - row["pharm_start"]
+                    expected_n_pharms = int(round(min(self.max_pharms_sampled, n_gt_pharms) / 2))   # we sample between 1 and max_pharms_sampled pharmacophores, so (1+max_pharms_sampled)/2 pharms in expectation
+                    counts.append(expected_n_pharms)
+
+                counts = np.array(counts)
 
             node_counts.append(counts)
 

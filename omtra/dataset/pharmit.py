@@ -28,7 +28,7 @@ class PharmitDataset(ZarrDataset):
                  graph_config: DictConfig,
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
-                 max_pharms_sampled: int = 6,
+                 max_pharms_sampled: int = 8,
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
@@ -274,6 +274,8 @@ class PharmitDataset(ZarrDataset):
             if ntype == 'lig' and self.use_fake_atoms:
                 mean_fake_atoms = self.fake_atom_p/2 * ntype_node_counts
                 ntype_node_counts = ntype_node_counts + mean_fake_atoms.astype(int)
+            elif ntype == 'pharm':
+                ntype_node_counts = np.round(np.minimum(self.max_pharms_sampled, ntype_node_counts) / 2).astype(int)  # we sample between 1 and max_pharms_sampled pharmacophores, so (1+max_pharms_sampled)/2 pharms in expectation
             node_counts.append(ntype_node_counts)
 
         if per_ntype:

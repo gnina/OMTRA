@@ -8,10 +8,6 @@ denovo_ligand:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -30,10 +26,6 @@ denovo_ligand_extra_feats:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -52,10 +44,6 @@ denovo_ligand_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -74,10 +62,6 @@ denovo_ligand_from_pharmacophore_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -97,10 +81,6 @@ ligand_conformer:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -120,10 +100,6 @@ ligand_conformer_extra_feats:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -143,10 +119,6 @@ ligand_conformer_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -166,10 +138,6 @@ ligand_conformer_from_pharmacophore_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -193,10 +161,6 @@ rigid_docking:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -220,10 +184,6 @@ rigid_docking_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -240,6 +200,10 @@ rigid_docking_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 rigid_docking_extra_feats:
   - stability:
       train: true
@@ -247,10 +211,6 @@ rigid_docking_extra_feats:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -274,10 +234,6 @@ flexible_docking:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -301,10 +257,6 @@ flexible_docking_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -321,6 +273,10 @@ flexible_docking_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 flexible_docking_extra_feats:
   - stability:
       train: true
@@ -328,10 +284,6 @@ flexible_docking_extra_feats:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -355,10 +307,6 @@ expapo_conditioned_ligand_docking:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -382,10 +330,6 @@ expapo_conditioned_ligand_docking_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -409,10 +353,6 @@ predapo_conditioned_ligand_docking:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -436,10 +376,6 @@ predapo_conditioned_ligand_docking_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -466,10 +402,6 @@ protein_ligand_denovo:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -492,10 +424,6 @@ protein_ligand_denovo_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -508,6 +436,10 @@ protein_ligand_denovo_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 protein_ligand_denovo_extra_feats:
   - validity:
       train: true
@@ -518,10 +450,6 @@ protein_ligand_denovo_extra_feats:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -544,10 +472,6 @@ fixed_protein_ligand_denovo:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -570,10 +494,6 @@ fixed_protein_ligand_denovo_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -586,6 +506,10 @@ fixed_protein_ligand_denovo_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 fixed_protein_ligand_denovo_extra_feats:
   - validity:
       train: true
@@ -596,10 +520,6 @@ fixed_protein_ligand_denovo_extra_feats:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -622,10 +542,6 @@ exp_apo_conditioned_denovo_ligand:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -648,10 +564,6 @@ exp_apo_conditioned_denovo_ligand_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -674,10 +586,6 @@ pred_apo_conditioned_denovo_ligand:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -700,10 +608,6 @@ pred_apo_conditioned_denovo_ligand_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -723,10 +627,6 @@ rigid_docking_pharmacophore_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -747,6 +647,10 @@ rigid_docking_pharmacophore_condensed:
       train: true
       params:
         threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 fixed_protein_pharmacophore_ligand_denovo_condensed:
   - validity:
       train: true
@@ -757,10 +661,6 @@ fixed_protein_pharmacophore_ligand_denovo_condensed:
   - reos_and_rings:
       train: true
       params: {}
-  - geometry:
-      train: true
-      params:
-        ignore_hydrogens: true
   - flatness:
       train: true
       params:
@@ -777,4 +677,8 @@ fixed_protein_pharmacophore_ligand_denovo_condensed:
       train: true
       params:
         threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
   

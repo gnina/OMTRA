@@ -3,7 +3,7 @@ import torch.nn.functional as fn
 import torch.nn as nn
 import pytorch_lightning as pl
 import dgl
-from typing import Dict, List, Callable, Tuple, Optional
+from typing import Dict, List, Callable, Tuple, Optional, Union
 from collections import defaultdict
 import wandb
 import itertools
@@ -48,6 +48,7 @@ from omtra.priors.sample import sample_priors
 from omtra.eval.register import get_eval
 from omtra.eval.utils import add_task_prefix
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
+import traceback
 
 # from line_profiler import profile
 
@@ -77,6 +78,8 @@ class OMTRA(pl.LightningModule):
         t_alpha: float = 1.8,
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
+        pharm_var: float = 0.0,
+
     ):
         super().__init__()
 
@@ -97,6 +100,7 @@ class OMTRA(pl.LightningModule):
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
+        self.pharm_var = pharm_var
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -164,7 +168,9 @@ class OMTRA(pl.LightningModule):
 
         self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
 
-        self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0)
+        # TODO: don't hard-code crossdocked inclusion
+        include_crossdocked = 'crossdocked' in self.td_coupling.dataset_space
+        self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0, include_crossdocked=include_crossdocked)
 
         # configure train t distribution 
         if train_t_dist == 'uniform':
@@ -254,7 +260,6 @@ class OMTRA(pl.LightningModule):
         for aux_loss_name, aux_loss_cfg in self.aux_loss_cfg.items():
             aux_loss_class = aux_loss_name_to_class(aux_loss_name)
             self.aux_loss_fn_dict[aux_loss_name] = aux_loss_class(
-                time_scaled_loss=self.time_scaled_loss,
                 **aux_loss_cfg.get('params', {})
             )
 
@@ -349,7 +354,14 @@ class OMTRA(pl.LightningModule):
                 if not config.get("train", False):
                     continue
                 eval_fn = get_eval(eval_name)
-                metrics.update(eval_fn(samples, config.get("params", {})))
+                try:
+                    eval_output = eval_fn(samples, config.get("params", {}))
+                except Exception as e:
+                    print(f"WARNING: error occurred while evaluating {eval_name} for task {task_name}")
+                    traceback.print_exc()
+                    print(f"Full error details for {eval_name}: {str(e)}")
+                    continue
+                metrics.update(eval_output)
         
         if metrics:
             metrics = add_task_prefix(metrics, task_name)
@@ -385,6 +397,10 @@ class OMTRA(pl.LightningModule):
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
             distort_mask = distort_mask & t_mask.unsqueeze(-1)
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
+        
+        # add noise to pharmacophore coordinates
+        if self.pharm_var > 0.0:
+            g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**0.5
 
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
@@ -416,16 +432,15 @@ class OMTRA(pl.LightningModule):
                 target[xt_idxs != n_categories] = -100
             targets[modality.name] = target
 
+        # determine if we need to disable time-scale our losses
+        disable_time_scaled_loss = self.time_scaled_loss and ('protein_identity' not in task_class.groups_present)
+
         # get weights for time-scaled losses
         if self.time_scaled_loss:
-            weights = 1.0 / ((1.0 - t).clamp(min=1e-6)) ** 2    # clamp to avoid division by 0 error
-            weights = torch.clamp(weights, max=100.0)
-
-            time_weights = {}
-            for modality in task_class.modalities_generated:
-                time_weights[modality.name] = weights
+            t_weights = 1.0 / ((1.0 - t).clamp(min=1e-6)) ** 2    # clamp to avoid division by 0 error
+            t_weights = torch.clamp(t_weights, max=100.0)
         else:
-            weights = None
+            t_weights = None
 
         # compute all flow matching losses
         losses = {}
@@ -433,32 +448,43 @@ class OMTRA(pl.LightningModule):
             is_categorical = modality.is_categorical
 
             if self.time_scaled_loss:
-                weight = time_weights[modality.name]
+                mod_weight = t_weights
 
                 if is_categorical:
-                    weight = weight * self.cat_loss_weight
+                    mod_weight = mod_weight * self.cat_loss_weight
 
                 if modality.graph_entity == "edge":
-                    weight = weight[edge_batch_idxs[modality.entity_name]][
+                    mod_weight = mod_weight[edge_batch_idxs[modality.entity_name]][
                         upper_edge_mask[modality.entity_name]
                     ]
                 else:
-                    weight = weight[node_batch_idxs[modality.entity_name]]
-                weight = weight.unsqueeze(-1)
+                    mod_weight = mod_weight[node_batch_idxs[modality.entity_name]]
+                mod_weight = mod_weight.unsqueeze(-1)
 
             elif is_categorical:
-                weight = self.cat_loss_weight
+                mod_weight = self.cat_loss_weight
             else:
-                weight = 1.0
+                mod_weight = 1.0
 
+
+            inp = vf_output[modality.name]
             target = targets[modality.name]
+
+            # skip loss if there are no nodes of this type
             if modality.is_node and g.num_nodes(modality.entity_name) == 0:
                 losses[modality.name] = torch.tensor(0.0, device=g.device)
                 continue
-            losses[modality.name] = (
-                self.loss_fn_dict[modality.name](vf_output[modality.name], target)
-                * weight
-            )
+
+            if disable_time_scaled_loss and modality.is_categorical:
+                mod_loss = fn.cross_entropy(
+                    inp, target, reduction="mean", ignore_index=-100
+                )
+            elif disable_time_scaled_loss and not modality.is_categorical:
+                mod_loss = fn.mse_loss(inp, target, reduction="mean")
+            else:
+                mod_loss = self.loss_fn_dict[modality.name](inp, target)
+
+            losses[modality.name] = mod_loss
             if self.time_scaled_loss:
                 losses[modality.name] = losses[modality.name].mean()
 
@@ -472,7 +498,7 @@ class OMTRA(pl.LightningModule):
                 task_class, 
                 node_batch_idxs,
                 lig_ue_mask,
-                time_weights=weights
+                time_weights=None if disable_time_scaled_loss else t_weights
                 )
             if self.time_scaled_loss:
                 aux_loss = aux_loss.mean()
@@ -562,7 +588,13 @@ class OMTRA(pl.LightningModule):
         device: Optional[torch.device] = None,
         visualize=False,
         extract_latents_for_confidence=False,
-        time_spacing: str = "even"
+        time_spacing: str = "even",
+        stochastic_sampling: bool = False,
+        noise_scaler: float = 1.0,
+        eps: float = 0.01,
+        # use_gt_n_lig_atoms: bool = False,
+        n_lig_atom_margin: Union[float, None] = None,
+
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -579,6 +611,8 @@ class OMTRA(pl.LightningModule):
 
         if unconditional_n_atoms_dist is None:
             unconditional_n_atoms_dist = self.infer_n_atoms_dist(task)
+
+        use_gt_n_lig_atoms = n_lig_atom_margin is not None
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
@@ -620,17 +654,52 @@ class OMTRA(pl.LightningModule):
 
         # TODO: sample number of ligand atoms
         add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"])
+
+        # find number of fake atoms added to each system by the dataset class
+        
+        if add_ligand and use_gt_n_lig_atoms and self.fake_atom_p > 0.0:
+            n_fake_atoms_gt = []
+            for g in g_flat:
+                if 'cond_a_1_true' not in g.nodes['lig'].data:
+                    raise NotImplementedError('expected there to be a ground-truth ligand, and expected condensed atom types to be used')
+
+                n_fake_atoms_gt.append(
+                    (g.nodes['lig'].data['cond_a_1_true'] == self.cond_a_typer.fake_atom_idx).sum().item()
+                )
+            n_fake_atoms_gt = torch.tensor(n_fake_atoms_gt)
+        else:
+            n_fake_atoms_gt = torch.zeros(len(g_flat), dtype=torch.long)
+
+        
         if protein_present and add_ligand:
             n_prot_atoms = torch.tensor([g.num_nodes("prot_atom") for g in g_flat])
             if "pharmacophore" in groups_fixed:
                 n_pharms = torch.tensor([g.num_nodes("pharm") for g in g_flat])
             else:
                 n_pharms = None
-            n_lig_atoms = sample_n_lig_atoms_plinder(
-                n_prot_atoms=n_prot_atoms, n_pharms=n_pharms
-            )
-            # if protein is present, sample ligand atoms from p(n_ligand_atoms|n_protein_atoms,n_pharm_atoms)
-            # if pharm atoms not present, we marginalize over n_pharm_atoms - this distribution from plinder dataset
+            
+            # use ground truth number of lig atoms
+            if use_gt_n_lig_atoms:
+
+                base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
+                base_n_atoms = base_n_atoms - n_fake_atoms_gt
+                max_margins = torch.clamp(base_n_atoms * n_lig_atom_margin, min=0).int()
+                margins = torch.stack([
+                    torch.randint(0, int(m.item()) + 1, (1,))
+                    for m in max_margins
+                    ]).squeeze()
+                offset_sign = torch.randint(0, 2, (len(g_flat),)) * 2 - 1
+                random_offsets = margins * offset_sign
+                n_lig_atoms = base_n_atoms + random_offsets
+                n_lig_atoms = torch.clamp(n_lig_atoms, min=4)
+            
+            else:
+                n_lig_atoms = sample_n_lig_atoms_plinder(
+                    n_prot_atoms=n_prot_atoms, n_pharms=n_pharms
+                )
+
+        # if protein is present, sample ligand atoms from p(n_ligand_atoms|n_protein_atoms,n_pharm_atoms)
+        # if pharm atoms not present, we marginalize over n_pharm_atoms - this distribution from plinder dataset
         elif not protein_present and add_ligand:
             if "pharmacophore" in groups_fixed:
                 n_pharms = torch.tensor([g.num_nodes("pharm") for g in g_flat])
@@ -639,7 +708,18 @@ class OMTRA(pl.LightningModule):
                 n_pharms = None
                 n_samples = len(g_flat)
 
-            if unconditional_n_atoms_dist == "plinder":
+            # use ground truth number of lig atoms
+            if use_gt_n_lig_atoms:
+                base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
+                base_n_atoms = base_n_atoms - n_fake_atoms_gt
+                margins = torch.clamp(base_n_atoms * n_lig_atom_margin, min=1).int()
+                random_offsets = torch.randint(-margins.max(), margins.max() + 1, (len(g_flat),))
+                # Clamp the offsets to respect per-sample margins
+                random_offsets = torch.clamp(random_offsets, -margins, margins)
+                n_lig_atoms = base_n_atoms + random_offsets
+                n_lig_atoms = torch.clamp(n_lig_atoms, min=4)
+
+            elif unconditional_n_atoms_dist == "plinder":
                 n_lig_atoms = sample_n_lig_atoms_plinder(
                     n_pharms=n_pharms, n_samples=n_samples
                 )
@@ -654,7 +734,7 @@ class OMTRA(pl.LightningModule):
 
         if add_ligand:
 
-            if self.fake_atom_p > 0.0:
+            if (self.fake_atom_p > 0.0) and not use_gt_n_lig_atoms: # don't add fake atoms 
                 n_real_atoms = n_lig_atoms
                 max_num_fake_atoms = torch.ceil(n_real_atoms*self.fake_atom_p).float()
                 frac = torch.rand_like(max_num_fake_atoms)
@@ -770,7 +850,7 @@ class OMTRA(pl.LightningModule):
         # the only reason i'm allowing it to be none by default and manually adding it in
         # is that i don't want to define a default number of timesteps in more than one palce
         # it is already defined as default arg to VectorField.integrate
-        itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing)
+        itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing, stochastic_sampling=stochastic_sampling, noise_scaler=noise_scaler, eps=eps)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
 
@@ -825,54 +905,82 @@ class OMTRA(pl.LightningModule):
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
         visualize=False,
+        extract_latents_for_confidence=False,
+        time_spacing: str = "even",
+        stochastic_sampling: bool = False,
+        noise_scaler: float = 1.0,
+        eps: float = 0.01,
+        n_lig_atom_margin: Union[float, None] = None,
     ) -> List[SampledSystem]:
         
-        n_samples = len(g_list)
-        
-        reps_per_batch = min(max_batch_size // n_samples, n_replicates)
-        n_full_batches = n_replicates // reps_per_batch
-        last_batch_reps = n_replicates % reps_per_batch
+        n_samples = len(g_list) if g_list is not None else 1
 
-        sampled_systems = [[] for _ in range(n_samples)]
-        #sample_names = []
+        sampled_systems = [[] for _ in range(n_samples)]    # Sampled_systems[i] are the list of replicates for system i
 
-        for i in range(n_full_batches):
-            #sample_names += [f"sys_{sys_idx}_rep_{(i*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(reps_per_batch)]
+        chunk_size = min(n_samples, max_batch_size) # handle case where max_batch_size < # samples
 
-            batch_results = self.sample(g_list=g_list,
-                                        n_replicates=reps_per_batch,
-                                        task_name=task_name,
-                                        unconditional_n_atoms_dist=unconditional_n_atoms_dist,
-                                        device=device,
-                                        n_timesteps=n_timesteps,
-                                        visualize=visualize,
-                                        coms=coms,
-                                        )
-            # re-order samples
-            for i in range(n_samples):
-                start_idx = i * reps_per_batch
-                end_idx = start_idx + reps_per_batch
-                sampled_systems[i].extend(batch_results[start_idx:end_idx])
-            
-        # last batch
-        if last_batch_reps > 0:
-            #sample_names += [f"sys_{sys_idx}_rep_{(n_full_batches*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(last_batch_reps)]
+        for start_idx in range(0, n_samples, chunk_size):
+            end_idx = min(start_idx + chunk_size, n_samples)
+            g_chunk = g_list[start_idx:end_idx]
+            coms_chunk = coms[start_idx:end_idx]
+            n_chunk = len(g_chunk)
 
-            batch_results = self.sample(g_list=g_list,
+            # Determine reps per batch for this chunk
+            reps_per_batch = max(1, max_batch_size // n_chunk)
+            n_full_batches = n_replicates // reps_per_batch
+            last_batch_reps = n_replicates % reps_per_batch
+
+            for i in range(n_full_batches):
+                batch_results = self.sample(g_list=g_chunk,
+                                            n_replicates=reps_per_batch,
+                                            task_name=task_name,
+                                            unconditional_n_atoms_dist=unconditional_n_atoms_dist,
+                                            device=device,
+                                            n_timesteps=n_timesteps,
+                                            visualize=visualize,
+                                            coms=coms_chunk,
+                                            extract_latents_for_confidence=extract_latents_for_confidence,
+                                            time_spacing=time_spacing,
+                                            stochastic_sampling=stochastic_sampling,
+                                            noise_scaler=noise_scaler,
+                                            eps=eps,
+                                            n_lig_atom_margin=n_lig_atom_margin,
+                                            )
+                # re-order samples
+                for i, sys_idx in enumerate(range(start_idx, end_idx)):
+                    start = i * reps_per_batch  # starting index in the chunk results
+                    end = start + reps_per_batch    # ending index in the chunk results
+                    sampled_systems[sys_idx].extend(batch_results[start:end])   # sys_idx is the index relative to all samples
+                
+            # last batch
+            if last_batch_reps > 0:
+                batch_results = self.sample(g_list=g_chunk,
                                             n_replicates=last_batch_reps,
                                             task_name=task_name,
                                             unconditional_n_atoms_dist=unconditional_n_atoms_dist,
                                             device=device,
                                             n_timesteps=n_timesteps,
                                             visualize=visualize,
-                                            coms=coms,
+                                            coms=coms_chunk,
+                                            extract_latents_for_confidence=extract_latents_for_confidence,
+                                            time_spacing=time_spacing,
+                                            stochastic_sampling=stochastic_sampling,
+                                            noise_scaler=noise_scaler,
+                                            eps=eps,
+                                            n_lig_atom_margin=n_lig_atom_margin,
                                             )
 
-            for i in range(n_samples):
-                start_idx = i * last_batch_reps
-                end_idx = start_idx + last_batch_reps
-                sampled_systems[i].extend(batch_results[start_idx:end_idx])
-
+                for i, sys_idx in enumerate(range(start_idx, end_idx)):
+                    start = i * last_batch_reps
+                    end = start + last_batch_reps
+                    sampled_systems[sys_idx].extend(batch_results[start:end])
+        
+        # Check that each system has expected number of replicates
+        for i, sys_reps in enumerate(sampled_systems):
+            if len(sys_reps) != n_replicates:
+                raise ValueError(f"System {i} has {len(sys_reps)} replicates, expected {n_replicates}")
+    
+        # flatten list of lists
         sampled_systems = [rep for sys in sampled_systems for rep in sys]
         
         return sampled_systems
