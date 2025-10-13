@@ -377,6 +377,12 @@ class SampledSystem:
         coords, atom_names, elements, res_ids, res_names, chain_ids, hetero = (
             self.extract_protdata_from_graph(g=g, reference=reference)
         )
+
+        # TODO: handle case of mixed int and str chain identifiers?
+        if np.issubdtype(chain_ids.dtype, np.integer) and max(chain_ids) > 9:
+            print(f"WARNING: Found instance of a chain ID with more than a single character alphanumeric identifier: 'chain_id'={max(chain_ids)}. Subtracting minimum 'chain_id'={min(chain_ids)} from all", flush=True)
+            chain_ids = chain_ids - min(chain_ids)
+
         arr = self.build_atom_array(
             coords=coords,
             atom_name=atom_names,
@@ -592,6 +598,7 @@ class SampledSystem:
         res_names = res_type_map_array[res_types]
 
         chain_ids = g.nodes["prot_atom"].data["chain_id"].numpy()
+
         hetero = np.full_like(atom_names, False, dtype=bool)
         return coords, atom_names, elements, res_ids, res_names, chain_ids, hetero
 
@@ -738,6 +745,7 @@ class SampledSystem:
             mols = self.build_traj(ep_traj=endpoint, lig=True)['lig']
         elif ground_truth:
             mols = [self.get_gt_ligand(g=g)]
+            mols[0].SetProp("_Name", "ground_truth")
         else:
             mols = [self.get_rdkit_ligand()]
         write_mols_to_sdf(mols, str(output_file))

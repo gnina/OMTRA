@@ -74,6 +74,7 @@ def parse_args():
         default=0,
         help="Index in the dataset to start sampling from"
     )
+    p.add_argument("--sys_idx_file", type=str, default=None, help='Path to a file with pre-selected system indices.')
     p.add_argument(
         "--n_timesteps",
         type=int,
@@ -104,6 +105,12 @@ def parse_args():
         help="Path to the Plinder dataset (optional)"
     )
     p.add_argument(
+        "--crossdocked_path",
+        type=str,
+        default=None,
+        help="Path to the CrossDocked dataset (optional)"
+    )
+    p.add_argument(
         "--stochastic_sampling",
         action="store_true",
         help="If set, perform stochastic sampling."
@@ -119,6 +126,13 @@ def parse_args():
         type=float,
         default=0.01,
         help="Scaling factor for noise (stochasticity)"
+    )
+    p.add_argument("--use_gt_n_lig_atoms", action="store_true", help="When enabled, use the number of ground truth ligand atoms for de novo design.")
+    p.add_argument(
+        '--n_lig_atom_margin',
+        type=float,
+        default=0.05,
+        help='number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set (default: 0.05, i.e. +/- 5%)'
     )
     p.add_argument('--split', type=str, default='val', help='Which data split to use')
 
@@ -218,7 +232,6 @@ def write_ground_truth(
         prot_cif: bool = True
     ):
     for cond_idx in range(n_systems):
-
         # get an example system containing the ground truth information of interest
         sys_idx = cond_idx*n_replicates
         sys = sampled_systems[sys_idx]
@@ -242,7 +255,7 @@ def write_ground_truth(
                 sys.write_protein(gt_prot_file, ground_truth=True)
             else:
                 sys.write_protein_pdb(sys_gt_dir, filename='protein', ground_truth=True)
-            
+
         # write the ground truth pharmacophore
         if 'pharmacophore' in task.groups_present:
             gt_pharm_file = sys_gt_dir / "pharmacophore.xyz"
@@ -268,6 +281,8 @@ def main(args):
         train_cfg.pharmit_path = args.pharmit_path
     if args.plinder_path:
         train_cfg.plinder_path = args.plinder_path
+    if args.crossdocked_path:
+        train_cfg.crossdocked_path = args.crossdocked_path
 
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -297,7 +312,16 @@ def main(args):
         g_list = None
         n_replicates = args.n_samples
     else:
-        dataset_idxs = range(args.dataset_start_idx, args.dataset_start_idx + args.n_samples)
+
+        if args.sys_idx_file is None:
+            dataset_idxs = range(args.dataset_start_idx, args.dataset_start_idx + args.n_samples)
+        else:
+            # read in pre-determined index file
+            with open(args.sys_idx_file, "r") as f:
+                line = f.readline().strip()
+                dataset_idxs = [int(i) for i in line.split(",")]
+                dataset_idxs = dataset_idxs[:args.n_samples]
+
         g_list = [ dataset[(task_name, i)].to(device) for i in dataset_idxs ]
         n_replicates = args.n_replicates
 
@@ -319,6 +343,7 @@ def main(args):
         stochastic_sampling=args.stochastic_sampling,
         noise_scaler=args.noise_scaler, # for stochastic sampling 
         eps=args.eps,
+        n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None
     )
 
     if args.output_dir is None:

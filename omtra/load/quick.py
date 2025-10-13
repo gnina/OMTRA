@@ -12,7 +12,7 @@ import torch
 OmegaConf.register_new_resolver("omtra_root", omtra_root, replace=True)
 
 
-def load_cfg(config_dir: str = None, config_name: str = "config.yaml", pharmit_path: str = None, plinder_path: str = None, overrides: List[str] = []):
+def load_cfg(config_dir: str = None, config_name: str = "config.yaml", pharmit_path: str = None, plinder_path: str = None, crossdocked_path: str = None, overrides: List[str] = []):
     """
     Load the configuration from the specified directory and file name.
     
@@ -35,6 +35,8 @@ def load_cfg(config_dir: str = None, config_name: str = "config.yaml", pharmit_p
         overrides.append(f'pharmit_path={pharmit_path}')
     if plinder_path is not None:
         overrides.append(f'plinder_path={plinder_path}')
+    if crossdocked_path is not None:
+        overrides.append(f'crossdocked_path={crossdocked_path}')
     
     if len(overrides) == 0:
         overrides = None
@@ -62,6 +64,8 @@ def datamodule_from_config(cfg: DictConfig, **kwargs) -> MultiTaskDataModule:
     # load data module
     datamodule: MultiTaskDataModule = hydra.utils.instantiate(
         cfg.task_group.datamodule, 
+        val_check_interval=cfg.trainer.val_check_interval,
+        limit_val_batches=cfg.trainer.limit_val_batches,
         **kwargs,
     )
 

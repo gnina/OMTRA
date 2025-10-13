@@ -8,7 +8,7 @@ from collections import defaultdict
 from typing import Union, Callable, Dict, Optional
 from typing import List
 from omegaconf import DictConfig
-from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
+from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf, GVPLayerNorm
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.models.self_conditioning import SelfConditioningResidualLayer
 from omtra.tasks.tasks import Task
@@ -30,6 +30,9 @@ from omtra.constants import (
     protein_element_map,
     protein_atom_map,
 )
+from omtra.models.embed import TimestepEmbedder
+# from omtra.models.adaln import PositionUpdateAdaLN, EdgeUpdateAdaLN, modulate
+import omtra.models.adaln as adaln_module
 
 
 from omtra.data.graph.utils import get_batch_idxs
@@ -78,7 +81,6 @@ class VectorField(nn.Module):
         super().__init__()
         self.graph_config = graph_config
         self.token_dim = token_dim
-        self.task_embedding_dim = token_dim
         self.n_hidden_scalars = n_hidden_scalars
         self.n_hidden_edge_feats = n_hidden_edge_feats
         self.n_vec_channels = n_vec_channels
@@ -186,7 +188,13 @@ class VectorField(nn.Module):
 
         # create a task embedding
         self.task_embedding = nn.Embedding(
-            len(td_coupling.task_space), self.task_embedding_dim
+            len(td_coupling.task_space), n_hidden_scalars
+        )
+
+        # create time embedding layer
+        self.time_embedder = TimestepEmbedder(
+            hidden_dim=n_hidden_scalars,
+            frequency_embedding_dim=time_embedding_dim,
         )
 
         # for each node type, create a function for initial node embeddings
@@ -195,7 +203,7 @@ class VectorField(nn.Module):
             n_cat_feats = self.ntype_cat_feats[
                 ntype
             ]  # number of categorical features for this node type
-            input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
+            input_dim = n_cat_feats * token_dim
             if res_id_embed_dim is not None and ntype == 'prot_atom':
                 input_dim += res_id_embed_dim
             if self.pharm_pos_var_flag and ntype == 'pharm': 
@@ -295,6 +303,7 @@ class VectorField(nn.Module):
                     EdgeUpdate(
                         n_hidden_scalars,
                         n_hidden_edge_feats,
+                        etype=etype,
                         rbf_dim=rbf_dim,
                     )
                 )
@@ -312,12 +321,13 @@ class VectorField(nn.Module):
             # if categorical, the output head is just a MLP on node scalar features
             if m.is_categorical:
                 has_fake_atoms = (m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
-                self.node_output_heads[m.name] = nn.Sequential(
-                    nn.Linear(n_hidden_scalars, n_hidden_scalars),
-                    nn.SiLU(),
-                    nn.Linear(n_hidden_scalars, m.n_categories+int(has_fake_atoms)),
+                self.node_output_heads[m.name] = CategoricalOutputHead(
+                    n_hidden_scalars,
+                    m.n_categories+int(has_fake_atoms),
+                    c_dim=n_hidden_scalars # the dimensionality of the global condiitoning information is that of node scalars
                 )
             elif m.data_key == "v":  # if a node vector feature
+                raise NotImplementedError("node vector feature generation not implemented yet")
                 # TODO: hard-coded assumption that this situation only applies to pharm
                 # vector features, need to make this more general
                 # also need to avoid hard-coding number of vec features out
@@ -341,10 +351,10 @@ class VectorField(nn.Module):
             is_edge_feat = m.graph_entity == "edge"
             if not (is_edge_feat and m.is_categorical):
                 continue
-            self.edge_output_heads[m.name] = nn.Sequential(
-                nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
-                nn.SiLU(),
-                nn.Linear(n_hidden_edge_feats, m.n_categories),
+            self.edge_output_heads[m.name] = CategoricalOutputHead(
+                n_hidden_edge_feats,
+                m.n_categories,
+                c_dim=n_hidden_scalars # the dimensionality of the global condiitoning information is that of node scalars
             )
 
         if self.self_conditioning:
@@ -360,6 +370,69 @@ class VectorField(nn.Module):
                 fake_atoms=fake_atoms,
             )
 
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        # Initialize transformer layers:
+        # TODO: this conficts with GVP modules which explicit have their own intialization scheme...be aware if this causes issues
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        self.apply(_basic_init)
+
+        # Initialize task embedding table:
+        nn.init.normal_(self.task_embedding.weight, std=0.02)
+
+        # intialize embedding tables for all categorical modalities
+        for mod in self.token_embeddings.values():
+            nn.init.normal_(mod.weight, std=0.02)
+
+        # Initialize timestep embedding MLP:
+        nn.init.normal_(self.time_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.time_embedder.mlp[2].weight, std=0.02)
+
+        # Zero-out adaLN modulation layers HeteroGraphConv blocks:
+        for conv in self.conv_layers:
+            for adaln_fn in conv.adaln_modulators.values():
+                nn.init.constant_(adaln_fn.mlp[-1].weight, 0)
+                nn.init.constant_(adaln_fn.mlp[-1].bias, 0)
+
+        # zero-out adaln for node position updaters
+        for ntype in self.node_position_updaters:
+            for updater in self.node_position_updaters[ntype]:
+                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].weight, 0)
+                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].bias, 0)
+
+        # zero out edge feature updaters
+        for etype in self.edge_updaters:
+            for updater in self.edge_updaters[etype]:
+                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].weight, 0)
+                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].bias, 0)
+
+        # zero out categorical output heads
+        for m_name in self.node_output_heads:
+            modality = name_to_modality(m_name)
+            if not modality.is_categorical:
+                continue
+            # zero out the AdaLN weight generators
+            nn.init.constant_(self.node_output_heads[m_name].adaln_params_mlp.mlp[-1].weight, 0)
+            nn.init.constant_(self.node_output_heads[m_name].adaln_params_mlp.mlp[-1].bias, 0)
+
+        for m_name in self.edge_output_heads:
+            modality = name_to_modality(m_name)
+            if not modality.is_categorical:
+                continue
+            # zero out the AdaLN weight generators
+            nn.init.constant_(self.edge_output_heads[m_name].adaln_params_mlp.mlp[-1].weight, 0)
+            nn.init.constant_(self.edge_output_heads[m_name].adaln_params_mlp.mlp[-1].bias, 0)
+
+        # TODO: note in regular DiT, all final layers have weights set to zero
+        # our "output layers" are sometimes gvps (node positions updates) and sometimes mlps (categorical features, edge feature updates)
+        # we don't do this part, we just zero-out adaptive layer norms only
+
     @g_local_scope
     def forward(
         self,
@@ -367,6 +440,7 @@ class VectorField(nn.Module):
         task_class: Task,
         t: torch.Tensor,
         node_batch_idx: Dict[str, torch.Tensor],
+        edge_batch_idx: Dict[str, torch.Tensor],
         upper_edge_mask: Dict[str, torch.Tensor],
         apply_softmax=False,
         remove_com=False,
@@ -466,30 +540,19 @@ class VectorField(nn.Module):
             task_idx
         )  # tensor of shape (batch_size, token_dim)
 
-        # add time and task embedding to node scalar features
+        t_emb = self.time_embedder(t)
+        global_conditioning = task_embedding_batch + t_emb
+
+
+        # add pharmacophore variance to pharm node feature embeddings if necessary
+        if 'pharm' in node_scalar_features and self.pharm_pos_var_flag:
+            pharm_variance = g.nodes['pharm'].data['pharm_pos_var']
+            node_scalar_features['pharm'].append(pharm_variance)
+
+
+        # concatenate all initial node scalar features and pass through the embedding layer
         for ntype in node_scalar_features.keys():
-            # add time embedding to node scalar features
-            if self.time_embedding_dim == 1:
-                node_scalar_features[ntype].append(
-                    t[node_batch_idx[ntype]].unsqueeze(-1)
-                )
-            else:
-                t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
-                t_emb = t_emb[node_batch_idx[ntype]]
-                node_scalar_features[ntype].append(t_emb)
-
-            node_scalar_features[ntype].append(
-                task_embedding_batch[node_batch_idx[ntype]]
-            )  # expand task embedding for each node in the batch
-
-            # add flag for whether pharm positions are being noised
-            if self.pharm_pos_var_flag:
-                if ntype == "pharm":
-                    pharm_variance = g.nodes[ntype].data['pharm_pos_var']
-                    node_scalar_features[ntype].append(pharm_variance)
-
-
-            # concatenate all initial node scalar features and pass through the embedding layer
+            
             node_scalar_features[ntype] = torch.cat(
                 node_scalar_features[ntype], dim=-1
             )
@@ -529,7 +592,9 @@ class VectorField(nn.Module):
                         node_positions_clone,
                         edge_features_clone,
                         node_batch_idx,
+                        edge_batch_idx,
                         upper_edge_mask,
+                        global_conditioning=global_conditioning,
                         apply_softmax=True,
                         remove_com=False,
                     )
@@ -560,9 +625,11 @@ class VectorField(nn.Module):
             node_positions,
             edge_features,
             node_batch_idx,
+            edge_batch_idx,
             upper_edge_mask,
-            apply_softmax,
-            remove_com,
+            global_conditioning=global_conditioning,
+            apply_softmax=apply_softmax,
+            remove_com=remove_com,
             extract_latents_for_confidence=extract_latents_for_confidence,
         )
 
@@ -585,7 +652,9 @@ class VectorField(nn.Module):
         node_positions: Dict[str, torch.Tensor],
         edge_features: Dict[str, torch.Tensor],
         node_batch_idx: Dict[str, torch.Tensor],
+        edge_batch_idx: Dict[str, torch.Tensor],
         upper_edge_mask: Dict[str, torch.Tensor],
+        global_conditioning: torch.Tensor,
         apply_softmax: bool = False,
         remove_com: bool = False,
         extract_latents_for_confidence=False,
@@ -599,7 +668,9 @@ class VectorField(nn.Module):
                     scalar_feats=node_scalar_features,
                     coord_feats=node_positions,
                     vec_feats=node_vec_features,
+                    global_conditioning=global_conditioning,
                     edge_feats=edge_features,
+                    node_batch_idxs=node_batch_idx,
                     x_diff=x_diff,
                     d=d,
                 )
@@ -631,6 +702,8 @@ class VectorField(nn.Module):
                             node_scalar_features[ntype],
                             node_positions[ntype],
                             node_vec_features[ntype],
+                            global_conditioning,
+                            batch_idxs=node_batch_idx[ntype],
                         )
                         ntypes_updated.add(ntype)
 
@@ -643,7 +716,7 @@ class VectorField(nn.Module):
                         if not edges_need_update:
                             continue
                         x_diff_etype, d_etype = self.precompute_distances(
-                            g, node_positions, etype=etype
+                            g, node_positions, etype=etype,
                         )
                         x_diff.update(x_diff_etype)
                         d.update(d_etype)
@@ -664,7 +737,8 @@ class VectorField(nn.Module):
                             node_scalar_features,
                             edge_features[etype],
                             d=d[etype],
-                            etype=etype,
+                            global_conditioning=global_conditioning,
+                            node_batch_idxs=node_batch_idx,
                         )
 
                     if self.rebuild_edges and not last_update:
@@ -675,19 +749,24 @@ class VectorField(nn.Module):
                         x_diff.update(x_diff_rebuilt)
                         d.update(d_rebuilt)
 
+        # generate logits for categorical variables being generated
         logits = {}
         for m in task_class.modalities_generated:
             if m.is_node and m.is_categorical:
                 ntype = m.entity_name
                 logits[m.name] = self.node_output_heads[m.name](
-                    node_scalar_features[ntype]
+                    node_scalar_features[ntype],
+                    global_conditioning,
+                    batch_idxs=node_batch_idx[ntype],
                 )
             elif not m.is_node and m.is_categorical:
                 etype = m.entity_name
                 ue_feats = edge_features[etype][upper_edge_mask[etype]]
                 le_feats = edge_features[etype][~upper_edge_mask[etype]]
                 logits[m.name] = self.edge_output_heads[m.name](
-                    ue_feats + le_feats
+                    ue_feats + le_feats,
+                    global_conditioning,
+                    batch_idxs=edge_batch_idx[etype][upper_edge_mask[etype]],
                 )
 
         # project node positions back into zero-COM subspace
@@ -980,6 +1059,7 @@ class VectorField(nn.Module):
             task,
             t=torch.full((g.batch_size,), t_i, device=device),
             node_batch_idx=node_batch_idxs,
+            edge_batch_idx=edge_batch_idxs,
             upper_edge_mask=upper_edge_mask,
             apply_softmax=True,
             remove_com=False,  # TODO: is this ...should this be set to True?
@@ -1193,6 +1273,13 @@ class VectorField(nn.Module):
 class NodePositionUpdate(nn.Module):
     def __init__(self, n_scalars, n_vec_channels, n_gvps: int = 3, n_cp_feats: int = 0):
         super().__init__()
+        self.n_scalars = n_scalars
+        self.n_vec_channels = n_vec_channels
+
+        # TODO: would we want adaptive layernorms for node position updates?scp
+        self.layer_norm = GVPLayerNorm(n_scalars, n_vec_channels, affine=False)
+        self.adaln_params_mlp = adaln_module.PositionUpdateAdaLN(n_scalars, n_vec_channels)
+
 
         self.gvps = []
         for i in range(n_gvps):
@@ -1216,8 +1303,23 @@ class NodePositionUpdate(nn.Module):
         self.gvps = nn.Sequential(*self.gvps)
 
     def forward(
-        self, scalars: torch.Tensor, positions: torch.Tensor, vectors: torch.Tensor
+        self, 
+        scalars: torch.Tensor, 
+        positions: torch.Tensor, 
+        vectors: torch.Tensor, 
+        global_conditioning: torch.Tensor,
+        batch_idxs: torch.Tensor,
     ):
+
+        scalars, vectors = self.layer_norm((scalars, vectors))
+        adaln_params = self.adaln_params_mlp(global_conditioning)
+        scalars = adaln_module.modulate(scalars, 
+                           adaln_params['s_shift'][batch_idxs], 
+                           adaln_params['s_scale'][batch_idxs]
+                           )
+        v_gate = adaln_params['v_scale'][batch_idxs].unsqueeze(-1) 
+        vectors = vectors * v_gate
+
         _, vector_updates = self.gvps((scalars, vectors))
         return positions + vector_updates.squeeze(1)
 
@@ -1227,12 +1329,34 @@ class EdgeUpdate(nn.Module):
         self,
         n_node_scalars,
         n_edge_feats,
+        etype: str,
+        ratio: int = 1,
         rbf_dim=16,
     ):
         super().__init__()
+        self.etype = etype
+        src_ntype, _, dst_ntype = to_canonical_etype(etype)
+        self.src_ntype = src_ntype
+        self.dst_ntype = dst_ntype
+
+        self.n_ntypes = 1 + int(src_ntype != dst_ntype)
+        if self.n_ntypes == 1:
+            self.src_norm = nn.LayerNorm(n_node_scalars, elementwise_affine=False)
+            self.adaln_params_mlp = adaln_module.HomoEdgeUpdateAdaLN(
+                scalar_size=n_node_scalars,
+                vector_size=0,
+                s_ratio=ratio,
+            )
+        else:
+            self.src_norm = nn.LayerNorm(n_node_scalars, elementwise_affine=False)
+            self.dst_norm = nn.LayerNorm(n_node_scalars, elementwise_affine=False)
+            self.adaln_params_mlp = adaln_module.HeteroEdgeUpdateAdaLN(
+                scalar_size=n_node_scalars,
+                vector_size=0,
+                s_ratio=ratio,
+            )
 
         input_dim = n_node_scalars * 2 + n_edge_feats + rbf_dim
-
         self.edge_update_fn = nn.Sequential(
             nn.Linear(input_dim, n_edge_feats),
             nn.SiLU(),
@@ -1241,14 +1365,42 @@ class EdgeUpdate(nn.Module):
         )
         self.edge_norm = nn.LayerNorm(n_edge_feats)
 
-    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, etype):
-        src_ntype, _, dst_ntype = to_canonical_etype(etype)
+    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, global_conditioning, node_batch_idxs: Dict[str, torch.Tensor]):
+
+        src_batch_idxs = node_batch_idxs[self.src_ntype]
+        dst_batch_idxs = node_batch_idxs[self.dst_ntype]
+
+        if self.n_ntypes == 1:
+            src_feats = self.src_norm(node_scalars[self.src_ntype])
+            dst_feats = src_feats
+        else:
+            src_feats = self.src_norm(node_scalars[self.src_ntype])
+            dst_feats = self.dst_norm(node_scalars[self.dst_ntype])
+
+        adaln_params = self.adaln_params_mlp(global_conditioning)
+
+        if self.n_ntypes == 1:
+            src_feats = adaln_module.modulate(src_feats, 
+                                    adaln_params['s_shift'][src_batch_idxs], 
+                                    adaln_params['s_scale'][src_batch_idxs]
+                                    )
+            dst_feats = src_feats
+        else:
+            src_feats = adaln_module.modulate(src_feats, 
+                                    adaln_params['s_shift_src'][src_batch_idxs], 
+                                    adaln_params['s_scale_src'][src_batch_idxs]
+                                    )
+            dst_feats = adaln_module.modulate(dst_feats, 
+                                    adaln_params['s_shift_dst'][dst_batch_idxs], 
+                                    adaln_params['s_scale_dst'][dst_batch_idxs]
+                                    )
+
         # get indicies of source and destination nodes
-        src_idxs, dst_idxs = g.edges(etype=etype)
+        src_idxs, dst_idxs = g.edges(etype=self.etype)
 
         mlp_inputs = [
-            node_scalars[src_ntype][src_idxs],
-            node_scalars[dst_ntype][dst_idxs],
+            src_feats[src_idxs],
+            dst_feats[dst_idxs],
             edge_feats,
             d
         ]
@@ -1257,3 +1409,27 @@ class EdgeUpdate(nn.Module):
             edge_feats + self.edge_update_fn(torch.cat(mlp_inputs, dim=-1))
         )
         return edge_feats
+
+class CategoricalOutputHead(nn.Module):
+    def __init__(self, n_in, n_out, c_dim):
+        super().__init__()
+
+        self.norm = nn.LayerNorm(n_in, elementwise_affine=False)
+        self.adaln_params_mlp = adaln_module.ScalarAdaLN(c_dim, 0, s_out_dim=n_in)
+
+        self.mlp = nn.Sequential(
+            nn.Linear(n_in, n_in),
+            nn.SiLU(),
+            nn.Linear(n_in, n_out),
+        )
+
+    def forward(self, x, c, batch_idxs):
+
+        adaln_params = self.adaln_params_mlp(c)
+        x = self.norm(x)
+        x = adaln_module.modulate(x, 
+                           adaln_params['s_shift'][batch_idxs], 
+                           adaln_params['s_scale'][batch_idxs]
+                           )
+
+        return self.mlp(x)

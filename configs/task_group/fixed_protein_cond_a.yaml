@@ -11,13 +11,13 @@ task_phases:
   - duration_batches: null
     tasks:
       - name: rigid_docking_condensed
-        probability: 0.43
+        probability: 0.475
       - name: fixed_protein_ligand_denovo_condensed
-        probability: 0.43
+        probability: 0.475
       - name: denovo_ligand_condensed
-        probability: 0.07
+        probability: 0.025
       - name: ligand_conformer_condensed
-        probability: 0.07
+        probability: 0.025
 
 # define p(dataset|task) coupling (assume static for simplicity)
 dataset_task_coupling:

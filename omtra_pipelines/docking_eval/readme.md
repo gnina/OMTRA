@@ -2,6 +2,9 @@
 ## Overview
 This script evaluates models on a user-specified protein-conditioned (+pharm-conditioned) task across various metrics. While some automatic task-specific metric disabling has been pre built in, users can disable any metric using the appropriate `--disable_METRIC` flag. The script also automatically computes metrics for the ground truth ligand when applicable. This feature can also be disabled.
 
+### Requirements
+This pipeline requires the GNINA pre-built binary under the OMTRA root directory. It can be downloaded at https://github.com/gnina/gnina/releases/tag/v1.3.2. 
+
 ### Tasks supported
 | Task Name | Description | 
 |----------|-------------|
@@ -60,13 +63,13 @@ The script will sample the model when passed the `--ckpt_path` and write sample 
 #### Fixed protein (protein structure fixed)
 ```text
 output_dir/samples
-├── sys_1_gt
+├── sys_0_gt
 │   ├── gen_ligands.sdf
 │   ├── ligand.sdf
 │   ├── protein_0.pdb
 │   └── pharmacophore.xyz   (if applicable)
 │
-├── sys_2_gt
+├── sys_1_gt
 │   ├── gen_ligands.sdf
 │   ├── ligand.sdf
 │   ├── protein_0.pdb
@@ -85,7 +88,7 @@ Note: In the case of a fixed protein, all generated ligands are in one sdf file.
 #### Flexible protein (protein structure generated)
 ```text
 output_dir/samples
-├── sys_1_gt 
+├── sys_0_gt 
 │   ├── gen_ligands_0.sdf
 │   ├── gen_ligands_1.sdf
 │   ... 
@@ -98,7 +101,7 @@ output_dir/samples
 │   ├── protein_0.pdb  
 │   └── pharmacophore.xyz   (if applicable) 
 │ 
-├── sys_2_gt 
+├── sys_1_gt 
 │   ├── gen_ligands_0.sdf 
 │   ├── gen_ligands_1.sdf 
 │   ... 
@@ -138,7 +141,7 @@ python docking_eval.py \
 ```
 
 ### 2. From Samples Directory
-If  `--samples_dir` is passed, the script reads in files from the directory. Given the task, there is a strict required format for the files in said directory. This should match the above section.
+If  `--samples_dir` is passed, the script reads in files from the directory. Given the task, there is a strict required format for the files in said directory. This should match the above section depending on whether the protein is rigid or flexible.
 
 Note: Every generated ligand should have a property `_Name` set to `gen_ligands_IDX` 
 

@@ -13,15 +13,19 @@ import multiprocessing as mp
 import tempfile
 from collections import defaultdict
 from scipy.spatial.distance import cdist
+from natsort import natsorted
 
 from rdkit import Chem
 import posebusters as pb
 from posebusters.modules.rmsd import check_rmsd
 from posecheck import PoseCheck
+from posecheck.utils.chem import remove_radicals
+
 
 from omtra.utils import omtra_root
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
+from omtra.load.quick import datamodule_from_config
 import omtra.load.quick as quick_load
 from omtra.eval.system import SampledSystem, write_arrays_to_pdb, write_mols_to_sdf
 from routines.sample import write_ground_truth, generate_sample_names, group_samples_by_system 
@@ -39,6 +43,7 @@ def parse_args():
     group.add_argument("--ckpt_path", type=Path, default=None, help='Path to model checkpoint.')
     group.add_argument("--samples_dir", type=Path, default=None, help='Path to samples. Use existing samples, do not sample a model')
     
+    io.add_argument("--sample_only", action="store_true", help='Only sample the model. Do not compute metrics.')  
     io.add_argument("--output_dir", type=Path, default=None, help='Output directory.')
     io.add_argument("--sys_info_file", type=str, default=None, help="Path to the system info file (optional).")
 
@@ -46,24 +51,29 @@ def parse_args():
     sampling = p.add_argument_group("Sampling Options")
 
     sampling.add_argument("--task", type=str, help='Task to sample for (e.g. denovo_ligand).', required=True)
-    sampling.add_argument("--n_samples", type=int, help='Number of samples to evaluate.', required=True)
+    sampling.add_argument("--n_samples", type=int, default=None, help='Number of samples to evaluate.')
+    sampling.add_argument("--sys_idx_file", type=str, default=None, help='Path to a file with pre-selected system indices.')
     sampling.add_argument("--n_replicates", type=int, help="Number of replicates per input sample.", required=True)
     sampling.add_argument("--n_timesteps", type=int, default=250, help="Number of integration steps to take when sampling.")
 
     sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
     sampling.add_argument("--noise_scaler", type=float, default=1.0, help="Noise scaling param for stochastic sampling.")
     sampling.add_argument("--eps", type=float, default=0.01, help="g(t) param for stochastic sampling.")
+    sampling.add_argument("--n_lig_atom_margin", type=float, default=0.075, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
 
     sampling.add_argument("--max_batch_size", type=int, default=500, help='Maximum number of systems to sample per batch.')
+    sampling.add_argument("--bs_per_gbmem", type=float, default=None, help='Batch size per GB/EM on the GPU.')
     sampling.add_argument("--dataset", type=str, default="plinder", help='Dataset.')
-    sampling.add_argument("--split", type=str, default="val", help='Data split (i.e., train, val).')
+    sampling.add_argument("--split", type=str, default="test", help='Data split (i.e., train, val).')
     sampling.add_argument("--dataset_start_idx", type=int, default=0, help="Index in the dataset to start sampling from.")
+    sampling.add_argument("--sample_start_idx", type=int, default=None, help="Index in the sample directory to start getting samples from.")
     sampling.add_argument("--plinder_path", type=str, default=None, help="Path to the Plinder dataset (optional).")
+    sampling.add_argument("--crossdocked_path", type=str, default=None, help="Path to the Crossdocked dataset (optional).")
 
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
 
-    metrics.add_argument("--timeout", type=int, default=1200, help='Maximum running time in seconds for any eval metric.',)
+    metrics.add_argument("--timeout", type=int, default=2700, help='Maximum running time in seconds for any eval metric.',)
     metrics.add_argument("--disable_pb_valid", action="store_true",  help='Disables PoseBusters validity check.', )    
     metrics.add_argument("--disable_gnina", action="store_true", help='Disables GNINA docking score calculation.')    
     metrics.add_argument("--disable_posecheck", action="store_true", help='Disables strain, clashes, and pocket-ligand interaction computation.')
@@ -71,8 +81,11 @@ def parse_args():
     metrics.add_argument("--disable_interaction_recovery", action="store_true", help='Disables analysis of interaction recovery by generated ligands.')
     metrics.add_argument("--disable_pharm_match", action="store_true", help='Disables computations of matching pharmacophores by generated ligands.')
     metrics.add_argument("--disable_ground_truth_metrics", action="store_true", help='Disables all relevant metrics on the truth ligand.')
-    
-    return p.parse_args()
+    metrics.add_argument('--disable_strain', action='store_true', help='Disables strain energy calculation.')
+
+    args = p.parse_args()
+
+    return args
 
 
 def pb_valid(
@@ -176,7 +189,7 @@ def gnina(lig_file, prot_file, env):
     return results
 
 
-def posecheck(ligs, prot_file, true_lig=None, interaction_recovery=False):
+def posecheck(ligs, prot_file, true_lig=None, true_prot_file=None, interaction_recovery=False, disable_strain=False):
     
     # initialize the PoseCheck object
     pc = PoseCheck()
@@ -192,7 +205,8 @@ def posecheck(ligs, prot_file, true_lig=None, interaction_recovery=False):
     pc.load_ligands_from_mols(ligs)
 
     results['clashes'] = pc.calculate_clashes()
-    results['strain'] = pc.calculate_strain_energy()
+    if not disable_strain:
+        results['strain'] = pc.calculate_strain_energy()
 
     interactions = pc.calculate_interactions()
 
@@ -207,7 +221,7 @@ def posecheck(ligs, prot_file, true_lig=None, interaction_recovery=False):
         fingerprint_interaction_types = ['HBAcceptor', 'HBDonor', 'PiStacking', 'XBDonor', 'CationPi', 'PiCation', 'Cationic', 'Anionic']
 
         pc = PoseCheck()
-        pc.load_protein_from_pdb(prot_file)
+        pc.load_protein_from_pdb(true_prot_file)
         pc.load_ligands_from_mols([true_lig])
         true_interactions = pc.calculate_interactions()
         cols = [col for col in true_interactions.columns if col[2] in fingerprint_interaction_types]
@@ -288,20 +302,33 @@ def run_with_timeout(func, *args, timeout, **kwargs):
     if p.is_alive():
         p.terminate()
         p.join()
-        print(f"[TIMEOUT] {func.__name__} killed after {timeout}s \n", flush=True)
+        print(f"\n[TIMEOUT] {func.__name__} killed after {timeout}s \n", flush=True)
         return None
 
     result = q.get() if not q.empty() else None
     if isinstance(result, Exception):
-        print(f"[ERROR] {func.__name__} failed: {result} \n", flush=True)
+        print(f"\n[ERROR] {func.__name__} failed: {result} \n", flush=True)
         return None
     return result
 
 
+def repair_and_sanitize(lig, i):
+    try:
+        Chem.SanitizeMol(lig)
+    except Exception as e:
+        print(f"An error occurred during sanitization of ligand {i}: {e}")
+        return None
+    if any(atom.GetNumRadicalElectrons() > 0 for atom in lig.GetAtoms()):
+        print(f"Ligand {i} has a radical")
+        return None
+    return lig
+
 def compute_metrics(system_pairs: List[SampledSystem], 
                     task: Task, 
                     metrics_to_run: Dict[str, bool], 
-                    timeout: int):
+                    timeout: int,
+                    disable_strain: bool = False,
+                    ):
     
     env = os.environ.copy()
     env['LD_LIBRARY_PATH'] = "/net/galaxy/home/koes/dkoes/local/miniconda/envs/cuda/lib/"
@@ -333,19 +360,20 @@ def compute_metrics(system_pairs: List[SampledSystem],
             valid_gen_lig_ids = []
 
             for i, lig in enumerate(data['gen_ligs']):
-                try:
-                    Chem.SanitizeMol(lig)
+                lig = repair_and_sanitize(lig, i)
+                if lig is not None:
                     valid_gen_ligs.append(lig)
                     valid_gen_lig_ids.append(data['gen_ligs_ids'][i])
-                except Exception as e:
-                    print(f"An error encountered during sanitization of generated ligand {i}: {e}")
+            
 
-            # Sanitize ground truth ligand and keep track
+            # Sanitize ground truth ligand
             true_lig = data['true_lig']
             try:
                 Chem.SanitizeMol(true_lig)
             except Exception as e:
+                metrics_to_run['ground_truth'] = False
                 print(f"An error encountered during sanitization of true ligand for system {sys_id}: {e}")
+                print(f"Automatically disabling ground truth metric computation. \n")
 
             all_indices = pd.MultiIndex.from_product([[sys_id], [data['gen_prot_id']], data['gen_ligs_ids']], names=['sys_id', 'protein_id', 'gen_ligand_id'])
             valid_lig_indices = pd.MultiIndex.from_product([[sys_id], [data['gen_prot_id']], valid_gen_lig_ids], names=['sys_id', 'protein_id', 'gen_ligand_id'])
@@ -366,13 +394,26 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 if pb_results is not None:
                     pb_results.index = valid_lig_indices
                     metrics.loc[valid_lig_indices, pb_results.columns] = pb_results
+                else:
+                    for i, gen_lig in enumerate(valid_gen_ligs):
+                        pb_result_single = run_with_timeout(pb_valid, 
+                                                            timeout=120, 
+                                                            gen_ligs=gen_lig,
+                                                            true_lig=true_lig, 
+                                                            prot_file=data['gen_prot_file'], 
+                                                            task=task)
+                        
+                        if pb_result_single is not None:
+                            metrics.loc[(sys_id, data['gen_prot_id'], valid_gen_lig_ids[i]), pb_result_single.columns] = pb_result_single.iloc[0].values
+                        else:
+                            print(f"Could not resolve PoseBusters eval on single generated ligand {valid_gen_lig_ids[i]}\n")
                 
                 if metrics_to_run['ground_truth']:
                     pb_true_results = run_with_timeout(pb_valid,
-                                                       timeout=timeout,
+                                                       timeout=120,
                                                        gen_ligs=true_lig,
                                                        true_lig=None,
-                                                       prot_file=data['gen_prot_file'],
+                                                       prot_file=data['true_prot_file'],
                                                        task=task)
                     
                     if pb_true_results is not None:
@@ -382,31 +423,54 @@ def compute_metrics(system_pairs: List[SampledSystem],
 
             # PoseCheck
             if metrics_to_run['posecheck']:
+
+                if sys_id == 'sys_227_gt':  # TODO: remove this after posebusters processing
+                    continue
+
                 # generated ligand
                 posechk_results = run_with_timeout(posecheck, 
-                                                   timeout=timeout,
-                                                   ligs=valid_gen_ligs,
-                                                   prot_file=data['gen_prot_file'],
-                                                   true_lig=true_lig,
-                                                   interaction_recovery=metrics_to_run['interaction_recovery'])
+                                                timeout=timeout,
+                                                ligs=valid_gen_ligs,
+                                                prot_file=data['gen_prot_file'],
+                                                true_lig=true_lig,
+                                                true_prot_file=data['true_prot_file'],
+                                                interaction_recovery=metrics_to_run['interaction_recovery'],
+                                                disable_strain=disable_strain)
                 
                 if posechk_results is not None:
                     posechk_results = pd.DataFrame(posechk_results, index=valid_lig_indices)
                     metrics.loc[valid_lig_indices, posechk_results.columns] = posechk_results
+                else:
+                    for i, gen_lig in enumerate(valid_gen_ligs):
+                        posechk_result_single = run_with_timeout(posecheck, 
+                                                            timeout=120,
+                                                            ligs=[gen_lig],
+                                                            prot_file=data['gen_prot_file'],
+                                                            true_lig=true_lig,
+                                                            true_prot_file=data['true_prot_file'],
+                                                            interaction_recovery=metrics_to_run['interaction_recovery'],
+                                                            disable_strain=disable_strain
+                                                                )
+
+                        if posechk_result_single is not None:
+                            metrics.loc[(sys_id, data['gen_prot_id'], valid_gen_lig_ids[i]), list(posechk_result_single.keys())] = pd.Series({k: v[0] for k, v in posechk_result_single.items()})
+                        else:
+                            print(f"Could not resolve PoseCheck eval on single generated ligand {valid_gen_lig_ids[i]}\n")  
 
                 # ground truth ligand
                 if metrics_to_run['ground_truth']:
                     posechk_true_results = run_with_timeout(posecheck,
-                                                            timeout=timeout,
+                                                            timeout=120,
                                                             ligs=[true_lig],
-                                                            prot_file=data['true_prot_file'],)
+                                                            prot_file=data['true_prot_file'],
+                                                            disable_strain=disable_strain)
                     
                     if posechk_true_results is not None:
                         flat_row = {k: v[0] for k, v in posechk_true_results.items()}
                         posechk_true_results = pd.DataFrame([flat_row]*len(all_indices), index=all_indices)
                         posechk_true_results.columns =  [f"{col}_true" for col in posechk_true_results.keys()]
                         metrics.loc[all_indices, posechk_true_results.columns] = posechk_true_results
-            
+        
             # GNINA
             if metrics_to_run['gnina']:
                 # generated ligand
@@ -430,7 +494,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
                                                           env=env)
                     
                     if gnina_true_results is not None:
-                        flat_row = {k: v[""] for k, v in gnina_true_results.items()}
+                        flat_row = {k: v[true_lig.GetProp('_Name')] for k, v in gnina_true_results.items()}
                         gnina_true_results = pd.DataFrame([flat_row]*len(all_indices), index=all_indices)
                         gnina_true_results.columns = [f"{col}_true" for col in gnina_true_results.columns]
                         metrics.loc[all_indices, gnina_true_results.columns] = gnina_true_results
@@ -440,7 +504,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 for i, gen_lig in enumerate(data['gen_ligs']):
                     rmsd_results = None
                     rmsd_results = run_with_timeout(rmsd,
-                                                    timeout=timeout,
+                                                    timeout=120,
                                                     gen_lig=gen_lig,
                                                     true_lig=true_lig)
                 
@@ -451,7 +515,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
             if metrics_to_run['pharm_match']:
                 pharm_results = run_with_timeout(compute_pharmacophore_match,
                                                  timeout=timeout,
-                                                 gen_ligs=valid_gen_ligs,
+                                                 gen_ligs=valid_gen_ligs,   # TODO: will this work if we pass all ligands not just the RDKit valid ones?
                                                  true_pharm=data['true_pharm'])
                 
                 pharm_results = pd.DataFrame(pharm_results, index=valid_lig_indices)
@@ -463,14 +527,18 @@ def compute_metrics(system_pairs: List[SampledSystem],
 def sample_system(ckpt_path: Path,
                   task: Task,
                   dataset_start_idx: int,
-                  n_samples: int,
                   n_replicates: int,
                   n_timesteps: int,
                   dataset: str,
                   split: str,
                   max_batch_size: int,
                   dataset_name: str,
-                  plinder_path: Path = None):
+                  n_samples: int = None,
+                  sys_idx_file: Path = None,
+                  plinder_path: Path = None,
+                  crossdocked_path: Path = None,
+                  **kwargs
+                  ):
     
     if not ckpt_path.exists():
         raise FileNotFoundError(f"{ckpt_path} not found")
@@ -483,37 +551,70 @@ def sample_system(ckpt_path: Path,
     train_cfg.num_workers = 0
     if plinder_path:
         train_cfg.plinder_path = plinder_path
+    if crossdocked_path:
+        train_cfg.crossdocked_path = crossdocked_path
 
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
     # 4) instantiate datamodule & model
-    dm  = quick_load.datamodule_from_config(train_cfg)
-    multitask_dataset = dm.load_dataset(split)
+    #dm  = quick_load.datamodule_from_config(train_cfg)
+    #multitask_dataset = dm.load_dataset(split)
     model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
 
-    dataset_idxs = range(dataset_start_idx, dataset_start_idx + n_samples) 
+    if sys_idx_file is None:
+        dataset_idxs = range(dataset_start_idx, dataset_start_idx + n_samples) 
+    else:
+        # read in pre-determined index file
+        with open(sys_idx_file, "r") as f:
+            line = f.readline().strip()
+            dataset_idxs = [int(i) for i in line.split(",")]
+
+            if n_samples is not None:
+                dataset_idxs = dataset_idxs[:n_samples]
+            
     sys_info = None
 
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
-        dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
+        
+        cfg = quick_load.load_cfg(overrides=['task_group=protein'], plinder_path=plinder_path)
+        plinder_datamodule = datamodule_from_config(cfg)    
+        dataset = plinder_datamodule.load_dataset(split).datasets['plinder'][plinder_link_version]
+        
+        #dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
         dataset_name = 'plinder'
 
         # system info
-        sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
-        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
-        sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'sys_id']]
+        sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].loc[dataset_idxs].copy()
+
+        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in range(sys_info.shape[0])]
+        sys_info['n_gt_lig_atoms'] =  sys_info['lig_atom_end'] - sys_info['lig_atom_start']
+        sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'n_gt_lig_atoms', 'sys_id']]
 
     elif dataset == 'crossdocked':
-        dataset = multitask_dataset.datasets['crossdocked']
+
+        cfg = quick_load.load_cfg(overrides=['task_group=fixed_crossdocked'], crossdocked_path=crossdocked_path)
+        crossdocked_datamodule = datamodule_from_config(cfg)    
+        dataset = crossdocked_datamodule.load_dataset(split).datasets['crossdocked']
+                               
+        #dataset = multitask_dataset.datasets['crossdocked']
         dataset_name = 'crossdocked'
 
         # system info
         sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
-        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
-        sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb', 'sys_id']]
-        dataset_name = 'crossdocked'
+        sys_info['n_gt_lig_atoms'] = sys_info['lig_atom_end'] - sys_info['lig_atom_start']
+        sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb', 'n_gt_lig_atoms']] 
+        sys_info['lig_id'] = sys_info['lig_sdf'].apply(lambda x: Path(Path(x).stem).stem)
+
+        # sort systems
+        sorted_idx = natsorted(sys_info.index, key=lambda i: sys_info.loc[i, "lig_id"])
+        sys_info = sys_info.iloc[sorted_idx].reset_index(drop=True)
+        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in range(sys_info.shape[0])]
+        
+        # sort dataset indices to match sys_info
+        dataset_idxs = list(dataset_idxs)
+        dataset_idxs = [dataset_idxs[i] for i in sorted_idx]
 
     elif dataset == 'pharmit':
         raise ValueError(f"Pharmit dataset does not include proteins!")
@@ -538,7 +639,10 @@ def sample_system(ckpt_path: Path,
                                               device=device,
                                               n_timesteps=n_timesteps,
                                               visualize=False,
-                                              coms=coms)
+                                              coms=coms,
+                                              **kwargs,
+                                              )
+    
 
     return g_list, sampled_systems, sys_info
 
@@ -587,6 +691,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
             lig.SetProp("_Name", f"gen_ligands_{i}")
 
         true_lig = replicates[0].get_gt_ligand(g=g_list[sys_id].to('cpu')) 
+        true_lig.SetProp("_Name", "ground_truth")
         true_lig_file = sys_gt_dir / "ligand.sdf"
 
         true_prot_file = sys_gt_dir / "protein_0.pdb"
@@ -665,17 +770,29 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
 def system_pairs_from_path(samples_dir: Path,
                            task: Task,
                            n_samples: int,
+                           sample_start_idx: int,
                            n_replicates: int):
     system_pairs = {}
 
-    for sys_idx in range(n_samples):
+    if sample_start_idx is None:
+        sample_start_idx = 0
+
+    for sys_idx in range(sample_start_idx, sample_start_idx+n_samples):
         
         sys_name = f"sys_{sys_idx}_gt"
         sys_dir = samples_dir / sys_name   
 
+        if not os.path.isdir(sys_dir):
+            print(f"WARNING: Missing directory for system {sys_idx}. Skipping this system.")
+            continue
+
         sys_pair = {}
 
         true_lig_file = sys_dir / "ligand.sdf"
+
+        if not os.path.exists(true_lig_file):
+            print(f"WARNING: Missing ground truth ligand file for system {sys_idx}. Depending on downstream metrics this may cause pipeline failures.")
+
         true_lig = Chem.SDMolSupplier(str(true_lig_file), sanitize=False, removeHs=False)[0]
 
         true_prot_file = sys_dir / "protein_0.pdb"
@@ -684,13 +801,20 @@ def system_pairs_from_path(samples_dir: Path,
         if 'pharmacophore' in task.groups_present:
             pharm = {}
             true_pharm_file = sys_dir / "pharmacophore.xyz"
-            pharm_data = np.loadtxt(true_pharm_file, skiprows=1, dtype=str)
 
-            if pharm_data.ndim == 1:
-                pharm_data = pharm_data.reshape(1, -1)
+            if not os.path.exists(true_pharm_file):
+                print(f"WARNING: Missing pharmacophore file for system {sys_idx}. Depending on downstream metrics this may cause pipeline failures.")
+                pharm_missing = True
 
-            pharm['types_idx'] = [ph_idx_to_elem.index(p) for p in pharm_data[:, 0].tolist()]
-            pharm['coords'] = pharm_data[:, 1:].astype(float)
+            else:
+                pharm_data = np.loadtxt(true_pharm_file, skiprows=1, dtype=str)
+
+                if pharm_data.ndim == 1:
+                    pharm_data = pharm_data.reshape(1, -1)
+
+                pharm['types_idx'] = [ph_idx_to_elem.index(p) for p in pharm_data[:, 0].tolist()]
+                pharm['coords'] = pharm_data[:, 1:].astype(float)
+
 
         if 'protein_structure' in task.groups_generated:   # Flexible protein tasks
             
@@ -718,17 +842,27 @@ def system_pairs_from_path(samples_dir: Path,
                     pair["true_prot_file"] = true_prot_file
                     pair["true_prot_id"] = true_prot_id
 
+                    if not os.path.exists(true_prot_file):
+                        print(f"WARNING: Missing true protein file for system {sys_idx}. Depending on downstream metrics this may cause pipeline failures.")
+
                     # true pharmacophores
-                    if 'pharmacophore' in task.groups_present:
+                    if 'pharmacophore' in task.groups_present and not pharm_missing:
                         pair["true_pharm"] = pharm
 
                     sys_pair[f"pair_{rep_idx}"] = pair
+                else:
+                    print(f"WARNING: Missing file for generated ligand {rep_idx} for system {sys_idx}.")
 
         else:   # rigid protein tasks
             pair = {}
 
             # generated ligand 
             gen_lig_file = sys_dir / f"gen_ligands.sdf"
+
+            if not os.path.exists(gen_lig_file):
+                print(f"WARNING: Missing generated ligands file for system {sys_idx}. Skipping this system.")
+                continue
+
             gen_ligs = [mol for mol in Chem.SDMolSupplier(str(gen_lig_file), sanitize=False, removeHs=False) if mol is not None]
             pair['gen_ligs'] = gen_ligs
             pair['gen_ligs_file'] = gen_lig_file
@@ -737,17 +871,24 @@ def system_pairs_from_path(samples_dir: Path,
             # true ligand 
             pair['true_lig'] = true_lig
             pair['true_lig_file'] = true_lig_file
+
+
+            if not os.path.exists(true_prot_file):
+                print(f"WARNING: Missing true protein file for system {sys_idx}. Skipping this system.")
+                continue
             
             # generated protein
             pair["gen_prot_file"] = true_prot_file
             pair["gen_prot_id"] = true_prot_id
 
             # true protein
+            # TODO: change back for non-reference analysis
             pair["true_prot_file"] = true_prot_file
-            pair["true_prot_id"] = true_prot_id
+            pair["true_prot_id"] =  true_prot_id
+
 
             # true pharmacophores
-            if 'pharmacophore' in task.groups_present:
+            if 'pharmacophore' in task.groups_present and not pharm_missing:
                 pair["true_pharm"] = pharm
 
             sys_pair['pair_0'] = pair
@@ -760,52 +901,70 @@ def main(args):
     task_name: str = args.task
     task: Task = task_name_to_class(task_name)
 
-    if task.unconditional:
-        raise ValueError("This script is for docking evaluation, a conditional task.")
-
-    if args.max_batch_size < args.n_samples:
-        raise ValueError("Maximum number of systems to sample per batch must be greater than the number of graphs")
-       
-    output_dir = args.output_dir or Path(omtra_root()) / 'omtra_pipelines' / 'docking_eval' / 'outputs' / task_name
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if task.unconditional or ('protein_identity' not in task.groups_present):
+        raise ValueError("This script is for evaluating models on protein-conditioned tasks.")
 
     if args.samples_dir is None:
-        samples_dir = output_dir / 'samples' 
-        samples_dir.mkdir(parents=True, exist_ok=True)
+        
+        model_ckpt = Path(args.ckpt_path)
+        if args.output_dir is None:
+            output_dir = model_ckpt.parent.parent / f"samples_{task_name}_{args.dataset}"
+        else:
+            output_dir = args.output_dir 
+        output_dir.mkdir(parents=True, exist_ok=True, mode=0o777)
+
+        # Additional keyword arguments for special types of sampling
+        kwargs = {'stochastic_sampling': args.stochastic_sampling,
+                  'noise_scaler': args.noise_scaler,
+                  'eps': args.eps,
+                  'n_lig_atom_margin': args.n_lig_atom_margin}
+        
+        if args.bs_per_gbmem is not None:
+            gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  # in GB
+            max_batch_size = int(gpu_mem_available * args.bs_per_gbmem)
+            max_batch_size = max(1, max_batch_size)  # ensure at least batch size of 1
+            print(f"Setting max_batch_size to {max_batch_size} based on available GPU memory.")
+        else:
+            max_batch_size = args.max_batch_size
 
         # Get samples from checkpoint
         g_list, sampled_systems, sys_info = sample_system(ckpt_path=args.ckpt_path,
                                                           task=task,
                                                           dataset_start_idx=args.dataset_start_idx,
                                                           n_samples=args.n_samples,
+                                                          sys_idx_file=args.sys_idx_file,
                                                           n_replicates=args.n_replicates,
                                                           n_timesteps=args.n_timesteps,
                                                           dataset=args.dataset,
                                                           split=args.split,
-                                                          max_batch_size=args.max_batch_size,
+                                                          max_batch_size=max_batch_size,
                                                           dataset_name=args.dataset,
-                                                          plinder_path=args.plinder_path)
+                                                          plinder_path=args.plinder_path,
+                                                          crossdocked_path=args.crossdocked_path,
+                                                          **kwargs)
         
         print("Finished sampling. Clearing torch GPU cache...\n")
-        # torch.cuda.synchronize()
-        # gc.collect()
-        # torch.cuda.empty_cache()
-        # torch.cuda.ipc_collect()
+        torch.cuda.synchronize()
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
         if isinstance(sys_info, pd.DataFrame) and not sys_info.empty:
-            sys_info.to_csv(f"{samples_dir}/{task_name}_sys_info.csv", index=False)
+            sys_info.to_csv(f"{output_dir}/sys_info.csv", index=False)
         
         # write samples to output files and configure dictionary of system pairs
         system_pairs = write_system_pairs(g_list=g_list,
                                           sampled_systems=sampled_systems,
                                           task=task,
                                           n_replicates=args.n_replicates,
-                                          output_dir=samples_dir)
+                                          output_dir=output_dir)
     else:
         samples_dir = args.samples_dir
+        output_dir = args.output_dir or samples_dir
+        output_dir.mkdir(parents=True, exist_ok=True, mode=0o777)
 
         if args.sys_info_file is None:
-            sys_info_file =  f"{samples_dir}/{task_name}_sys_info.csv"
+            sys_info_file =  f"{samples_dir}/sys_info.csv"
             print(f"Using default system info file: {sys_info_file}")
         else:
             sys_info_file = args.sys_info_file
@@ -819,27 +978,34 @@ def main(args):
         system_pairs = system_pairs_from_path(samples_dir=samples_dir,
                                               task=task,
                                               n_samples=args.n_samples,
+                                              sample_start_idx=args.sample_start_idx,
                                               n_replicates=args.n_replicates)
     
-    metrics_to_run = {'pb_valid': not args.disable_pb_valid,
-                      'gnina': not args.disable_gnina,
-                      'posecheck': not args.disable_posecheck,
-                      'rmsd': not args.disable_rmsd and 'ligand_identity_condensed' not in task.groups_generated,
-                      'interaction_recovery': not args.disable_interaction_recovery,
-                      'pharm_match': (not args.disable_pharm_match) and ('pharmacophore' in task.groups_present),
-                      'ground_truth': not args.disable_ground_truth_metrics}
-    
-    metrics = compute_metrics(system_pairs=system_pairs,
-                              task=task,
-                              metrics_to_run=metrics_to_run,
-                              timeout=args.timeout)        
+    if not args.sample_only:
+        metrics_to_run = {'pb_valid': not args.disable_pb_valid,
+                        'gnina': not args.disable_gnina,
+                        'posecheck': not args.disable_posecheck,
+                        'rmsd': not args.disable_rmsd and 'ligand_identity_condensed' not in task.groups_generated,
+                        'interaction_recovery': not args.disable_interaction_recovery,
+                        'pharm_match': (not args.disable_pharm_match) and ('pharmacophore' in task.groups_present),
+                        'ground_truth': not args.disable_ground_truth_metrics}
+        
+        metrics = compute_metrics(system_pairs=system_pairs,
+                                task=task,
+                                metrics_to_run=metrics_to_run,
+                                timeout=args.timeout,
+                                disable_strain=args.disable_strain
+                                )
 
-    metrics = metrics.reset_index()
+        metrics = metrics.reset_index()
 
-    if isinstance(sys_info, pd.DataFrame) and not sys_info.empty:
-        metrics = metrics.merge(sys_info, how='left', on='sys_id')  # Merge on 'sys_id'
+        if isinstance(sys_info, pd.DataFrame) and not sys_info.empty:
+            metrics = metrics.merge(sys_info, how='left', on='sys_id')  # Merge on 'sys_id'
 
-    metrics.to_csv(f"{output_dir}/{task_name}_metrics.csv", index=False)
+        if args.sample_start_idx is None:
+            metrics.to_csv(f"{output_dir}/eval_metrics.csv", index=False)
+        else:
+            metrics.to_csv(f"{output_dir}/eval_metrics_{args.sample_start_idx}.csv", index=False)
 
 if __name__ == "__main__":
     args = parse_args()
