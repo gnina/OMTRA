@@ -113,11 +113,11 @@ Modality.register(MODALITY_REGISTER,
 )
 
 Modality.register(MODALITY_REGISTER,
-    name='lig_chiral',
+    name='lig_chiral_binary',
     group='ligand_identity_extra',
     graph_entity='node',
     entity_name='lig',
-    data_key='chiral',
+    data_key='chiral_binary',
     n_categories=2, 
 )
 
@@ -128,6 +128,15 @@ Modality.register(MODALITY_REGISTER,
     entity_name='lig',
     data_key='cond_a',
     n_categories=num_condensed_atom_types, 
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='lig_chiral',
+    group='ligand_chirality',
+    graph_entity='node',
+    entity_name='lig',
+    data_key='chiral',
+    n_categories= 5, 
 )
 
 Modality.register(MODALITY_REGISTER,

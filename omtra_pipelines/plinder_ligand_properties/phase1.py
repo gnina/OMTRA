@@ -10,7 +10,7 @@ def parse_args():
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
     p.add_argument('--n_feats', type=int, default=6, help='Number of additional features per molecule.')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
-    p.add_argument('--feat_names', type=list, default=['impl_H', 'aro', 'hyb', 'ring', 'chiral', 'frag'], help='Name of the new Zarr array.')
+    p.add_argument("--feat_names", type=str, nargs="+", default=['impl_H', 'aro', 'hyb', 'ring', 'chiral', 'frag'], help="Feature names.")
     
     args = p.parse_args()
 

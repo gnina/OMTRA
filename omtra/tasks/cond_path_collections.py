@@ -3,7 +3,8 @@
 denovo_ligand = {
     'lig_x': {
         'type': 'continuous_interpolant',
-    }
+    },
+    'lig_chiral': dict(type='ctmc_mask'),
 }
 
 for modality in 'ace':
@@ -11,16 +12,19 @@ for modality in 'ace':
 
 denovo_ligand_condensed = {'lig_x': dict(type='continuous_interpolant'),
                            'lig_e_condensed': dict(type='ctmc_mask'),
-                           'lig_cond_a': dict(type='ctmc_mask')}
+                           'lig_cond_a': dict(type='ctmc_mask'),
+                           'lig_chiral': dict(type='ctmc_mask')}
+
 
 
 denovo_ligand_extra_feats = {
     'lig_x': {
         'type': 'continuous_interpolant',
-    }
+    },
+    'lig_chiral': dict(type='ctmc_mask'),
 }
 
-for modality in ['a', 'c', 'e', 'impl_H', 'aro', 'hyb', 'ring', 'chiral']: 
+for modality in ['a', 'c', 'e', 'impl_H', 'aro', 'hyb', 'ring', 'chiral_binary']: 
     denovo_ligand_extra_feats[f'lig_{modality}'] = dict(type='ctmc_mask')
 
 

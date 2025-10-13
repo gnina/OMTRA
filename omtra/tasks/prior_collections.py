@@ -6,23 +6,28 @@ denovo_ligand = {
     'lig_x': {
         'type': 'gaussian',
         'params': {'ot': True}
-    }
+    },
+    'lig_chiral': dict(type='masked'),
 }
+
 for modality in 'ace':
     denovo_ligand[f'lig_{modality}'] = dict(type='masked')
 
+
 denovo_ligand_condensed = {'lig_x': {'type': 'gaussian', 'params': {'ot': True}},
                            'lig_e_condensed': dict(type='masked'),
-                           'lig_cond_a': dict(type='masked')}
+                           'lig_cond_a': dict(type='masked'),
+                           'lig_chiral': dict(type='masked')}
 
 # de novo ligand with extra atom features
 denovo_ligand_extra_feats = {
     'lig_x': {
         'type': 'gaussian',
         'params': {'ot': True}
-    }
+    },
+    'lig_chiral': dict(type='masked'),
 }
-for modality in ['a', 'c', 'e', 'impl_H', 'aro', 'hyb', 'ring', 'chiral']:
+for modality in ['a', 'c', 'e', 'impl_H', 'aro', 'hyb', 'ring', 'chiral_binary']:
     denovo_ligand_extra_feats[f'lig_{modality}'] = dict(type='masked')
 
 

@@ -84,7 +84,7 @@ class Task:
 @register_task("denovo_ligand_extra_feats")
 class DeNovoLigandExtraFeats(Task):
     groups_fixed = []
-    groups_generated = ['ligand_identity', 'ligand_structure', 'ligand_identity_extra']
+    groups_generated = ['ligand_identity', 'ligand_chirality','ligand_structure', 'ligand_identity_extra']
 
     priors = pc.denovo_ligand_extra_feats
     conditional_paths = cpc.denovo_ligand_extra_feats
@@ -92,7 +92,7 @@ class DeNovoLigandExtraFeats(Task):
 
 @register_task("ligand_conformer_extra_feats")
 class LigandConformerExtraFeats(Task):
-    groups_fixed = ['ligand_identity', 'ligand_identity_extra']
+    groups_fixed = ['ligand_identity','ligand_chirality','ligand_identity_extra']
     groups_generated = ['ligand_structure']
 
     priors = pc.ligand_conformer
@@ -106,7 +106,7 @@ class LigandConformerExtraFeats(Task):
 class RigidDockingExtraFeats(Task):
     """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
 
-    groups_fixed = ["ligand_identity", "ligand_identity_extra", "protein_identity", "protein_structure"]
+    groups_fixed = ["ligand_identity",'ligand_chirality', "ligand_identity_extra", "protein_identity", "protein_structure"]
     groups_generated = ["ligand_structure"]
 
     priors = deepcopy(pc.ligand_conformer)
@@ -118,7 +118,7 @@ class RigidDockingExtraFeats(Task):
 @register_task("flexible_docking_extra_feats")
 class FlexibleDockingExtraFeats(Task):
     """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
-    groups_fixed = ['ligand_identity', 'ligand_identity_extra', 'protein_identity']
+    groups_fixed = ['ligand_identity','ligand_chirality', 'ligand_identity_extra', 'protein_identity']
     groups_generated = ['ligand_structure', 'protein_structure']
 
     priors = deepcopy(pc.ligand_conformer)
@@ -134,7 +134,7 @@ class FlexibleDockingExtraFeats(Task):
 @register_task("fixed_protein_ligand_denovo_extra_feats")
 class FixedProteinLigandDeNovoExtraFeats(Task):
     groups_fixed = ['protein_identity', 'protein_structure']
-    groups_generated = ['ligand_identity', 'ligand_identity_extra', 'ligand_structure']
+    groups_generated = ['ligand_identity','ligand_chirality', 'ligand_identity_extra', 'ligand_structure']
 
     priors = deepcopy(pc.denovo_ligand_extra_feats)
 
@@ -143,7 +143,7 @@ class FixedProteinLigandDeNovoExtraFeats(Task):
 @register_task("protein_ligand_denovo_extra_feats")
 class ProteinLigandDeNovoExtraFeats(Task):
     groups_fixed = ['protein_identity']
-    groups_generated = ['protein_structure', 'ligand_identity', 'ligand_identity_extra', 'ligand_structure']
+    groups_generated = ['protein_structure', 'ligand_identity','ligand_chirality', 'ligand_identity_extra', 'ligand_structure']
 
     priors = deepcopy(pc.denovo_ligand_extra_feats)
     

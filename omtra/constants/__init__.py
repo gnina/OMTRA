@@ -13,6 +13,8 @@ ph_idx_to_elem = ['P', 'S', 'F', 'N', 'O', 'C', 'Cl']
 
 charge_map = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6]
 
+lig_atom_chirality_map = ['nonchiral', 'R', 'S', 'E', 'Z']
+
 hybridization_map = ['unspecified', 's', 'sp', 'sp2', 'sp3', 'sp3d', 'sp3d2', 'other']
 max_impl_H = 4
 
@@ -20,7 +22,7 @@ extra_feats_map = {'impl_H': max_impl_H,
                    'aro': 2,
                    'hyb': len(hybridization_map),
                    'ring': 2,
-                   'chiral': 2}
+                   'chiral_binary': 2}
 
 num_condensed_atom_types = 392  # TODO: don't hardcode this?
 

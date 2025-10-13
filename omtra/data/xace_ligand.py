@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Tuple, Union
 from collections import defaultdict
 import math
-from omtra.constants import lig_atom_type_map, extra_feats_map
+from omtra.constants import lig_atom_type_map, extra_feats_map, lig_atom_chirality_map
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
 
 from omtra.utils.misc import combine_tcv_counts, bad_mol_reporter
@@ -26,11 +26,13 @@ class MolXACE:
     c: Optional[Union[np.ndarray, torch.Tensor]] = None
     e: Optional[Union[np.ndarray, torch.Tensor]] = None  # corresponds to edge attributes (bond orders)
 
+    #chiral: Optional[Union[np.ndarray, torch.Tensor]] = None
+
     impl_H: Optional[Union[np.ndarray, torch.Tensor]] = None
     aro: Optional[Union[np.ndarray, torch.Tensor]] = None
     hyb: Optional[Union[np.ndarray, torch.Tensor]] = None
     ring: Optional[Union[np.ndarray, torch.Tensor]] = None
-    chiral: Optional[Union[np.ndarray, torch.Tensor]] = None
+    chiral_binary: Optional[Union[np.ndarray, torch.Tensor]] = None
     rdkit_mol: Optional[Chem.Mol] = None  # RDKit molecule
 
     cond_a: Optional[Union[np.ndarray, torch.Tensor]] = None    # condensed atom typing
@@ -70,6 +72,7 @@ class MolXACE:
             dense_xace = MolXACE(
                 x=self.x,
                 cond_a=self.cond_a,
+                #chiral=self.chiral,
                 e=bond_types,
                 edge_idxs=edge_idxs
             )
@@ -79,11 +82,12 @@ class MolXACE:
                 x=self.x,
                 a=self.a,
                 c=self.c,
+                #chiral=self.chiral,
                 impl_H=self.impl_H,
                 aro=self.aro,
                 hyb=self.hyb,
                 ring=self.ring,
-                chiral=self.chiral,
+                chiral_binary=self.chiral_binary,
                 e=bond_types,
                 edge_idxs=edge_idxs
             )
@@ -93,6 +97,7 @@ class MolXACE:
                 x=self.x,
                 a=self.a,
                 c=self.c,
+                #chiral=self.chiral,
                 e=bond_types,
                 edge_idxs=edge_idxs
             )
@@ -239,12 +244,13 @@ def add_fake_atoms(mol: MolXACE, fake_atom_p: float, cond_a_typer: CondensedAtom
     fake_atom_positions = fake_atom_positions + torch.randn_like(fake_atom_positions)
     mol.x = torch.cat((mol.x, fake_atom_positions), dim=0)
 
+    #fake_atom_chirality = torch.full_like(mol.chiral[anchor_atom_idxs], fill_value=len(lig_atom_chirality_map))
+    #mol.chiral = torch.cat((mol.chiral, fake_atom_chirality), dim=0)
+
     # TODO: dataset class initialize CondensedAtomTyper and pass to add_fake_atoms. Right now done by Pharmit dataclass
 
     if mol.cond_a is not None:  # condensed atom typing
-        fake_atom_cond_a =  torch.full_like(
-            mol.cond_a[anchor_atom_idxs], 
-            fill_value=cond_a_typer.fake_atom_idx)
+        fake_atom_cond_a = torch.full_like(mol.cond_a[anchor_atom_idxs], fill_value=cond_a_typer.fake_atom_idx)
         mol.cond_a = torch.cat((mol.cond_a, fake_atom_cond_a), dim=0)
 
     else: 

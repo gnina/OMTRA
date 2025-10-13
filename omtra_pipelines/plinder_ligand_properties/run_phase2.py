@@ -67,9 +67,10 @@ def process_block(block_start_idx: int, block_size: int):
             mol = dgl_to_rdkit(g)
             Chem.SanitizeMol(mol)
 
-            atom_props = ligand_properties(mol)                         # (n_atoms, 5)
-            fragments = fragment_molecule(mol)                          # (n_atoms, 1)
-            atom_props = np.concatenate((atom_props, fragments), axis=1)# (n_atoms, 6)
+            atom_props = get_chirality(mol)
+            #atom_props = ligand_properties(mol)                         # (n_atoms, 1)
+            #fragments = fragment_molecule(mol)                          # (n_atoms, 1)
+            #atom_props = np.concatenate((atom_props, fragments), axis=1)# (n_atoms, 6)
 
             assert atom_props.shape[0] == (end_idx - start_idx), f"Mismatch in atom counts: computed properties for {atom_props.shape[0]} atoms but expected {(end_idx - start_idx)}"
 
@@ -199,7 +200,8 @@ def run_parallel(plinder_path: Path,
 
             error_callback_fn = partial(error_and_update, 
                                     pbar=pbar,
-                                    error_counter=error_counter)
+                                    error_counter=error_counter,
+                                    output_dir=output_dir)
                                
             block_start_idx = block_idx * block_size
 

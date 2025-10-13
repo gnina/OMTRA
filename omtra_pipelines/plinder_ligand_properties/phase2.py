@@ -48,6 +48,49 @@ def ligand_properties(mol: Chem.Mol) -> np.ndarray:
 
     return new_feats
 
+def get_chirality(mol, conf_id: int = -1):
+    """
+    Return an (n_atoms,) int array with:
+      0 = not chiral, 1 = R, 2 = S, 3 = E, 4 = Z
+    Uses 3D coordinates (AssignStereochemistryFrom3D) to set stereo,
+    then assigns CIP labels.
+    """
+
+    n_atoms = mol.GetNumAtoms()
+    mol_h = Chem.AddHs(mol)
+
+    if mol_h.GetNumConformers() == 0:
+        raise ValueError("Molecule has no conformers.")
+    if conf_id >= mol_h.GetNumConformers():
+        raise ValueError(f"conf_id {conf_id} out of range.")
+
+    out = np.zeros(mol_h.GetNumAtoms(), dtype=int)
+
+    # Perceive stereo from 3D, then assign CIP labels
+    Chem.AssignStereochemistryFrom3D(mol_h, confId=conf_id, replaceExistingTags=True)
+    Chem.AssignCIPLabels(mol_h)
+
+    # Atom R/S
+    for atom in mol_h.GetAtoms():
+        if atom.HasProp('_CIPCode'):
+            code = atom.GetProp('_CIPCode')
+            if code == 'R':
+                out[atom.GetIdx()] = 1
+            elif code == 'S':
+                out[atom.GetIdx()] = 2
+
+    # Bond E/Z → mark both atoms on each double bond
+    for bond in mol_h.GetBonds():
+        st = bond.GetStereo()
+        if st == Chem.BondStereo.STEREOE:
+            out[bond.GetBeginAtomIdx()] = max(out[bond.GetBeginAtomIdx()], 3)
+            out[bond.GetEndAtomIdx()]   = max(out[bond.GetEndAtomIdx()],   3)
+        elif st == Chem.BondStereo.STEREOZ:
+            out[bond.GetBeginAtomIdx()] = max(out[bond.GetBeginAtomIdx()], 4)
+            out[bond.GetEndAtomIdx()]   = max(out[bond.GetEndAtomIdx()],   4)
+
+    return out[:n_atoms, None]
+
 
 def fragment_molecule(mol: Chem.Mol) -> np.ndarray:
     """ 
@@ -100,10 +143,9 @@ def move_feats_to_t1(task_name: str, g: dgl.DGLHeteroGraph, t: str = '0'):
     return g
 
 
-def dgl_to_rdkit(g):
+def dgl_to_rdkit(g, task_name='denovo_ligand'):
     """ Converts one DGL molecule to RDKit ligand """
 
-    task_name: str = 'denovo_ligand'
     task: Task = task_name_to_class(task_name)
 
     g = move_feats_to_t1(task_name, g, '1_true')

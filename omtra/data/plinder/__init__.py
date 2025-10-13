@@ -55,12 +55,13 @@ class LigandData:
     )
     atom_types: Optional[np.ndarray] = None
     atom_charges:Optional[np.ndarray] = None
+    #atom_chiral: Optional[np.ndarray] = None
     # extra feats
     atom_impl_H: Optional[np.ndarray] = None
     atom_aro: Optional[np.ndarray] = None
     atom_hyb: Optional[np.ndarray] = None
     atom_ring: Optional[np.ndarray] = None
-    atom_chiral: Optional[np.ndarray] = None
+    atom_chiral_binary: Optional[np.ndarray] = None
     # condensed atom typing
     atom_cond_a: Optional[np.ndarray] = None
     # fragments
@@ -84,6 +85,7 @@ class LigandData:
     def to_xace_mol(self, dense=False) -> MolXACE:
         xace_dict = {
             'x': self.coords,
+            #'chiral': self.atom_chiral,
             'e': self.bond_types,
             'edge_idxs': self.bond_indices,
         }
@@ -100,7 +102,7 @@ class LigandData:
                 xace_dict['aro'] = self.atom_aro
                 xace_dict['hyb'] = self.atom_hyb
                 xace_dict['ring'] = self.atom_ring
-                xace_dict['chiral'] = self.atom_chiral
+                xace_dict['chiral_binary'] = self.atom_chiral_binary
 
         if self.bond_types is None or self.bond_indices is None:
             xace_dict['e'] = torch.zeros((0,), dtype=torch.long)

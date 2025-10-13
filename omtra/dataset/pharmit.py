@@ -93,6 +93,8 @@ class PharmitDataset(ZarrDataset):
         for nfeat in ['x', 'a', 'c']:
             xace_dict[nfeat] = self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
         
+        #xace_dict['chiral'] = self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)[:,0]
+        
         if include_extra_feats:
             # Get extra ligand atom features as a dictionary
             extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
@@ -101,8 +103,11 @@ class PharmitDataset(ZarrDataset):
 
             # Iterate over all but the last feature
             for col_idx, feat in enumerate(features[:-1]):
-                col_data = extra_feats[:, col_idx]         
-                xace_dict[feat] = torch.from_numpy(col_data).long()
+                col_data = extra_feats[:, col_idx]
+                if feat == 'chiral':
+                    xace_dict['chiral_binary'] = torch.from_numpy(col_data).long()
+                else:         
+                    xace_dict[feat] = torch.from_numpy(col_data).long()
         
         if condensed_atom_typing:
             extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
@@ -158,11 +163,12 @@ class PharmitDataset(ZarrDataset):
                     'x_1_true': xace_ligand.x, 
                     'a_1_true': xace_ligand.a,
                     'c_1_true': lig_c,
+                    #'chiral_1_true': xace_ligand.chiral,
                     'impl_H_1_true': xace_ligand.impl_H,
                     'aro_1_true': xace_ligand.aro,
                     'hyb_1_true': xace_ligand.hyb,
                     'ring_1_true': xace_ligand.ring,
-                    'chiral_1_true': xace_ligand.chiral
+                    'chiral_binary_1_true': xace_ligand.chiral_binary,
                     },
             }
         
@@ -170,7 +176,9 @@ class PharmitDataset(ZarrDataset):
             g_node_data = {
                 'lig': {
                     'x_1_true': xace_ligand.x,
-                    'cond_a_1_true': xace_ligand.cond_a}
+                    'cond_a_1_true': xace_ligand.cond_a,
+                    #'chiral_1_true': xace_ligand.chiral,
+                    }
             }
 
         else:
@@ -178,7 +186,8 @@ class PharmitDataset(ZarrDataset):
                 'lig': {
                     'x_1_true': xace_ligand.x, 
                     'a_1_true': xace_ligand.a,
-                    'c_1_true': lig_c
+                    'c_1_true': lig_c,
+                    #'chiral_1_true': xace_ligand.chiral,
                     },
             }
 
