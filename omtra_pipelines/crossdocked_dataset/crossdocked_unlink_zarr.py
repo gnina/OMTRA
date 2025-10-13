@@ -51,6 +51,7 @@ class CrossdockedNoLinksZarrConverter:
         category: str = None,
         num_workers: int = 1,
         batch_size: int = 200,
+        include_all_tuples: bool = True, #flag to include systems with condensed atom types that are not in pharmit or plinder
     ):
         self.output_path = Path(output_path)
         self.struc_chunk_size = struc_chunk_size
@@ -61,6 +62,7 @@ class CrossdockedNoLinksZarrConverter:
         self.category = category
         self.num_workers = num_workers
         self.batch_size = batch_size
+        self.include_all_tuples = include_all_tuples
 
         if not self.output_path.exists():
             self.store = zarr.storage.LocalStore(str(self.output_path))
@@ -541,8 +543,14 @@ class CrossdockedNoLinksZarrConverter:
                 
                 result = processor.process_system(save_pockets=False)
                 if result:
-                    # Check for invalid tuples in extra ligand features (only append if no invalid tuples)
-                    if self.invalid_tuple_check(result) == False: #means there isnt an invalid tuple
+                    if self.include_all_tuples == False:
+                        # Check for invalid tuples in extra ligand features (only append if no invalid tuples)
+                        if self.invalid_tuple_check(result) == False: #means there isnt an invalid tuple
+                            sysdata = result["systems_list"]
+                            system_data_list.append(sysdata)
+                        else:
+                            logger.info(f"Skipping system with receptor: {rec_path}, ligand: {lig_path} due to invalid tuples.")
+                    else:
                         sysdata = result["systems_list"]
                         system_data_list.append(sysdata)
             except Exception as e:
