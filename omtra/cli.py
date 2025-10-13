@@ -112,6 +112,32 @@ def create_parser():
         help="Path to the Plinder dataset (required for conditional tasks without input files)"
     )
     sample_parser.add_argument('--split', type=str, default='val', help='Which data split to use')
+    
+    sample_parser.add_argument(
+        "--stochastic_sampling",
+        action="store_true",
+        help="If set, perform stochastic sampling."
+    )
+    sample_parser.add_argument(
+        "--noise_scaler",
+        type=float,
+        default=1.0,
+        help="Scaling factor for noise (stochasticity)"
+    )
+    sample_parser.add_argument(
+        "--eps",
+        type=float,
+        default=0.01,
+        help="Scaling factor for noise (stochasticity)"
+    )
+    sample_parser.add_argument("--use_gt_n_lig_atoms", action="store_true", help="When enabled, use the number of ground truth ligand atoms for de novo design.")
+    sample_parser.add_argument(
+        '--n_lig_atom_margin',
+        type=float,
+        default=15,
+        help='number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set (default: 0.15, i.e. +/- 15 percent)'
+    )
+    sample_parser.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
 
     sample_parser.add_argument(
         "--protein_file",
@@ -137,8 +163,6 @@ def create_parser():
         default=None,
         help="Directory containing input files (protein.pdb, ligand.sdf, pharmacophore.xyz)"
     )
-    sample_parser.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
-    
     return parser
 
 
@@ -211,6 +235,10 @@ def run_sample(args):
             else:
                 print(f"Warning: Task '{args.task}' is conditional task but no input files provided. Using dataset path to sample from.")
     
+    if hasattr(args, 'checkpoint') and args.checkpoint:
+        from pathlib import Path
+        args.checkpoint = Path(args.checkpoint)
+    
     sample_main(args)
 
 
@@ -226,8 +254,13 @@ def main():
         else:
             parser.error(f"Unknown command: {args.command}")
     except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        import os, traceback
+        if os.environ.get("OMTRA_DEBUG") == "1":
+            traceback.print_exc()
+            raise
+        else:
+            print(f"Error: {e}")
+            sys.exit(1)
 
 
 if __name__ == '__main__':
