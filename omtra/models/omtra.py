@@ -79,6 +79,7 @@ class OMTRA(pl.LightningModule):
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
         pharm_var: float = 0.0,
+        pharm_pos_var: float = 0.0, # variance to sample noise variance from for pharm positions
 
     ):
         super().__init__()
@@ -101,6 +102,7 @@ class OMTRA(pl.LightningModule):
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
         self.pharm_var = pharm_var
+        self.pharm_pos_var = pharm_pos_var
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -152,6 +154,7 @@ class OMTRA(pl.LightningModule):
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
             fake_atoms=self.fake_atom_p>0.0,
+            pharm_pos_var_flag=self.pharm_pos_var>0.0, #binary flag for whether to add noise to pharm positions, 
         )
 
         if not ligand_encoder.is_empty():
@@ -383,6 +386,21 @@ class OMTRA(pl.LightningModule):
         lig_ue_mask = get_upper_edge_mask(g, "lig_to_lig")
         upper_edge_mask = {}
         upper_edge_mask["lig_to_lig"] = lig_ue_mask
+
+        # add noise to pharmaophore positions
+        if self.pharm_pos_var > 0.0:
+            x = g.nodes["pharm"].data['x_1_true'] #ground truth positions
+            # sample sigma from uniform(0, pharm_pos_var)
+            #sigma = torch.rand_like(x) * self.pharm_pos_var #variance to be used for noise at each position
+            sigma_scalar = torch.rand(x.shape[0], 1, device=x.device) * self.pharm_pos_var
+            sigma = sigma_scalar.expand_as(x) #expand to all dimensions of x (3 coordinates)
+            # sample episilon from normal(0, sigma.sqrt) (get st dev from variance)
+            eps = torch.randn_like(x) * sigma.sqrt() #noise at each position
+            # add this noise to pharmcophore positions
+            g.nodes["pharm"].data['x_1_true'] = x + eps #add noise to true positions
+
+            # store the variance used for each pharmacophore
+            g.nodes["pharm"].data['pharm_pos_var'] = sigma_scalar  # (num_nodes, 1)
 
         # sample conditional path
         # TODO: ctmc conditional path sampling manually sets things to mask token rather 
