@@ -72,7 +72,8 @@ class VectorField(nn.Module):
         dst_feat_msg_reduction_factor: float = 4,
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
-        res_id_embed_dim: int = 64
+        res_id_embed_dim: int = 64,
+        pharm_pos_var_flag: bool = False,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -91,6 +92,7 @@ class VectorField(nn.Module):
         self.has_mask = has_mask
         self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
+        self.pharm_pos_var_flag = pharm_pos_var_flag
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -196,6 +198,8 @@ class VectorField(nn.Module):
             input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
             if res_id_embed_dim is not None and ntype == 'prot_atom':
                 input_dim += res_id_embed_dim
+            if self.pharm_pos_var_flag and ntype == 'pharm': 
+                input_dim += 1  # Add 1
 
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
@@ -478,6 +482,13 @@ class VectorField(nn.Module):
                 task_embedding_batch[node_batch_idx[ntype]]
             )  # expand task embedding for each node in the batch
 
+            # add flag for whether pharm positions are being noised
+            if self.pharm_pos_var_flag:
+                if ntype == "pharm":
+                    pharm_variance = g.nodes[ntype].data['pharm_pos_var']
+                    node_scalar_features[ntype].append(pharm_variance)
+
+
             # concatenate all initial node scalar features and pass through the embedding layer
             node_scalar_features[ntype] = torch.cat(
                 node_scalar_features[ntype], dim=-1
@@ -485,6 +496,7 @@ class VectorField(nn.Module):
             node_scalar_features[ntype] = self.scalar_embedding[ntype](
                 node_scalar_features[ntype]
             )
+
 
         if self.self_conditioning and prev_dst_dict is None:
             train_self_condition = self.training and (torch.rand(1) > 0.5).item()
