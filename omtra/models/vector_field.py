@@ -545,7 +545,7 @@ class VectorField(nn.Module):
 
 
         # add pharmacophore variance to pharm node feature embeddings if necessary
-        if 'pharm' in node_scalar_features and self.pharm_pos_var_flag:
+        if 'pharm' in node_scalar_features and self.pharm_pos_var_flag and g.num_nodes('pharm') > 0:
             pharm_variance = g.nodes['pharm'].data['pharm_pos_var']
             node_scalar_features['pharm'].append(pharm_variance)
 
