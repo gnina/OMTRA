@@ -319,15 +319,14 @@ def main(args):
             g_list = [ dataset[(task_name, i)].to(device) for i in dataset_idxs ]
             n_replicates = args.n_replicates
 
-    # set coms if protein is present
-    if (
-        g_list is not None
-        and 'protein_identity' in task.groups_present
-        and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed']))
-    ):
-        coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
-    else:
-        coms = None
+    # set coms if protein is present, prefer ligand com
+    coms = None
+    if g_list is not None and 'protein_identity' in task.groups_present:
+        if g_list[0].num_nodes('lig') > 0 and 'x_1_true' in g_list[0].nodes['lig'].data:
+            coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
+        # fallback protein atom com if present
+        elif g_list[0].num_nodes('prot_atom') > 0 and 'x_1_true' in g_list[0].nodes['prot_atom'].data:
+            coms = [ g.nodes['prot_atom'].data['x_1_true'].mean(dim=0) for g in g_list ]
 
     sampled_systems = model.sample(
         g_list=g_list,
@@ -391,6 +390,7 @@ def main(args):
             )
         ):
             sys_gt_dir = output_dir / f"sys_{sys_id}_gt"
+            sys_gt_dir.mkdir(parents=True, exist_ok=True)
 
             # write all ligands
             if 'ligand_structure' in task.groups_generated:

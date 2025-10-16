@@ -408,7 +408,7 @@ dependencies:
       - peppr==0.2.3
       - plinder==0.2.20
       - plotly==5.24.1
-      - posebusters==0.3.1
+      - posebusters==0.5.1
       - propcache==0.2.1
       - proto-plus==1.25.0
       - protobuf==5.29.3

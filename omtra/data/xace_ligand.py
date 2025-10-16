@@ -51,8 +51,11 @@ class MolXACE:
         else:
             n_atoms = self.a.shape[0]
             
-        adj = torch.zeros((n_atoms, n_atoms), dtype=self.e.dtype)
-        adj[self.edge_idxs[:, 0], self.edge_idxs[:, 1]] = self.e
+        e_tensor = self.e
+        edge_idxs_tensor = self.edge_idxs
+        
+        adj = torch.zeros((n_atoms, n_atoms), dtype=e_tensor.dtype)
+        adj[edge_idxs_tensor[:, 0], edge_idxs_tensor[:, 1]] = e_tensor
         
         # Get the upper-triangular indices
         upper_edge_idxs = torch.triu_indices(n_atoms, n_atoms, offset=1)
@@ -216,11 +219,11 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         tcv_counts[tuple(row)] = count
 
     return MolXACE(
-        x=positions,
-        a=atom_types,
-        c=atom_charges,
-        e=bond_types,
-        edge_idxs=bond_idxs,
+        x=torch.from_numpy(positions).float(),
+        a=torch.from_numpy(atom_types).long(),
+        c=torch.from_numpy(atom_charges).long(),
+        e=torch.from_numpy(bond_types).long(),
+        edge_idxs=torch.from_numpy(bond_idxs).long(),
         tcv_counts=tcv_counts,
         rdkit_mol=molecule
     )

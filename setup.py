@@ -10,7 +10,7 @@ setup(
     license='Apache 2.0',  # Or any other license you prefer
     entry_points={
         'console_scripts': [
-            'omtra=omtra.cli:main',
+            'omtra=cli:main',
         ],
     },
 )

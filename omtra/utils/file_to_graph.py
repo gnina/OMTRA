@@ -18,21 +18,23 @@ from omtra.data.graph import build_complex_graph
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.data.plinder import StructureData, LigandData, BackboneData
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
+from omtra.utils.embedding import residue_sinusoidal_encoding
 
 
 
 # loaders
 def load_protein_biotite(protein_file: Path) -> StructureData:
     try:
-        from biotite.structure.io import pdb, mmcif
+        from biotite.structure.io import pdb
+        from biotite.structure.io.pdbx import CIFFile
     except ImportError as e:
         raise ImportError("biotite is required: pip install biotite") from e
 
     suffix = protein_file.suffix.lower()
     if suffix == ".pdb":
-        st = pdb.PDBFile.read(str(protein_file)).get_structure()
+        st = pdb.PDBFile.read(str(protein_file)).get_structure(model=1)
     elif suffix == ".cif":
-        st = mmcif.CifFile.read(str(protein_file)).get_structure()
+        st = CIFFile.read(str(protein_file)).get_structure(model=1)
     else:
         raise ValueError(f"Unsupported protein format: {suffix}")
 
@@ -92,25 +94,25 @@ def load_ligand_rdkit(ligand_file: Path, compute_condensed: bool = False) -> Lig
         extra_feats = extra_feats[:, :-1]  # (n_atoms, 5)
         
         atom_cond_a = cond_typer.feats_to_cond_a(
-            a=xace.a.numpy(),
-            c=xace.c.numpy(), 
+            a=xace.a,
+            c=xace.c, 
             extra_feats=extra_feats
         )
 
     return LigandData(
-        coords=xace.x.numpy(),
-        bond_types=xace.e.numpy(),
-        bond_indices=xace.edge_idxs.numpy().T if hasattr(xace.edge_idxs, 'numpy') else np.array(xace.edge_idxs).T,
+        coords=xace.x,
+        bond_types=xace.e,
+        bond_indices=xace.edge_idxs.T,
         is_covalent=False,
         ccd="LIG",
         sdf=str(ligand_file),
-        atom_types=xace.a.numpy(),
-        atom_charges=xace.c.numpy(),
-        atom_impl_H=getattr(xace, 'impl_H', None).numpy() if getattr(xace, 'impl_H', None) is not None else None,
-        atom_aro=getattr(xace, 'aro', None).numpy() if getattr(xace, 'aro', None) is not None else None,
-        atom_hyb=getattr(xace, 'hyb', None).numpy() if getattr(xace, 'hyb', None) is not None else None,
-        atom_ring=getattr(xace, 'ring', None).numpy() if getattr(xace, 'ring', None) is not None else None,
-        atom_chiral=getattr(xace, 'chiral', None).numpy() if getattr(xace, 'chiral', None) is not None else None,
+        atom_types=xace.a,
+        atom_charges=xace.c,
+        atom_impl_H=getattr(xace, 'impl_H', None),
+        atom_aro=getattr(xace, 'aro', None),
+        atom_hyb=getattr(xace, 'hyb', None),
+        atom_ring=getattr(xace, 'ring', None),
+        atom_chiral=getattr(xace, 'chiral', None),
         atom_cond_a=atom_cond_a,
         fragments=None,
     )
@@ -160,12 +162,28 @@ def create_conditional_graphs_from_files(
     # resolve files from directory if provided
     if input_files_dir is not None:
         if protein_file is None:
-            pf = input_files_dir / "protein.pdb"
-            protein_file = pf if pf.exists() else (input_files_dir / "protein.cif" if (input_files_dir / "protein.cif").exists() else None)
-        if ligand_file is None and (input_files_dir / "ligand.sdf").exists():
-            ligand_file = input_files_dir / "ligand.sdf"
-        if pharmacophore_file is None and (input_files_dir / "pharmacophore.xyz").exists():
-            pharmacophore_file = input_files_dir / "pharmacophore.xyz"
+            pdb_files = list(input_files_dir.glob("*.pdb"))
+            cif_files = list(input_files_dir.glob("*.cif"))
+            if pdb_files:
+                protein_file = pdb_files[0]
+            elif cif_files:
+                protein_file = cif_files[0]
+            else:
+                protein_file = None
+                
+        if ligand_file is None:
+            sdf_files = list(input_files_dir.glob("*.sdf"))
+            if sdf_files:
+                ligand_file = sdf_files[0]  
+            else:
+                ligand_file = None
+                
+        if pharmacophore_file is None:
+            xyz_files = list(input_files_dir.glob("*.xyz"))
+            if xyz_files:
+                pharmacophore_file = xyz_files[0] 
+            else:
+                pharmacophore_file = None
 
     required = set(task.groups_fixed)
     if 'protein_identity' in required and protein_file is None:
@@ -210,6 +228,14 @@ def create_conditional_graphs_from_files(
                 'e_1_true': lig_xace.e,
             }
 
+        # no ligand file provided, declare the 'lig' node type with zero nodes
+        if ligand is None and ('ligand_structure' in task.groups_generated or 'ligand_identity_condensed' in task.groups_generated):
+            node_data['lig'] = {
+                'x_1_true': torch.zeros((0, 3), dtype=torch.float32)
+            }
+            edge_idxs.setdefault('lig_to_lig', torch.empty(2, 0, dtype=torch.long))
+            edge_data.setdefault('lig_to_lig', {})
+
         # protein nodes
         if receptor is not None:
             prot_x = torch.from_numpy(receptor.coords).float()
@@ -251,6 +277,18 @@ def create_conditional_graphs_from_files(
                 'backbone_mask': torch.from_numpy(receptor.backbone_mask.astype(bool)).bool(),
             }
 
+            prot_res_ids = node_data['prot_atom']['res_id'].numpy()
+            prot_chain_ids = node_data['prot_atom']['chain_id'].numpy()
+            contiguous_residue_idxs = np.zeros_like(prot_res_ids)
+            for chain in np.unique(prot_chain_ids):
+                mask = prot_chain_ids == chain
+                unique_res = np.unique(prot_res_ids[mask])
+                res_to_idx = {res: i for i, res in enumerate(unique_res)}
+                contiguous_residue_idxs[mask] = np.vectorize(res_to_idx.get)(prot_res_ids[mask])
+            residue_idx_tensor = torch.from_numpy(contiguous_residue_idxs).long()
+            pos_enc = residue_sinusoidal_encoding(residue_idx_tensor, d_model=64)
+            node_data['prot_atom']['pos_enc_1_true'] = pos_enc
+
             bb_coords = torch.from_numpy(receptor.backbone.coords).float()
             bb_res_ids = torch.from_numpy(receptor.backbone.res_ids.astype(np.int64)).long()
             
@@ -273,7 +311,7 @@ def create_conditional_graphs_from_files(
         # pharmacophore nodes
         if pharm_coords is not None:
             n_points = len(pharm_coords)
-            dummy_vectors = torch.zeros((n_points, 3), dtype=torch.float32)
+            dummy_vectors = torch.zeros((n_points, 4, 3), dtype=torch.float32)
             dummy_interactions = torch.zeros((n_points,), dtype=torch.bool)
             
             node_data['pharm'] = {
