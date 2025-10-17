@@ -26,10 +26,14 @@ services:
       - MAX_FILE_SIZE=26214400  # 25MB
       - MAX_FILES_PER_JOB=3
       - JOB_TTL_HOURS=48
+      - CHECKPOINT_DIR=/srv/app/checkpoints
+      - CUDA_VISIBLE_DEVICES=0  # Enable GPU support
     volumes:
       - ./api:/app
+      - ./shared:/app/shared
       - job_storage:/srv/app/jobs
       - model_cache:/srv/app/models
+      - ./checkpoints:/srv/app/checkpoints
     depends_on:
       - redis
     restart: unless-stopped
@@ -49,11 +53,15 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - WORKER_TIMEOUT=180
-      - CUDA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0  # Enable GPU support
     volumes:
       - ./worker:/app
+      - ./shared:/app/shared
       - job_storage:/srv/app/jobs
       - model_cache:/srv/app/models
+      - ./checkpoints:/srv/app/checkpoints
+      - /home/ras425/OMTRA:/omtra
+      - /home/ras425/miniconda3:/opt/conda
     depends_on:
       - redis
       - api
@@ -65,6 +73,13 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
   frontend:
     build:
@@ -79,6 +94,7 @@ services:
       - STREAMLIT_SERVER_ADDRESS=0.0.0.0
     volumes:
       - ./frontend:/app
+      - ./shared:/app/shared
     depends_on:
       - api
     restart: unless-stopped
@@ -87,6 +103,7 @@ volumes:
   redis_data:
   job_storage:
   model_cache:
+  checkpoints:
 
 networks:
   default:

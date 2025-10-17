@@ -1,5 +1,6 @@
 import os
 import sys
+import shutil
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
@@ -36,6 +37,14 @@ MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 26214400))
 MAX_FILES_PER_JOB = int(os.getenv('MAX_FILES_PER_JOB', 3))
 JOB_TTL_HOURS = int(os.getenv('JOB_TTL_HOURS', 48))
 
+# Checkpoint configuration
+CHECKPOINT_DIR = Path(os.getenv('CHECKPOINT_DIR', '/srv/app/checkpoints'))
+CHECKPOINT_MAPPING = {
+    "Unconditional": "uncond.ckpt",
+    "Pharmacophore-conditioned": "phcond.ckpt", 
+    "Protein-conditioned": "protcond.ckpt"
+}
+
 # Initialize Redis and RQ
 redis_conn = redis.from_url(REDIS_URL)
 task_queue = Queue('omtra_tasks', connection=redis_conn, default_timeout='180s')
@@ -55,6 +64,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Upload token storage (in production, use Redis or database)
 upload_tokens = {}
@@ -85,6 +95,32 @@ class RequestLoggingMiddleware:
             await self.app(scope, receive, send)
 
 app.add_middleware(RequestLoggingMiddleware)
+
+
+def pydantic_to_dict(model_obj):
+    """Return a dict from a Pydantic model for v1 or v2."""
+    try:
+        # Pydantic v2
+        return model_obj.model_dump()
+    except AttributeError:
+        # Pydantic v1
+        return model_obj.dict()
+
+
+def get_checkpoint_path(sampling_mode: str) -> Optional[Path]:
+    """Get the checkpoint path for a given sampling mode"""
+    checkpoint_name = CHECKPOINT_MAPPING.get(sampling_mode)
+    if not checkpoint_name:
+        return None
+    
+    checkpoint_path = CHECKPOINT_DIR / checkpoint_name
+    return checkpoint_path if checkpoint_path.exists() else None
+
+
+def validate_checkpoint_availability(sampling_mode: str) -> bool:
+    """Check if checkpoint is available for the given sampling mode"""
+    checkpoint_path = get_checkpoint_path(sampling_mode)
+    return checkpoint_path is not None
 
 
 @app.get("/health")
@@ -177,9 +213,39 @@ async def upload_file(upload_token: str, file: UploadFile = File(...)):
 async def submit_job(job_data: JobSubmission):
     """Submit a sampling job"""
     
-    job_id = generate_job_id()
+    try:
+        # Use custom job ID if provided, otherwise generate one
+        job_id = job_data.job_id if job_data.job_id else generate_job_id()
+        
+        # Validate custom job ID if provided
+        if job_data.job_id:
+            if not job_data.job_id.strip():
+                raise HTTPException(status_code=400, detail="Custom job ID cannot be empty")
+            if len(job_data.job_id) > 100:
+                raise HTTPException(status_code=400, detail="Custom job ID too long (max 100 characters)")
+            # Check if job ID already exists
+            if redis_conn.exists(f"job:{job_id}"):
+                raise HTTPException(status_code=400, detail=f"Job ID '{job_id}' already exists")
+    except HTTPException as he:
+        logger.error(f"HTTPException in job submission: {he.detail}")
+        raise he
+    except Exception as e:
+        logger.error(f"Error processing job submission: {e}")
+        logger.error(f"Exception type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=f"Invalid request: {str(e)}")
     
     try:
+        # Validate sampling mode and checkpoint availability
+        sampling_mode = job_data.params.sampling_mode
+        if not validate_checkpoint_availability(sampling_mode):
+            checkpoint_name = CHECKPOINT_MAPPING.get(sampling_mode, "unknown")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Checkpoint not available for {sampling_mode} mode. Expected: {checkpoint_name}"
+            )
+        
         # Validate upload tokens and move files
         input_files = []
         for upload_token in job_data.uploads:
@@ -195,7 +261,7 @@ async def submit_job(job_data: JobSubmission):
             if temp_file_path.exists():
                 job_dir = create_job_directory(job_id)
                 job_file_path = job_dir / "inputs" / temp_file_path.name
-                temp_file_path.rename(job_file_path)
+                shutil.move(str(temp_file_path), str(job_file_path))
                 
                 input_files.append({
                     'filename': temp_file_path.name,
@@ -206,12 +272,39 @@ async def submit_job(job_data: JobSubmission):
             # Clean up upload token
             del upload_tokens[upload_token]
         
+        # Additional validation for conditional modes
+        if sampling_mode in ["Pharmacophore-conditioned", "Protein-conditioned"] and len(input_files) == 0:
+            raise HTTPException(status_code=400, detail=f"{sampling_mode} requires at least one input file (e.g., pharmacophore .xyz or protein files)")
+        
+        # Get checkpoint path and add to params
+        checkpoint_path = get_checkpoint_path(sampling_mode)
+        params_dict = pydantic_to_dict(job_data.params)
+        params_dict['checkpoint_path'] = str(checkpoint_path)
+        
+        # Override n_samples with num_samples from the request if provided
+        if hasattr(job_data, 'num_samples') and job_data.num_samples is not None:
+            params_dict['n_samples'] = job_data.num_samples
+        
+        # Use GPU if available, otherwise CPU
+        try:
+            if os.getenv('OMTRA_MODEL_AVAILABLE', 'false').lower() == 'false' or os.getenv('ENVIRONMENT', 'local').lower() == 'local':
+                # Check if CUDA is available by checking environment variables
+                cuda_visible_devices = os.getenv('CUDA_VISIBLE_DEVICES', '')
+                if cuda_visible_devices and cuda_visible_devices != '':
+                    params_dict['device'] = 'cuda'
+                else:
+                    params_dict['device'] = 'cpu'
+        except Exception:
+            pass
+
         # Submit job to queue
         job = task_queue.enqueue(
             'worker.sampling_task',
-            job_id=job_id,
-            params=job_data.params.model_dump(),
-            input_files=input_files,
+            kwargs={
+                'job_id': job_id,
+                'params': params_dict,
+                'input_files': input_files,
+            },
             job_timeout='180s'
         )
         
@@ -219,7 +312,7 @@ async def submit_job(job_data: JobSubmission):
         job_metadata = {
             'job_id': job_id,
             'rq_job_id': job.id,
-            'params': job_data.params.model_dump(),
+            'params': params_dict,
             'input_files': input_files,
             'created_at': datetime.utcnow().isoformat(),
             'status': JobStatus.QUEUED
@@ -231,13 +324,13 @@ async def submit_job(job_data: JobSubmission):
             json.dumps(job_metadata)
         )
         
-        log_job_event(logger, job_id, "job_submitted", params=job_data.params.model_dump())
+        log_job_event(logger, job_id, "job_submitted", params=pydantic_to_dict(job_data.params))
         
         return JobResponse(job_id=job_id)
         
     except Exception as e:
-        logger.error(f"Job submission failed: {e}")
-        raise HTTPException(status_code=500, detail="Job submission failed")
+        logger.error(f"Job submission failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Job submission failed: {str(e)}")
 
 
 @app.get("/status/{job_id}", response_model=JobStatusResponse)
@@ -267,7 +360,13 @@ async def get_job_status(job_id: str):
                 'deferred': JobStatus.QUEUED
             }
             
-            status = status_mapping.get(rq_job.status, JobStatus.QUEUED)
+            rq_raw_status = None
+            try:
+                rq_raw_status = rq_job.get_status()
+            except Exception:
+                # Fallback for older rq
+                rq_raw_status = getattr(rq_job, 'status', None)
+            status = status_mapping.get(rq_raw_status, JobStatus.QUEUED)
             
             # Calculate progress and timing
             progress = 0
@@ -276,19 +375,26 @@ async def get_job_status(job_id: str):
             elif status == JobStatus.SUCCEEDED:
                 progress = 100
             
-            started_at = rq_job.started_at
-            completed_at = rq_job.ended_at
+            started_at = getattr(rq_job, 'started_at', None)
+            completed_at = getattr(rq_job, 'ended_at', None)
             elapsed_seconds = None
             
             if started_at:
                 end_time = completed_at or datetime.utcnow()
                 elapsed_seconds = (end_time - started_at).total_seconds()
             
+            is_failed = False
+            try:
+                is_failed = rq_job.is_failed
+            except Exception:
+                # Older rq exposes get_status() == 'failed'
+                is_failed = (rq_raw_status == 'failed')
+            
             return JobStatusResponse(
                 job_id=job_id,
                 state=status,
                 progress=progress,
-                message=rq_job.exc_info if rq_job.is_failed else None,
+                message=rq_job.exc_info if is_failed else None,
                 started_at=started_at,
                 completed_at=completed_at,
                 elapsed_seconds=elapsed_seconds
@@ -362,23 +468,6 @@ async def get_job_result(job_id: str):
         raise HTTPException(status_code=500, detail="Result retrieval failed")
 
 
-@app.get("/download/{job_id}/{filename}")
-async def download_file(job_id: str, filename: str):
-    """Download a job output file"""
-    
-    job_dir = get_job_directory(job_id)
-    file_path = job_dir / "outputs" / filename
-    
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    
-    return FileResponse(
-        file_path,
-        filename=filename,
-        media_type='application/octet-stream'
-    )
-
-
 @app.get("/download/{job_id}/all")
 async def download_all_outputs(job_id: str, background_tasks: BackgroundTasks):
     """Download all outputs as ZIP"""
@@ -401,6 +490,135 @@ async def download_all_outputs(job_id: str, background_tasks: BackgroundTasks):
         filename=f"{job_id}_outputs.zip",
         media_type='application/zip'
     )
+
+
+@app.get("/download/{job_id}/{filename}")
+async def download_file(job_id: str, filename: str):
+    """Download a job output file"""
+    
+    job_dir = get_job_directory(job_id)
+    file_path = job_dir / "outputs" / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    return FileResponse(
+        file_path,
+        filename=filename,
+        media_type='application/octet-stream'
+    )
+
+
+@app.get("/download/{job_id}/inputs/{filename}")
+async def download_input_file(job_id: str, filename: str):
+    """Download a job input file"""
+    
+    job_dir = get_job_directory(job_id)
+    file_path = job_dir / "inputs" / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Input file not found")
+    
+    return FileResponse(
+        file_path,
+        filename=filename,
+        media_type='application/octet-stream'
+    )
+
+
+@app.get("/inputs/{job_id}")
+async def list_input_files(job_id: str):
+    """List all input files for a job"""
+    
+    job_dir = get_job_directory(job_id)
+    inputs_dir = job_dir / "inputs"
+    
+    if not inputs_dir.exists():
+        return {"files": []}
+    
+    files = []
+    for file_path in inputs_dir.iterdir():
+        if file_path.is_file():
+            files.append({
+                "filename": file_path.name,
+                "size": file_path.stat().st_size,
+                "extension": file_path.suffix.lower()
+            })
+    
+    return {"files": files}
+
+
+@app.get("/jobs")
+async def list_all_jobs():
+    """List all jobs"""
+    try:
+        # Get all job keys from Redis
+        job_keys = redis_conn.keys("job:*")
+        jobs = []
+        
+        for key in job_keys:
+            job_data = redis_conn.get(key)
+            if job_data:
+                job_metadata = json.loads(job_data)
+                # Get current status
+                status_response = await get_job_status(job_metadata['job_id'])
+                job_metadata.update({
+                    'state': status_response.state,
+                    'progress': status_response.progress,
+                    'elapsed_seconds': status_response.elapsed_seconds,
+                    'message': status_response.message
+                })
+                jobs.append(job_metadata)
+        
+        # Sort by creation time (newest first)
+        jobs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        return {"jobs": jobs}
+        
+    except Exception as e:
+        logger.error(f"Failed to list jobs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list jobs")
+
+
+@app.delete("/jobs/{job_id}")
+async def delete_job(job_id: str):
+    """Delete a job: cancel if running, remove metadata and files"""
+    try:
+        # Load job metadata
+        job_data = redis_conn.get(f"job:{job_id}")
+        rq_job_id = None
+        if job_data:
+            metadata = json.loads(job_data)
+            rq_job_id = metadata.get('rq_job_id')
+        
+        # Try to cancel the RQ job if it exists
+        try:
+            if rq_job_id:
+                from rq.job import Job
+                rq_job = Job.fetch(rq_job_id, connection=redis_conn)
+                if rq_job and rq_job.get_status() in ["queued", "started", "deferred"]:
+                    rq_job.cancel()
+        except Exception:
+            pass
+        
+        # Delete Redis key
+        try:
+            redis_conn.delete(f"job:{job_id}")
+        except Exception:
+            pass
+        
+        # Remove job directory
+        try:
+            job_dir = get_job_directory(job_id)
+            if job_dir.exists():
+                shutil.rmtree(job_dir, ignore_errors=True)
+        except Exception:
+            pass
+        
+        return {"message": "Job deleted", "job_id": job_id}
+    except Exception as e:
+        logger.error(f"Failed to delete job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete job")
 
 
 @app.get("/logs/{job_id}")

@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
+# Create a non-root user
+RUN useradd --create-home --shell /bin/bash appuser
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -21,6 +24,12 @@ RUN mkdir -p /srv/app/jobs /srv/app/models
 # Set permissions
 RUN chmod -R 755 /app
 RUN chmod -R 777 /srv/app/jobs
+
+# Change ownership to appuser
+RUN chown -R appuser:appuser /app /srv/app
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8000

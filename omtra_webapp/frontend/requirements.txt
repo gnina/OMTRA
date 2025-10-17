@@ -6,3 +6,4 @@ plotly==5.17.0
 stmol==0.0.9
 pillow==10.1.0
 aiofiles==23.2.0
+ipython-genutils==0.2.0

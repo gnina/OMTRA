@@ -16,13 +16,18 @@ class JobStatus(str, Enum):
 
 class SamplingParams(BaseModel):
     """Parameters for molecule sampling"""
+    sampling_mode: str = Field(default="Unconditional", description="Sampling mode: Unconditional, Pharmacophore-conditioned, or Protein-conditioned")
     seed: Optional[int] = Field(default=None, description="Random seed for reproducibility")
     n_samples: int = Field(default=10, ge=1, le=100, description="Number of samples to generate")
     steps: int = Field(default=100, ge=10, le=1000, description="Number of sampling steps")
-    temperature: float = Field(default=1.0, ge=0.1, le=2.0, description="Sampling temperature")
-    guidance_scale: float = Field(default=1.0, ge=0.0, le=10.0, description="Guidance scale for conditioning")
-    conditioning_strength: float = Field(default=1.0, ge=0.0, le=2.0, description="Conditioning strength")
     device: Optional[str] = Field(default="cuda", description="Device to run on")
+    
+    @validator('sampling_mode')
+    def validate_sampling_mode(cls, v):
+        valid_modes = ["Unconditional", "Pharmacophore-conditioned", "Protein-conditioned"]
+        if v not in valid_modes:
+            raise ValueError(f"sampling_mode must be one of {valid_modes}")
+        return v
 
 
 class UploadInfo(BaseModel):
@@ -38,6 +43,8 @@ class JobSubmission(BaseModel):
     """Job submission request"""
     params: SamplingParams
     uploads: List[str] = Field(default=[], description="List of upload tokens")
+    num_samples: Optional[int] = Field(default=None, description="Number of samples to generate (overrides params.n_samples)")
+    job_id: Optional[str] = Field(default=None, description="Custom job ID (if not provided, will be auto-generated)")
     
     @validator('uploads')
     def validate_uploads(cls, v):
