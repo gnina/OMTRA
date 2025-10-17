@@ -123,7 +123,7 @@ def log_file_upload(
         f"File uploaded: {filename}",
         extra={
             'event': 'file_upload',
-            'file_name': filename,  # Use 'file_name' instead of 'filename' to avoid conflict
+            'file_name': filename,
             'size': size,
             'sha256': sha256,
             'client_ip': client_ip,
