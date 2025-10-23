@@ -418,7 +418,7 @@ class OMTRA(pl.LightningModule):
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
 
         # forward pass for the vector field
-        vf_output = self.vector_field(
+        vf_output, all_adaln_params = self.vector_field(
             g,
             task_class,
             t,
@@ -520,7 +520,7 @@ class OMTRA(pl.LightningModule):
                 aux_loss = aux_loss.mean()
             losses[aux_loss_name] = aux_loss
 
-        return losses
+        return losses, all_adaln_params
 
     def configure_optimizers(self):
         optimizer = hydra.utils.instantiate(
