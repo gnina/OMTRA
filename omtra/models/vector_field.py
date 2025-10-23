@@ -584,7 +584,7 @@ class VectorField(nn.Module):
                         for etype, feats in edge_features.items()
                     }
 
-                    prev_dst_dict = self.denoise_graph(
+                    prev_dst_dict, all_adaln_params = self.denoise_graph(
                         g,
                         task_class,
                         node_scalar_features_clone,
@@ -617,7 +617,7 @@ class VectorField(nn.Module):
                 upper_edge_mask,
             )
 
-        dst_dict = self.denoise_graph(
+        dst_dict, all_adaln_params = self.denoise_graph(
             g,
             task_class,
             node_scalar_features,
@@ -638,9 +638,9 @@ class VectorField(nn.Module):
         
         if extract_latents_for_confidence:
             dst_dict, final_gnn_latents = dst_dict
-            return dst_dict, final_gnn_latents
+            return dst_dict, final_gnn_latents, all_adaln_params
         else:
-            return dst_dict
+            return dst_dict, all_adaln_params
 
     # @profile
     def denoise_graph(
@@ -659,11 +659,13 @@ class VectorField(nn.Module):
         remove_com: bool = False,
         extract_latents_for_confidence=False,
     ):
+        # Store all adaln_params_dict from each convolution
+        all_adaln_params = []
         x_diff, d = self.precompute_distances(g)
         for recycle_idx in range(self.n_recycles):
             for conv_idx, conv in enumerate(self.conv_layers):
                 # perform a single convolution which updates node scalar and vector features (but not positions)
-                node_scalar_features, node_vec_features = conv(
+                node_scalar_features, node_vec_features, adaln_params_dict = conv(
                     g,
                     scalar_feats=node_scalar_features,
                     coord_feats=node_positions,
@@ -674,6 +676,9 @@ class VectorField(nn.Module):
                     x_diff=x_diff,
                     d=d,
                 )
+                # Store adaln_params_dict
+                all_adaln_params.append(adaln_params_dict)
+
                 # every convs_per_update convolutions, update the node positions and edge features
                 # TODO: this code has gotten hairy, the molecule update operation should be collected into a separate method to make denoise_graph cleaner
                 if conv_idx != 0 and (conv_idx + 1) % self.convs_per_update == 0:
@@ -826,10 +831,11 @@ class VectorField(nn.Module):
                 "node_vec_features": node_vec_features, 
                 "node_positions": node_positions,
                 "edge_features": edge_features,
+                "adaln_params": all_adaln_params, 
             }
             return dst_dict, pre_output_head_latents 
         else:
-            return dst_dict
+            return dst_dict, all_adaln_params
 
     @g_local_scope
     def precompute_distances(self, g: dgl.DGLGraph, node_positions=None, etype=None):
@@ -1068,7 +1074,7 @@ class VectorField(nn.Module):
         )
         
         if extract_latents_for_confidence:
-            dst_dict, model_latents = vf_forward_output
+            dst_dict, model_latents, _ = vf_forward_output
             # if the user requested latents, we rely on the plumbing we have in `forward` and `denoise_graph` to obtain model_latents, and populate it to the graph
             keys = ["node_scalar_features", "node_vec_features", "node_positions"] 
             
@@ -1077,7 +1083,7 @@ class VectorField(nn.Module):
                 for ntype in model_latents[key]:
                     g.nodes[ntype].data[key] = model_latents[key][ntype]          
         else:
-            dst_dict = vf_forward_output
+            dst_dict, _ = vf_forward_output
 
         dt = s_i - t_i
 
