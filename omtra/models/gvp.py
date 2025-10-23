@@ -704,7 +704,7 @@ class HeteroGVPConv(nn.Module):
             # and therefore, may have unstable magnitudes,
             # so we may add input-layernorms to our position and edge update layers (at the level of vectorfield)
 
-        return s_2, v_2
+        return s_2, v_2, adaln_params_dict
 
     def compute_att_weights_crosstype(self, g: dgl.DGLHeteroGraph, passing_edges: List[str]):
 
