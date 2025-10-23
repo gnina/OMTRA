@@ -26,7 +26,7 @@ fake_atom_p: 0.3 # upper bound on fraction of fake atoms added to a molecule
 distort_p: 0.2  # upper bound on fraction of atoms distorted
 plinder_pskip_factor: 0.0 # 0 -> no weighted sampling, 1 -> uniform sampling over clusters
 res_id_embed_dim: 64 # dimension of residue id embedding
-pharm_pos_var: 0.0 # st dev to sample noise variance from for pharmocophore positions, 0.0 -> no noise added
+pharm_pos_var: 1.2 # st dev to sample noise variance from for pharmocophore positions, 0.0 -> no noise added
 
 pharmit_path: ${omtra_root:}/data/pharmit
 plinder_path: ${omtra_root:}/data/plinder
