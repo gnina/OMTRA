@@ -375,9 +375,12 @@ class OMTRA(pl.LightningModule):
         return 0.0
 
     # @profile
-    def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
+    def forward(self, g: dgl.DGLHeteroGraph, task_name: str, t=None):
         # sample time
-        t = self.train_t_sampler(batch_size=g.batch_size, device=g.device)
+        if t is None:
+            t = self.train_t_sampler(batch_size=g.batch_size, device=g.device)
+        else:
+            t = t.to(g.device)
 
         task_class: Task = task_name_to_class(task_name)
 
