@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+import torch.nn.functional as F
 
 class TimestepEmbedder(nn.Module):
     """Embeds scalar timesteps into vector representations."""
@@ -15,16 +16,19 @@ class TimestepEmbedder(nn.Module):
         self.frequency_embedding_dim = frequency_embedding_dim
 
     @staticmethod
-    def timestep_embedding(t, dim, max_period=10000):
-        half = dim // 2
-        freqs = torch.exp(
-            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
-        ).to(device=t.device)
-        args = t[:, None].float() * freqs[None]
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        if dim % 2:
-            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
-        return embedding
+    def timestep_embedding(t, dim=256, max_positions=500):
+        # Code from https://github.com/hojonathanho/diffusion/blob/master/diffusion_tf/nn.py
+        assert len(t.shape) == 1
+        t = t * max_positions
+        half_dim = dim // 2
+        emb = math.log(max_positions) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=t.device) * -emb)
+        emb = t.float()[:, None] * emb[None, :]
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
+        if dim % 2 == 1:  # zero pad
+            emb = F.pad(emb, (0, 1), mode='constant')
+        assert emb.shape == (t.shape[0], dim)
+        return emb
 
     def forward(self, t):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_dim)
