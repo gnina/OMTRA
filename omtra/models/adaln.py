@@ -100,6 +100,14 @@ class AdaLNWeightGenerator(nn.Module):
             )
         elif mlp_style == 'nobias':
             self.mlp = nn.Sequential(nn.SiLU(), nn.Linear(scalar_size, out_dim, bias=False))
+        elif mlp_style == 'two_layer_preact':
+            hidden_dim = (scalar_size + out_dim) // 2
+            self.mlp = nn.Sequential(
+                nn.SiLU(),
+                nn.Linear(scalar_size, hidden_dim, bias=True),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, out_dim, bias=True),
+            )
         else:
             raise ValueError(f"Unknown adaln mlp_style '{mlp_style}'")
 
