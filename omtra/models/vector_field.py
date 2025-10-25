@@ -75,7 +75,8 @@ class VectorField(nn.Module):
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
         res_id_embed_dim: int = 64,
-        pos_emb: bool = False
+        pos_emb: bool = False,
+        adaln_style: str ='dit'
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -254,6 +255,7 @@ class VectorField(nn.Module):
                     dropout=dropout,
                     use_dst_feats=use_dst_feats,
                     dst_feat_msg_reduction_factor=dst_feat_msg_reduction_factor,
+                    adaln_style=adaln_style,
                 )
             )
         self.conv_layers = nn.ModuleList(self.conv_layers)
@@ -282,6 +284,7 @@ class VectorField(nn.Module):
                         n_vec_channels,
                         n_gvps=3,
                         n_cp_feats=n_cp_feats,
+                        adaln_style=adaln_style,
                     )
                 )
 
@@ -302,6 +305,7 @@ class VectorField(nn.Module):
                         n_hidden_edge_feats,
                         etype=etype,
                         rbf_dim=rbf_dim,
+                        adaln_style=adaln_style,
                     )
                 )
 
@@ -394,20 +398,17 @@ class VectorField(nn.Module):
         # Zero-out adaLN modulation layers HeteroGraphConv blocks:
         for conv in self.conv_layers:
             for adaln_fn in conv.adaln_modulators.values():
-                nn.init.constant_(adaln_fn.mlp[-1].weight, 0)
-                nn.init.constant_(adaln_fn.mlp[-1].bias, 0)
+                adaln_fn.initialize_weights()
 
         # zero-out adaln for node position updaters
         for ntype in self.node_position_updaters:
             for updater in self.node_position_updaters[ntype]:
-                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].weight, 0)
-                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].bias, 0)
+                updater.adaln_params_mlp.initialize_weights()
 
         # zero out edge feature updaters
         for etype in self.edge_updaters:
             for updater in self.edge_updaters[etype]:
-                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].weight, 0)
-                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].bias, 0)
+                updater.adaln_params_mlp.initialize_weights()
 
         # zero out categorical output heads
         for m_name in self.node_output_heads:
@@ -415,16 +416,14 @@ class VectorField(nn.Module):
             if not modality.is_categorical:
                 continue
             # zero out the AdaLN weight generators
-            nn.init.constant_(self.node_output_heads[m_name].adaln_params_mlp.mlp[-1].weight, 0)
-            nn.init.constant_(self.node_output_heads[m_name].adaln_params_mlp.mlp[-1].bias, 0)
+            self.node_output_heads[m_name].adaln_params_mlp.initialize_weights()
 
         for m_name in self.edge_output_heads:
             modality = name_to_modality(m_name)
             if not modality.is_categorical:
                 continue
             # zero out the AdaLN weight generators
-            nn.init.constant_(self.edge_output_heads[m_name].adaln_params_mlp.mlp[-1].weight, 0)
-            nn.init.constant_(self.edge_output_heads[m_name].adaln_params_mlp.mlp[-1].bias, 0)
+            self.edge_output_heads[m_name].adaln_params_mlp.initialize_weights()
 
         # TODO: note in regular DiT, all final layers have weights set to zero
         # our "output layers" are sometimes gvps (node positions updates) and sometimes mlps (categorical features, edge feature updates)
@@ -1277,14 +1276,14 @@ class VectorField(nn.Module):
 
 
 class NodePositionUpdate(nn.Module):
-    def __init__(self, n_scalars, n_vec_channels, n_gvps: int = 3, n_cp_feats: int = 0):
+    def __init__(self, n_scalars, n_vec_channels, n_gvps: int = 3, n_cp_feats: int = 0, adaln_style: str = 'dit'):
         super().__init__()
         self.n_scalars = n_scalars
         self.n_vec_channels = n_vec_channels
 
         # TODO: would we want adaptive layernorms for node position updates?scp
         self.layer_norm = GVPLayerNorm(n_scalars, n_vec_channels, affine=False)
-        self.adaln_params_mlp = adaln_module.PositionUpdateAdaLN(n_scalars, n_vec_channels)
+        self.adaln_params_mlp = adaln_module.PositionUpdateAdaLN(n_scalars, n_vec_channels, mlp_style=adaln_style)
 
 
         self.gvps = []
@@ -1338,6 +1337,7 @@ class EdgeUpdate(nn.Module):
         etype: str,
         ratio: int = 1,
         rbf_dim=16,
+        adaln_style: str = 'dit'
     ):
         super().__init__()
         self.etype = etype
@@ -1352,6 +1352,7 @@ class EdgeUpdate(nn.Module):
                 scalar_size=n_node_scalars,
                 vector_size=0,
                 s_ratio=ratio,
+                mlp_style=adaln_style
             )
         else:
             self.src_norm = nn.LayerNorm(n_node_scalars, elementwise_affine=False)
@@ -1360,6 +1361,7 @@ class EdgeUpdate(nn.Module):
                 scalar_size=n_node_scalars,
                 vector_size=0,
                 s_ratio=ratio,
+                mlp_style=adaln_style
             )
 
         input_dim = n_node_scalars * 2 + n_edge_feats + rbf_dim

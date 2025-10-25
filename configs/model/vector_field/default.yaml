@@ -30,3 +30,4 @@ dst_feat_msg_reduction_factor: 4
 rebuild_edges:                 true
 res_id_embed_dim:              64
 pos_emb:                       true
+adaln_style:                   "dit" # can be dit, nobias, or two_layer

@@ -52,9 +52,9 @@ class AdaLNWeightGenerator(nn.Module):
         *,
         s_ratio: int = 1,
         v_ratio: int = 1,
-        mlp_hidden: Optional[int] = None,
         s_out_dim = None,
         v_out_dim = None,
+        mlp_style = 'dit',
     ):
         super().__init__()
         if not hasattr(self, "spec"):
@@ -89,13 +89,27 @@ class AdaLNWeightGenerator(nn.Module):
 
         out_dim = self.spec.n_s * n_s_gen + self.spec.n_v * n_v_gen
 
-        if mlp_hidden is None:
+        if mlp_style == 'dit':
             self.mlp = nn.Sequential(nn.SiLU(), nn.Linear(scalar_size, out_dim, bias=True))
-        else:
+        elif mlp_style == 'two_layer':
+            hidden_dim = (scalar_size + out_dim) // 2
             self.mlp = nn.Sequential(
-                nn.Linear(scalar_size, mlp_hidden), nn.SiLU(),
-                nn.Linear(mlp_hidden, out_dim, bias=True),
+                nn.Linear(scalar_size, hidden_dim, bias=True),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, out_dim, bias=True),
             )
+        elif mlp_style == 'nobias':
+            self.mlp = nn.Sequential(nn.SiLU(), nn.Linear(scalar_size, out_dim, bias=False))
+        else:
+            raise ValueError(f"Unknown adaln mlp_style '{mlp_style}'")
+
+
+    def initialize_weights(self):
+        for module in self.mlp:
+            if isinstance(module, nn.Linear):
+                nn.init.constant_(module.weight, 0)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
 
     @property
     def keys(self) -> List[str]:

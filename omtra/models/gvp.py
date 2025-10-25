@@ -301,6 +301,7 @@ class HeteroGVPConv(nn.Module):
         edge_feat_size: Optional[Dict[str, int]] = None,
         message_norm: Union[float, str] = 10,
         dropout: float = 0.0,
+        adaln_style: str ='dit',
     ):
         super().__init__()
 
@@ -494,7 +495,7 @@ class HeteroGVPConv(nn.Module):
 
         self.adaln_modulators = nn.ModuleDict()
         for ntype in self.node_types:
-            self.adaln_modulators[ntype] = GraphConvAdaLN(scalar_size, vector_size)
+            self.adaln_modulators[ntype] = GraphConvAdaLN(scalar_size, vector_size, mlp_style=adaln_style)
 
 
     @g_local_scope
