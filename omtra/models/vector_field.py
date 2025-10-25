@@ -20,7 +20,6 @@ from omtra.tasks.modalities import (
     name_to_modality,
 )
 from omtra.utils.ctmc import purity_sampling
-from omtra.utils.embedding import get_time_embedding
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 from omtra.constants import (
     lig_atom_type_map,
@@ -30,7 +29,7 @@ from omtra.constants import (
     protein_element_map,
     protein_atom_map,
 )
-from omtra.models.embed import TimestepEmbedder
+from omtra.models.embed import TimestepEmbedder, get_pos_embedding
 # from omtra.models.adaln import PositionUpdateAdaLN, EdgeUpdateAdaLN, modulate
 import omtra.models.adaln as adaln_module
 
@@ -76,6 +75,7 @@ class VectorField(nn.Module):
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
         res_id_embed_dim: int = 64,
+        pos_emb: bool = False
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -93,6 +93,7 @@ class VectorField(nn.Module):
         self.has_mask = has_mask
         self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
+        self.pos_emb = pos_emb
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -604,6 +605,21 @@ class VectorField(nn.Module):
                 node_batch_idx,
                 upper_edge_mask,
             )
+
+        # add positional embeddings
+        if self.pos_emb:
+            for ntype in node_scalar_features.keys():
+                global_node_idx = torch.arange(
+                    g.num_nodes(ntype), device=device
+                )
+                bnn = g.batch_num_nodes(ntype)
+                relative_node_idx = global_node_idx - torch.cumsum(bnn)[node_batch_idx[ntype]]
+                pos_emb = get_pos_embedding(
+                    relative_node_idx,
+                    self.n_hidden_scalars,
+                    device=device,
+                )
+                node_scalar_features[ntype] += pos_emb
 
         dst_dict = self.denoise_graph(
             g,
