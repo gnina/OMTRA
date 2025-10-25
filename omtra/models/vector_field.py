@@ -550,6 +550,23 @@ class VectorField(nn.Module):
                 node_scalar_features[ntype]
             )
 
+        # add positional embeddings to node scalar features, if necessary
+        if self.pos_emb:
+            for ntype in node_scalar_features.keys():
+                global_node_idx = torch.arange(
+                    g.num_nodes(ntype), device=device
+                )
+                bnn = g.batch_num_nodes(ntype)
+                rel_node_starts = torch.zeros(1+bnn.shape[0], device=bnn.device)
+                rel_node_starts[1:] = torch.cumsum(bnn, dim=0)
+                rel_node_starts = rel_node_starts[:-1]
+                relative_node_idx = global_node_idx - rel_node_starts[node_batch_idx[ntype]]
+                pos_emb = get_pos_embedding(
+                    relative_node_idx,
+                    self.n_hidden_scalars,
+                )
+                node_scalar_features[ntype] += pos_emb
+
         if self.self_conditioning and prev_dst_dict is None:
             train_self_condition = self.training and (torch.rand(1) > 0.5).item()
             inference_first_step = not self.training and (t == 0).all().item()
@@ -605,21 +622,6 @@ class VectorField(nn.Module):
                 node_batch_idx,
                 upper_edge_mask,
             )
-
-        # add positional embeddings
-        if self.pos_emb:
-            for ntype in node_scalar_features.keys():
-                global_node_idx = torch.arange(
-                    g.num_nodes(ntype), device=device
-                )
-                bnn = g.batch_num_nodes(ntype)
-                relative_node_idx = global_node_idx - torch.cumsum(bnn)[node_batch_idx[ntype]]
-                pos_emb = get_pos_embedding(
-                    relative_node_idx,
-                    self.n_hidden_scalars,
-                    device=device,
-                )
-                node_scalar_features[ntype] += pos_emb
 
         dst_dict = self.denoise_graph(
             g,
