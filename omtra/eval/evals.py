@@ -278,6 +278,55 @@ def pb_valid_pocket(
     return metrics
 
 
+@register_eval("pb_valid_conformer")
+def pb_valid_conformer(
+    sampled_systems: List[SampledSystem], params: Dict[str, Any]
+) -> Dict[str, Any]:
+
+    metrics = {}
+    
+    pb_cfg_path = omtra_root()+'/configs/pb_config/uncond_conf.yaml'
+
+    with open(pb_cfg_path, 'r') as f:
+        pb_cfg = yaml.safe_load(f)
+    
+    valid_rdmols = []
+    ref_mols = []
+    for i, sys in enumerate(sampled_systems):
+        mol_pred = sys.get_rdkit_ligand()
+        mol_true = sys.get_rdkit_ref_ligand()
+       
+        try:
+            Chem.SanitizeMol(mol_pred)
+            if mol_true is not None:
+                Chem.SanitizeMol(mol_true)
+
+            if mol_pred.GetNumAtoms() > 0:
+                valid_rdmols.append(mol_pred)
+                if mol_true is not None:
+                    ref_mols.append(mol_true)
+            else:
+                print("PoseBusters conformer check: Found molecule with no atoms.")
+        except Exception as e:
+            print("PoseBusters conformer check: Molecule failed to sanitize.")
+    
+    if len(valid_rdmols) == 0:
+        metrics['pb_valid_conformer'] = 0.0
+    else:
+        mol_true_list = ref_mols if len(ref_mols) > 0 else None
+        
+        buster = pb.PoseBusters(config=pb_cfg, **params)
+        df_pb = buster.bust(valid_rdmols, mol_true_list, None)
+        pb_results = df_pb.mean().to_dict()
+        pb_results = { f'pb_conformer_{key}': pb_results[key] for key in pb_results }
+
+        n_pb_valid = df_pb[df_pb['sanitization'] == True].values.astype(bool).all(axis=1).sum()
+        metrics['pb_valid_conformer'] = n_pb_valid / len(sampled_systems)
+        metrics.update(pb_results)
+    
+    return metrics
+
+
 @register_eval("pharm_match")
 def check_pharm_match(
     sampled_systems: List[SampledSystem], params: Dict[str, Any]
