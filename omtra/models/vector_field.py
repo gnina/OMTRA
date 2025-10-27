@@ -20,7 +20,6 @@ from omtra.tasks.modalities import (
     name_to_modality,
 )
 from omtra.utils.ctmc import purity_sampling
-from omtra.utils.embedding import get_time_embedding
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
 from omtra.constants import (
     lig_atom_type_map,
@@ -30,7 +29,7 @@ from omtra.constants import (
     protein_element_map,
     protein_atom_map,
 )
-from omtra.models.embed import TimestepEmbedder
+from omtra.models.embed import TimestepEmbedder, get_pos_embedding
 # from omtra.models.adaln import PositionUpdateAdaLN, EdgeUpdateAdaLN, modulate
 import omtra.models.adaln as adaln_module
 
@@ -77,6 +76,8 @@ class VectorField(nn.Module):
         fake_atoms: bool = False,
         res_id_embed_dim: int = 64,
         pharm_pos_var_flag: bool = False,
+        pos_emb: bool = False,
+        adaln_style: str ='dit'
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -95,6 +96,7 @@ class VectorField(nn.Module):
         self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
         self.pharm_pos_var_flag = pharm_pos_var_flag
+        self.pos_emb = pos_emb
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -257,6 +259,7 @@ class VectorField(nn.Module):
                     dropout=dropout,
                     use_dst_feats=use_dst_feats,
                     dst_feat_msg_reduction_factor=dst_feat_msg_reduction_factor,
+                    adaln_style=adaln_style,
                 )
             )
         self.conv_layers = nn.ModuleList(self.conv_layers)
@@ -285,6 +288,7 @@ class VectorField(nn.Module):
                         n_vec_channels,
                         n_gvps=3,
                         n_cp_feats=n_cp_feats,
+                        adaln_style=adaln_style,
                     )
                 )
 
@@ -305,6 +309,7 @@ class VectorField(nn.Module):
                         n_hidden_edge_feats,
                         etype=etype,
                         rbf_dim=rbf_dim,
+                        adaln_style=adaln_style,
                     )
                 )
 
@@ -397,20 +402,17 @@ class VectorField(nn.Module):
         # Zero-out adaLN modulation layers HeteroGraphConv blocks:
         for conv in self.conv_layers:
             for adaln_fn in conv.adaln_modulators.values():
-                nn.init.constant_(adaln_fn.mlp[-1].weight, 0)
-                nn.init.constant_(adaln_fn.mlp[-1].bias, 0)
+                adaln_fn.initialize_weights()
 
         # zero-out adaln for node position updaters
         for ntype in self.node_position_updaters:
             for updater in self.node_position_updaters[ntype]:
-                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].weight, 0)
-                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].bias, 0)
+                updater.adaln_params_mlp.initialize_weights()
 
         # zero out edge feature updaters
         for etype in self.edge_updaters:
             for updater in self.edge_updaters[etype]:
-                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].weight, 0)
-                nn.init.constant_(updater.adaln_params_mlp.mlp[-1].bias, 0)
+                updater.adaln_params_mlp.initialize_weights()
 
         # zero out categorical output heads
         for m_name in self.node_output_heads:
@@ -418,16 +420,14 @@ class VectorField(nn.Module):
             if not modality.is_categorical:
                 continue
             # zero out the AdaLN weight generators
-            nn.init.constant_(self.node_output_heads[m_name].adaln_params_mlp.mlp[-1].weight, 0)
-            nn.init.constant_(self.node_output_heads[m_name].adaln_params_mlp.mlp[-1].bias, 0)
+            self.node_output_heads[m_name].adaln_params_mlp.initialize_weights()
 
         for m_name in self.edge_output_heads:
             modality = name_to_modality(m_name)
             if not modality.is_categorical:
                 continue
             # zero out the AdaLN weight generators
-            nn.init.constant_(self.edge_output_heads[m_name].adaln_params_mlp.mlp[-1].weight, 0)
-            nn.init.constant_(self.edge_output_heads[m_name].adaln_params_mlp.mlp[-1].bias, 0)
+            self.edge_output_heads[m_name].adaln_params_mlp.initialize_weights()
 
         # TODO: note in regular DiT, all final layers have weights set to zero
         # our "output layers" are sometimes gvps (node positions updates) and sometimes mlps (categorical features, edge feature updates)
@@ -560,6 +560,22 @@ class VectorField(nn.Module):
                 node_scalar_features[ntype]
             )
 
+        # add positional embeddings to node scalar features, if necessary
+        if self.pos_emb:
+            for ntype in node_scalar_features.keys():
+                global_node_idx = torch.arange(
+                    g.num_nodes(ntype), device=device
+                )
+                bnn = g.batch_num_nodes(ntype)
+                rel_node_starts = torch.zeros(1+bnn.shape[0], device=bnn.device)
+                rel_node_starts[1:] = torch.cumsum(bnn, dim=0)
+                rel_node_starts = rel_node_starts[:-1]
+                relative_node_idx = global_node_idx - rel_node_starts[node_batch_idx[ntype]]
+                pos_emb = get_pos_embedding(
+                    relative_node_idx,
+                    self.n_hidden_scalars,
+                )
+                node_scalar_features[ntype] += pos_emb
 
         if self.self_conditioning and prev_dst_dict is None:
             train_self_condition = self.training and (torch.rand(1) > 0.5).item()
@@ -1277,14 +1293,14 @@ class VectorField(nn.Module):
 
 
 class NodePositionUpdate(nn.Module):
-    def __init__(self, n_scalars, n_vec_channels, n_gvps: int = 3, n_cp_feats: int = 0):
+    def __init__(self, n_scalars, n_vec_channels, n_gvps: int = 3, n_cp_feats: int = 0, adaln_style: str = 'dit'):
         super().__init__()
         self.n_scalars = n_scalars
         self.n_vec_channels = n_vec_channels
 
         # TODO: would we want adaptive layernorms for node position updates?scp
         self.layer_norm = GVPLayerNorm(n_scalars, n_vec_channels, affine=False)
-        self.adaln_params_mlp = adaln_module.PositionUpdateAdaLN(n_scalars, n_vec_channels)
+        self.adaln_params_mlp = adaln_module.PositionUpdateAdaLN(n_scalars, n_vec_channels, mlp_style=adaln_style)
 
 
         self.gvps = []
@@ -1338,6 +1354,7 @@ class EdgeUpdate(nn.Module):
         etype: str,
         ratio: int = 1,
         rbf_dim=16,
+        adaln_style: str = 'dit'
     ):
         super().__init__()
         self.etype = etype
@@ -1352,6 +1369,7 @@ class EdgeUpdate(nn.Module):
                 scalar_size=n_node_scalars,
                 vector_size=0,
                 s_ratio=ratio,
+                mlp_style=adaln_style
             )
         else:
             self.src_norm = nn.LayerNorm(n_node_scalars, elementwise_affine=False)
@@ -1360,6 +1378,7 @@ class EdgeUpdate(nn.Module):
                 scalar_size=n_node_scalars,
                 vector_size=0,
                 s_ratio=ratio,
+                mlp_style=adaln_style
             )
 
         input_dim = n_node_scalars * 2 + n_edge_feats + rbf_dim
