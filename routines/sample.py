@@ -453,13 +453,16 @@ def main(args):
                 system.write_pharmacophore(pharm_xt_file, trajectory=True, endpoint=False)
                 system.write_pharmacophore(pharm_xhat_file, trajectory=True, endpoint=True)
 
-    if args.metrics and model.eval_config is not None:
+    if args.metrics:
+        # use config from default.yaml not ckpt
+        default_eval_path = Path(omtra_root()) / 'configs' / 'eval' / 'default.yaml'    
+        default_eval_cfg = OmegaConf.load(default_eval_path)
+
         metrics = {}
-        for eval in model.eval_config.get(task_name, []):
-            for eval_name, config  in eval.items():
-                eval_fn = get_eval(eval_name)
-                metrics.update(eval_fn(sampled_systems, config.get("params", {})))
-                
+        for eval_entry in default_eval_cfg[task_name]:
+            for eval_name, config in eval_entry.items():
+                metrics.update(get_eval(eval_name)(sampled_systems, config.get("params", {})))
+        
         metrics_file = output_dir / f"{task_name}_metrics.json"
         with open(metrics_file, 'w') as f:
             json.dump(metrics, f)

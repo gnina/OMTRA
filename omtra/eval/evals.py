@@ -282,47 +282,41 @@ def pb_valid_pocket(
 def pb_valid_conformer(
     sampled_systems: List[SampledSystem], params: Dict[str, Any]
 ) -> Dict[str, Any]:
-
+    
     metrics = {}
+    metric_values = defaultdict(list)
     
     pb_cfg_path = omtra_root()+'/configs/pb_config/uncond_conf.yaml'
-
     with open(pb_cfg_path, 'r') as f:
         pb_cfg = yaml.safe_load(f)
     
-    valid_rdmols = []
-    ref_mols = []
+    buster = pb.PoseBusters(config=pb_cfg, **params)
     for i, sys in enumerate(sampled_systems):
         mol_pred = sys.get_rdkit_ligand()
         mol_true = sys.get_rdkit_ref_ligand()
-       
+
         try:
             Chem.SanitizeMol(mol_pred)
-            if mol_true is not None:
-                Chem.SanitizeMol(mol_true)
-
-            if mol_pred.GetNumAtoms() > 0:
-                valid_rdmols.append(mol_pred)
-                if mol_true is not None:
-                    ref_mols.append(mol_true)
-            else:
+            Chem.SanitizeMol(mol_true)
+            
+            if mol_pred.GetNumAtoms() == 0:
                 print("PoseBusters conformer check: Found molecule with no atoms.")
+                continue
+                
+            res = buster.bust([mol_pred], mol_true, None, full_report=True)
+            for col in res.columns:
+                if res[col].dtype != 'object':
+                    metric_values[f'pb_conformer_{col}'].append(float(res[col].iloc[0]))
+                        
         except Exception as e:
-            print("PoseBusters conformer check: Molecule failed to sanitize.")
+            print(f"PoseBusters error for molecule {i}: {e}")
+            continue
     
-    if len(valid_rdmols) == 0:
-        metrics['pb_valid_conformer'] = 0.0
-    else:
-        mol_true_list = ref_mols if len(ref_mols) > 0 else None
-        
-        buster = pb.PoseBusters(config=pb_cfg, **params)
-        df_pb = buster.bust(valid_rdmols, mol_true_list, None)
-        pb_results = df_pb.mean().to_dict()
-        pb_results = { f'pb_conformer_{key}': pb_results[key] for key in pb_results }
-
-        n_pb_valid = df_pb[df_pb['sanitization'] == True].values.astype(bool).all(axis=1).sum()
-        metrics['pb_valid_conformer'] = n_pb_valid / len(sampled_systems)
-        metrics.update(pb_results)
+    for metric, values in metric_values.items():
+        if values:
+            metrics[metric] = np.nanmean(values)
+        else:
+            metrics[metric] = 0.0
     
     return metrics
 
