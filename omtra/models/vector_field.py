@@ -39,20 +39,20 @@ from omtra.data.graph.layout import GraphLayout
 
 # from line_profiler import LineProfiler, profile
 
-class NodeTypeMLP(nn.Module):
-    def __init__(self, node_types: List[str], in_dim: int, d_model: int, dropout: float = 0.1):
-        super().__init__()
-        self.proj = nn.ModuleDict({
-            ntype: nn.Sequential(
-                nn.LayerNorm(in_dim),
-                nn.Linear(in_dim, d_model),
-                nn.GELU(),
-                nn.Dropout(dropout),
-                nn.Linear(d_model, d_model),
-            ) for ntype in node_types
-        })
-    def forward(self, ntype: str, x: torch.Tensor) -> torch.Tensor:
-        return self.proj[ntype](x)
+# class NodeTypeMLP(nn.Module):
+#     def __init__(self, node_types: List[str], in_dim: int, d_model: int, dropout: float = 0.1):
+#         super().__init__()
+#         self.proj = nn.ModuleDict({
+#             ntype: nn.Sequential(
+#                 nn.LayerNorm(in_dim),
+#                 nn.Linear(in_dim, d_model),
+#                 nn.GELU(),
+#                 nn.Dropout(dropout),
+#                 nn.Linear(d_model, d_model),
+#             ) for ntype in node_types
+#         })
+#     def forward(self, ntype: str, x: torch.Tensor) -> torch.Tensor:
+#         return self.proj[ntype](x)
 
 
 class TransformerWrapper(nn.Module):
@@ -79,12 +79,12 @@ class TransformerWrapper(nn.Module):
         self.d_model = d_model
         self.use_residual = use_residual
 
-        in_dim = n_hidden_scalars + 3 * n_vec_channels
+        # in_dim = n_hidden_scalars + 3 * n_vec_channels
         if dim_ff is None:
             dim_ff = 4 * d_model
         
-        # pre-MLP per node type
-        self.pre_mlp = NodeTypeMLP(self.ntype_order, in_dim=in_dim, d_model=d_model, dropout=dropout)
+        # # pre-MLP per node type
+        # self.pre_mlp = NodeTypeMLP(self.ntype_order, in_dim=in_dim, d_model=d_model, dropout=dropout)
 
         layer = TransformerEncoderLayer(
             d_model=d_model,
@@ -95,14 +95,16 @@ class TransformerWrapper(nn.Module):
             activation="gelu",
             norm_first=True,
         )
-        self.enc = TransformerEncoder(layer, num_layers=n_layers)
-        self.enc_norm = nn.LayerNorm(d_model)
+        self.encoder = TransformerEncoder(layer, num_layers=n_layers)
 
-        # map d_model back to original size
-        self.post_proj = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, self.S + self.C * 3),
+        # map scalars + coords to d_model, linear transformation of coords
+        self.in_proj = nn.Sequential(
+            nn.LayerNorm(self.S + 3),
+            nn.Linear(self.S + 3, d_model, bias=False),
         )
+
+        # map d_model back to scalars only
+        self.out_proj = nn.Linear(d_model, self.S, bias=False)
 
         self.TEMP_KEY = "temp_key"
 
@@ -126,24 +128,23 @@ class TransformerWrapper(nn.Module):
         g,
         scalar_feats: Dict[str, torch.Tensor],
         vec_feats: Dict[str, torch.Tensor],
-        coord_feats=None,
+        coord_feats: Dict[str, torch.Tensor],
         edge_feats=None,
         x_diff=None,
         d=None,
         **kwargs,
     ):
-
-        # # for debugging
-        # return scalar_feats, vec_feats
-
-        # Pre-MLP per type -> d_model
+        # Concatenate scalars with coordinates
         for ntype in self.ntype_order:
             scal = scalar_feats.get(ntype)
             if scal is None or scal.numel() == 0:
                 continue
-            vec = vec_feats.get(ntype)
-            X_in = self._concat_scalar_vector(scal, vec)      # (N, S + 3C)
-            out  = self.pre_mlp(ntype, X_in)                  # (N, d_model)
+            coords = coord_feats.get(ntype)
+            if coords is None or coords.numel() == 0:
+                coords = scal.new_zeros((scal.shape[0], 3))
+
+            feat_input = torch.cat([scal, coords], dim=-1)  # (N, S + 3)
+            out  = self.in_proj(feat_input)   # (N, d_model)
             g.nodes[ntype].data[self.TEMP_KEY] = out
 
         layout, padded_node_feats, attention_masks = GraphLayout.layout_and_pad(g)
@@ -162,15 +163,14 @@ class TransformerWrapper(nn.Module):
             sizes.append(X.size(1))
 
         if len(X_list) == 0:
-            # nothing to do (no nodes of any type in this batch)
+            self._cleanup_temp(g)
             return scalar_feats, vec_feats
 
         X_all = torch.cat(X_list, dim=1) # (B, n_all, d_model)
-        M_all = torch.cat(M_list, dim=1).to(dtype=torch.bool, device=X_all.device)
+        M_all = torch.cat(M_list, dim=1)
 
         # transformer encoder
-        Y_all = self.enc(X_all, src_key_padding_mask=M_all)
-        # Y_all = self.enc_norm(Y_all)
+        Y_all = self.encoder(X_all, src_key_padding_mask=M_all)
 
         # back to per-ntype padded tensors
         offset = 0
@@ -181,39 +181,28 @@ class TransformerWrapper(nn.Module):
             offset += nmax
 
         # back to DGL graph
-        updated = layout.padded_sequence_to_graph(
-            g, padded_node_feats, attention_masks=attention_masks, inplace=False
+        layout.padded_sequence_to_graph(
+            g, padded_node_feats, attention_masks=attention_masks, inplace=True
         )
-        self._cleanup_temp(g)
 
         # back to original size
         out_scalars: Dict[str, torch.Tensor] = {}
-        out_vectors: Dict[str, torch.Tensor] = {}
 
-        for ntype, Hs in scalar_feats.items():
-            Xt = updated.get(ntype, {}).get(self.TEMP_KEY)
-            if Xt is None:
+        for ntype, H_old in scalar_feats.items():
+            Y_ntype = g.nodes[ntype].data.get(self.TEMP_KEY)
+            if Y_ntype is None:
                 # pass through if this ntype wasn’t present
-                out_scalars[ntype] = Hs
-                out_vectors[ntype] = vec_feats[ntype]
+                out_scalars[ntype] = H_old
                 continue
 
-            # (N, d_model) -> (N, S + 3C)
-            Hv_cat     = self.post_proj(Xt)
-            H_new      = Hv_cat[:, :self.S]                  # (N, S)
-            V_new_flat = Hv_cat[:, self.S:]                  # (N, 3C)
-            V_new      = V_new_flat.view(-1, self.C, 3)      # (N, C, 3)
-
-            if self.use_residual and H_new.shape == Hs.shape:
-                H_new = H_new + Hs
-            V_old = vec_feats[ntype]
-            if self.use_residual and V_old.shape == V_new.shape:
-                V_new = V_new + V_old
-
+            H_new = self.out_proj(Y_ntype)  # (N, S)
+            if self.use_residual and H_new.shape == H_old.shape:
+                H_new = H_new + H_old
             out_scalars[ntype] = H_new
-            out_vectors[ntype] = V_new
 
-        return out_scalars, out_vectors
+            self._cleanup_temp(g)
+
+        return out_scalars, vec_feats
 
 class VectorField(nn.Module):
     def __init__(
@@ -1369,32 +1358,37 @@ class NodePositionUpdate(nn.Module):
     def __init__(self, n_scalars, n_vec_channels, n_gvps: int = 3, n_cp_feats: int = 0):
         super().__init__()
 
-        self.gvps = []
-        for i in range(n_gvps):
-            if i == n_gvps - 1:
-                vectors_out = 1
-                vectors_activation = nn.Identity()
-            else:
-                vectors_out = n_vec_channels
-                vectors_activation = nn.Sigmoid()
+        self.update_pos = nn.Linear(n_scalars, 3, bias=False)
+        nn.init.zeros_(self.update_pos.weight)
 
-            self.gvps.append(
-                GVP(
-                    dim_feats_in=n_scalars,
-                    dim_feats_out=n_scalars,
-                    dim_vectors_in=n_vec_channels,
-                    dim_vectors_out=vectors_out,
-                    n_cp_feats=n_cp_feats,
-                    vectors_activation=vectors_activation,
-                )
-            )
-        self.gvps = nn.Sequential(*self.gvps)
+        # self.gvps = []
+        # for i in range(n_gvps):
+        #     if i == n_gvps - 1:
+        #         vectors_out = 1
+        #         vectors_activation = nn.Identity()
+        #     else:
+        #         vectors_out = n_vec_channels
+        #         vectors_activation = nn.Sigmoid()
+
+        #     self.gvps.append(
+        #         GVP(
+        #             dim_feats_in=n_scalars,
+        #             dim_feats_out=n_scalars,
+        #             dim_vectors_in=n_vec_channels,
+        #             dim_vectors_out=vectors_out,
+        #             n_cp_feats=n_cp_feats,
+        #             vectors_activation=vectors_activation,
+        #         )
+        #     )
+        # self.gvps = nn.Sequential(*self.gvps)
 
     def forward(
         self, scalars: torch.Tensor, positions: torch.Tensor, vectors: torch.Tensor
     ):
-        _, vector_updates = self.gvps((scalars, vectors))
-        return positions + vector_updates.squeeze(1)
+        vector_updates = self.update_pos(scalars)
+        return positions + vector_updates
+        # _, vector_updates = self.gvps((scalars, vectors))
+        # return positions + vector_updates.squeeze(1)
 
 
 class EdgeUpdate(nn.Module):
