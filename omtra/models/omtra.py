@@ -79,6 +79,8 @@ class OMTRA(pl.LightningModule):
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
         pharm_var: float = 0.0,
+        train_confidence: bool = False,
+        confidence_loss_weight: float = 1.0,
 
     ):
         super().__init__()
@@ -165,6 +167,23 @@ class OMTRA(pl.LightningModule):
             self.ligand_encoder = None
 
         self.configure_loss_fns()
+
+        # confidence module parameters & head init
+        self.train_confidence = train_confidence
+        self.confidence_loss_weight = confidence_loss_weight
+
+        if self.train_confidence:
+            from omtra.models.confidence import ConfidenceModule
+            # TODO: Make input_dim general by reading from vector_field config (n_hidden_scalars)
+            # For now, hardcoded to 256 which matches default.yaml config
+            self.confidence_module = ConfidenceModule(
+                input_dim=256,
+                hidden_dim=256,
+                n_bins=50,
+                dropout=0.1
+            )
+        else:
+            self.confidence_module = None
 
         self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
 
