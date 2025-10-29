@@ -50,6 +50,8 @@ from omtra.eval.utils import add_task_prefix
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
 import traceback
 
+from omtra.models.confidence import ConfidenceModule
+from omtra.utils.lddt import compute_lddt
 # from line_profiler import profile
 
 class OMTRA(pl.LightningModule):
@@ -173,7 +175,6 @@ class OMTRA(pl.LightningModule):
         self.confidence_loss_weight = confidence_loss_weight
 
         if self.train_confidence:
-            from omtra.models.confidence import ConfidenceModule
             # TODO: Make input_dim general by reading from vector_field config (n_hidden_scalars)
             # For now, hardcoded to 256 which matches default.yaml config
             self.confidence_module = ConfidenceModule(
@@ -536,6 +537,27 @@ class OMTRA(pl.LightningModule):
             if self.time_scaled_loss:
                 aux_loss = aux_loss.mean()
             losses[aux_loss_name] = aux_loss
+
+        if self.train_confidence:
+            # include pred coords in graph
+            g.nodes['lig'].data['x_1_pred'] = vf_output['lig_x']
+
+            # compute ground truth LDDT
+            lddt_true = compute_lddt(g)
+
+            # predict LDDT with confidence module
+            atom_features = g.nodes['lig'].data['node_scalar_features']
+            lddt_logits = self.confidence_module(atom_features)
+
+            # bin LDDT scores for cross-entropy (50 bins in [0, 1]) 
+            # ref:  https://github.com/google-deepmind/alphafold/blob/09ed0c5d5a32d794ed9f78b70906cbeaff0ef439/alphafold/model/modules.py#L1155
+            lddt_bins = (lddt_true * 50).long().clamp(0, 49)
+
+            # compute cross-entropy loss
+            confidence_loss = fn.cross_entropy(lddt_logits, lddt_bins)
+
+            # add to losses with weight
+            losses['confidence'] = confidence_loss * self.confidence_loss_weight
 
         return losses
 
