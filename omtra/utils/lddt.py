@@ -93,6 +93,7 @@ def compute_lddt(g: dgl.DGLHeteroGraph):
       cutoff = 12.0,
       dist_thresholds = [0.5, 1.0, 2.0, 4.0]
     )
-    
-    return lddt_scores
+
+    # return lddt in the supergraph format
+    return lddt_scores[mask_lig]
     
