@@ -403,13 +403,27 @@ class OMTRA(pl.LightningModule):
             g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**0.5
 
         # forward pass for the vector field
-        vf_output = self.vector_field.forward(
+        vf_forward_result = self.vector_field.forward(
             g,
             task_class,
             t,
             node_batch_idx=node_batch_idxs,
             upper_edge_mask=upper_edge_mask,
+            extract_latents_for_confidence=self.train_confidence,
         )
+
+        # manually unpack if training confidence module (vector_field.forward returns a tuple)
+        if self.train_confidence:
+            vf_output, model_latents = vf_forward_result
+            # Save latents to graph for confidence module 
+            # we have to do this manually for omtra.forward since PR #32 only saved to the graph in the integration steps
+            # (thus accessible only during omtra.sample)
+            keys = ["node_scalar_features", "node_vec_features", "node_positions"]
+            for key in keys:
+                for ntype in model_latents[key]:
+                    g.nodes[ntype].data[key] = model_latents[key][ntype]
+        else:
+            vf_output = vf_forward_result
 
         # compute targets for each of the flow matching losses
         targets = {}
