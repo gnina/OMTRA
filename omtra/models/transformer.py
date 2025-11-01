@@ -1,4 +1,5 @@
 import torch
+import dgl
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
 import torch_scatter
@@ -178,6 +179,84 @@ class PairTransformerLayer(nn.Module):
         return x
 
 
+class LigandPairBiasEmbedder(nn.Module):
+    """Computes ligand pair bias and applies the pair-biased attention layer."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        pair_dim: int,
+        num_heads: int,
+        rbf_count: int = 24,
+        rbf_d_min: float = 0.0,
+        rbf_d_max: float = 12.0,
+    ) -> None:
+        super().__init__()
+        self.pair_dim = pair_dim
+        self.rbf_count = rbf_count
+        self.rbf_d_min = rbf_d_min
+        self.rbf_d_max = rbf_d_max
+        self.rbf_proj = nn.Sequential(
+            nn.Linear(pair_dim + rbf_count, pair_dim, bias=False),
+            nn.LayerNorm(pair_dim),
+        )
+        self.layer = PairTransformerLayer(
+            hidden_dim=hidden_dim,
+            pair_dim=pair_dim,
+            num_heads=num_heads,
+        )
+
+    def forward(
+        self,
+        lig_feats: torch.Tensor,
+        lig_mask: torch.Tensor,
+        lig_pos: torch.Tensor,
+        layout: GraphLayout,
+        graph: dgl.DGLHeteroGraph,
+        lig_edge_feats: torch.Tensor,
+    ) -> torch.Tensor:
+        if lig_feats.size(1) == 0:
+            return lig_feats
+
+        device = lig_feats.device
+        lig_pos = lig_pos.to(device)
+        lig_mask = lig_mask.to(device)
+
+        B, S, _ = lig_feats.shape
+        pair_bias = lig_feats.new_zeros((B, S, S, self.pair_dim))
+
+        if lig_edge_feats is not None and lig_edge_feats.numel() > 0:
+            lig_edge_feats = lig_edge_feats.to(device)
+            src, dst = graph.edges(etype="lig_to_lig")
+            src = src.to(device)
+            dst = dst.to(device)
+
+            node_batch = layout.node_batch_idxs['lig'].to(device)
+            node_offsets = layout.node_offsets['lig'].to(device)
+
+            node_ids = torch.arange(node_batch.shape[0], device=device)
+            node_pos = node_ids - node_offsets[node_batch]
+
+            src_pos = node_pos[src]
+            dst_pos = node_pos[dst]
+            edge_batch = node_batch[src]
+
+            pair_bias[edge_batch, src_pos, dst_pos] = lig_edge_feats
+            pair_bias[edge_batch, dst_pos, src_pos] = lig_edge_feats
+
+        pair_dists = torch.cdist(lig_pos, lig_pos, p=2.0)
+        rbf_bias = _rbf(
+            pair_dists,
+            D_min=self.rbf_d_min,
+            D_max=self.rbf_d_max,
+            D_count=self.rbf_count,
+        )
+        pair_bias = torch.cat((pair_bias, rbf_bias), dim=-1)
+        pair_bias = self.rbf_proj(pair_bias)
+
+        return self.layer(lig_feats, pair_bias, lig_mask)
+
+
 class TransformerWrapper(nn.Module):
     """
     - Concatenate scalar + flattened vector features per node
@@ -212,18 +291,15 @@ class TransformerWrapper(nn.Module):
         # self.pre_mlp = NodeTypeMLP(self.ntype_order, in_dim=in_dim, d_model=d_model, dropout=dropout)
 
         # Create interleaved layers
-        self.layers = nn.ModuleList()
-        
-        # Add one CustomTransformerLayer first
-        custom_layer = PairTransformerLayer(
+        self.ligand_embedder = LigandPairBiasEmbedder(
             hidden_dim=d_model,
             pair_dim=pair_dim,
             num_heads=n_heads,
         )
-        self.layers.append(custom_layer)
-        
+        self.layers = nn.ModuleList()
+
         # Add standard TransformerEncoderLayers
-        for i in range(n_layers):
+        for _ in range(n_layers):
             std_layer = TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
@@ -281,64 +357,16 @@ class TransformerWrapper(nn.Module):
         # do attention with pair bias for ligand nodes
         lig_feats = padded_node_feats['lig'][self.trfmr_feat_key]
         lig_mask = attention_masks['lig'].to(lig_feats.device)
-        B, S, D = lig_feats.shape
-        pair_mask = lig_mask.unsqueeze(1) & lig_mask.unsqueeze(2)
+        lig_edge_feats = edge_feats.get("lig_to_lig") if edge_feats is not None else None
 
-        # get dense edge features
-        lig_edge_feats = edge_feats.get("lig_to_lig")
-
-        pair_bias = lig_feats.new_zeros(
-            (lig_feats.size(0), S, S, self.pair_dim)
+        padded_node_feats['lig'][self.trfmr_feat_key] = self.ligand_embedder(
+            lig_feats=lig_feats,
+            lig_mask=lig_mask,
+            lig_pos=padded_node_feats['lig']['x_t'],
+            layout=layout,
+            graph=g,
+            lig_edge_feats=lig_edge_feats,
         )
-
-        src, dst = g.edges(etype="lig_to_lig")
-
-        src = src.to(lig_feats.device)
-        dst = dst.to(lig_feats.device)
-
-        node_batch = layout.node_batch_idxs['lig'].to(
-            lig_feats.device
-        )
-        node_offsets = layout.node_offsets['lig'].to(
-            lig_feats.device
-        )
-
-        node_ids = torch.arange(
-            node_batch.shape[0],
-            device=lig_feats.device,
-            dtype=torch.long,
-        )
-        node_pos = node_ids - node_offsets[node_batch]
-
-        src_pos = node_pos[src]
-        dst_pos = node_pos[dst]
-        edge_batch = node_batch[src]
-
-        pair_bias[edge_batch, src_pos, dst_pos] = lig_edge_feats
-        pair_bias[edge_batch, dst_pos, src_pos] = lig_edge_feats
-
-        # compute pairwise distances
-        lig_pos = padded_node_feats['lig']['x_t']
-        pair_dists = torch.cdist(lig_pos, lig_pos, p=2.0)  # (N_lig, N_lig)
-
-
-        # embed pairwise distances and add to pair bias
-        pair_bias = pair_bias + _rbf(pair_dists, D_min=0.0, D_max=12.0, D_count=self.pair_dim)
-
-
-        # apply transformer layer with pair bias
-        padded_node_feats['lig'][self.trfmr_feat_key] = self.layers[0](
-            lig_feats, pair_bias, lig_mask
-        )
-
-        # TODO: the attention with pair bias on ligand nodes doesn't need to be
-        # just the "first of N layers"
-        # this can be a special pre-encoding step before we pass through self.layers
-        # specifically i think we should refactor so that attention with pair bias on ligand nodes
-        # is its own separate class, so here in TransformerWrapper.forward we just do something like
-        # padded_node_feats['lig'][self.trfmr_feat_key] = self.ligand_embedder(...)
-
-        # end - attention with pair bias for ligand nodes
 
 
         # Pack all node types to one sequence
@@ -359,9 +387,8 @@ class TransformerWrapper(nn.Module):
         M_all = torch.cat(M_list, dim=1)
 
         Y_all = X_all
-        start_layer_idx = 1
 
-        for layer in self.layers[start_layer_idx:]:
+        for layer in self.layers:
             Y_all = layer(Y_all, src_key_padding_mask=M_all)
 
         # back to per-ntype padded tensors
