@@ -3,7 +3,7 @@ _target_: omtra.models.omtra.OMTRA
 defaults:
   - _self_
   - conditional_paths: default
-  - vector_field: default
+  - vector_field: transformer
   - optimizer: default
   - aux_losses: default
 

@@ -36,6 +36,7 @@ from omtra.constants import (
 from omtra.data.graph.utils import get_batch_idxs
 from omtra.utils.graph import g_local_scope
 from omtra.data.graph.layout import GraphLayout
+from omtra.models.transformer import TransformerWrapper
 
 # from line_profiler import LineProfiler, profile
 
@@ -55,154 +56,7 @@ from omtra.data.graph.layout import GraphLayout
 #         return self.proj[ntype](x)
 
 
-class TransformerWrapper(nn.Module):
-    """
-    - Concatenate scalar + flattened vector features per node
-    - Pre-MLP per node type to capture node-type specific info
-    - Pack all node types into a shared transformer for cross-type attention
-    - Map d_model back to original size S
-    """
-    def __init__(self,
-                 node_types: List[str],
-                 n_hidden_scalars: int,
-                 n_vec_channels: int,
-                 d_model: int = 256,
-                 n_layers: int = 4,
-                 n_heads: int = 8,
-                 dim_ff: int | None = None,
-                 dropout: float = 0.1,
-                 use_residual: bool = True):
-        super().__init__()
-        self.ntype_order = list(node_types)
-        self.S = n_hidden_scalars
-        self.C = n_vec_channels
-        self.d_model = d_model
-        self.use_residual = use_residual
 
-        # in_dim = n_hidden_scalars + 3 * n_vec_channels
-        if dim_ff is None:
-            dim_ff = 4 * d_model
-        
-        # # pre-MLP per node type
-        # self.pre_mlp = NodeTypeMLP(self.ntype_order, in_dim=in_dim, d_model=d_model, dropout=dropout)
-
-        layer = TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=n_heads,
-            dim_feedforward=dim_ff,
-            dropout=dropout,
-            batch_first=True,
-            activation="gelu",
-            norm_first=True,
-        )
-        self.encoder = TransformerEncoder(layer, num_layers=n_layers)
-
-        # map scalars + coords to d_model, linear transformation of coords
-        self.in_proj = nn.Sequential(
-            nn.LayerNorm(self.S + 3),
-            nn.Linear(self.S + 3, d_model, bias=False),
-        )
-
-        # map d_model back to scalars only
-        self.out_proj = nn.Linear(d_model, self.S, bias=False)
-
-        self.TEMP_KEY = "temp_key"
-
-    @torch.no_grad()
-    def _cleanup_temp(self, g):
-        for ntype in g.ntypes:
-            if self.TEMP_KEY in g.nodes[ntype].data:
-                del g.nodes[ntype].data[self.TEMP_KEY]
-
-    def _concat_scalar_vector(self, scal: torch.Tensor, vec: torch.Tensor | None) -> torch.Tensor:
-        N = scal.shape[0]
-        if (vec is None) or (vec.numel() == 0):
-            flattened_vec = scal.new_zeros((N, 3 * self.C))
-        else:
-            # (N, C, 3) → (N, 3C)
-            flattened_vec = vec.reshape(N, -1)
-        return torch.cat([scal, flattened_vec], dim=-1)
-
-    def forward(
-        self,
-        g,
-        scalar_feats: Dict[str, torch.Tensor],
-        vec_feats: Dict[str, torch.Tensor],
-        coord_feats: Dict[str, torch.Tensor],
-        edge_feats=None,
-        x_diff=None,
-        d=None,
-        **kwargs,
-    ):
-        # Concatenate scalars with coordinates
-        for ntype in self.ntype_order:
-            scal = scalar_feats.get(ntype)
-            if scal is None or scal.numel() == 0:
-                continue
-            coords = coord_feats.get(ntype)
-            if coords is None or coords.numel() == 0:
-                coords = scal.new_zeros((scal.shape[0], 3))
-
-            feat_input = torch.cat([scal, coords], dim=-1)  # (N, S + 3)
-            out  = self.in_proj(feat_input)   # (N, d_model)
-            g.nodes[ntype].data[self.TEMP_KEY] = out
-
-        layout, padded_node_feats, attention_masks = GraphLayout.layout_and_pad(g)
-
-        # Pack all node types to one sequence
-        X_list, M_list, sizes = [], [], []
-        for ntype in self.ntype_order:
-            bucket = padded_node_feats.get(ntype)
-            if bucket is None or self.TEMP_KEY not in bucket:
-                sizes.append(0)
-                continue
-            X = bucket[self.TEMP_KEY]  # (B, n_max, d_model)
-            M = (~attention_masks[ntype]).to(torch.bool)
-            X_list.append(X)
-            M_list.append(M)
-            sizes.append(X.size(1))
-
-        if len(X_list) == 0:
-            self._cleanup_temp(g)
-            return scalar_feats, vec_feats
-
-        X_all = torch.cat(X_list, dim=1) # (B, n_all, d_model)
-        M_all = torch.cat(M_list, dim=1)
-
-        # transformer encoder
-        Y_all = self.encoder(X_all, src_key_padding_mask=M_all)
-
-        # back to per-ntype padded tensors
-        offset = 0
-        for ntype, nmax in zip(self.ntype_order, sizes):
-            if nmax == 0:
-                continue
-            padded_node_feats[ntype][self.TEMP_KEY] = Y_all[:, offset:offset + nmax, :]
-            offset += nmax
-
-        # back to DGL graph
-        layout.padded_sequence_to_graph(
-            g, padded_node_feats, attention_masks=attention_masks, inplace=True
-        )
-
-        # back to original size
-        out_scalars: Dict[str, torch.Tensor] = {}
-
-        for ntype, H_old in scalar_feats.items():
-            Y_ntype = g.nodes[ntype].data.get(self.TEMP_KEY)
-            if Y_ntype is None:
-                # pass through if this ntype wasn’t present
-                out_scalars[ntype] = H_old
-                continue
-
-            H_new = self.out_proj(Y_ntype)  # (N, S)
-            if self.use_residual and H_new.shape == H_old.shape:
-                H_new = H_new + H_old
-            out_scalars[ntype] = H_new
-
-            self._cleanup_temp(g)
-
-        return out_scalars, vec_feats
 
 class VectorField(nn.Module):
     def __init__(
@@ -218,28 +72,18 @@ class VectorField(nn.Module):
         n_recycles: int = 1,
         n_molecule_updates: int = 1,
         convs_per_update: int = 1,
-        n_message_gvps: int = 3,
-        n_update_gvps: int = 3,
-        n_expansion_gvps: int = 3,
         separate_mol_updaters: bool = True,
-        message_norm: Union[float, str] = 100,
         rbf_dmax=18,
         rbf_dim=32,
         time_embedding_dim: int = 64,
         token_dim: int = 64,
-        attention: bool = False,
-        att_type: str = 'crosstype',
-        n_heads: int = 1,
-        s_message_dim: Optional[int] = None,
-        v_message_dim: Optional[int] = None,
         dropout: float = 0.0,
         has_mask: bool = True,
         self_conditioning: bool = False,
-        use_dst_feats: bool = False,
-        dst_feat_msg_reduction_factor: float = 4,
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
-        res_id_embed_dim: int = 64
+        res_id_embed_dim: int = 64,
+        n_heads=8,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -248,7 +92,6 @@ class VectorField(nn.Module):
         self.n_hidden_scalars = n_hidden_scalars
         self.n_hidden_edge_feats = n_hidden_edge_feats
         self.n_vec_channels = n_vec_channels
-        self.message_norm = message_norm
         self.n_recycles = n_recycles
         self.separate_mol_updaters: bool = separate_mol_updaters
         self.interpolant_scheduler = interpolant_scheduler
@@ -389,41 +232,12 @@ class VectorField(nn.Module):
                 node_types=list(self.node_types),
                 n_hidden_scalars=self.n_hidden_scalars,
                 n_vec_channels=self.n_vec_channels,
-                d_model=256, n_layers=4, n_heads=8, dim_ff=1024, dropout=0.1, use_residual=True,
+                d_model=256, n_layers=4, n_heads=n_heads, 
+                dim_ff=1024, use_residual=True,
+                pair_dim=n_hidden_edge_feats,
+                dropout=dropout,
             )
         ])
-
-        # TODO: node_types and edge_types used to be like, all the possible node and edge types on which we defined modalities
-        # now they are just node types and edge types that are being supported by this model??? i think?? somehow
-        # we get a HeteroGVPConv that has self.edge_types = 'lig_to_lig` even though we are doing lig+pharm related tasks (should be lig-pharm edges)
-        # but i guess those don't get added because we don't actually maintain features on lig-pharm edges?
-        # self.conv_layers = []
-        # for conv_idx in range(convs_per_update * n_molecule_updates):
-        #     self.conv_layers.append(
-        #         HeteroGVPConv(
-        #             node_types=self.node_types,
-        #             edge_types=self.edge_types,
-        #             scalar_size=n_hidden_scalars,
-        #             vector_size=n_vec_channels,
-        #             n_cp_feats=n_cp_feats,
-        #             edge_feat_size=self.edge_feat_sizes,
-        #             n_message_gvps=n_message_gvps,
-        #             n_update_gvps=n_update_gvps,
-        #             n_expansion_gvps=n_expansion_gvps,
-        #             message_norm=message_norm,
-        #             rbf_dmax=rbf_dmax,
-        #             rbf_dim=rbf_dim,
-        #             attention=attention,
-        #             att_type=att_type,
-        #             n_heads=n_heads,
-        #             s_message_dim=s_message_dim,
-        #             v_message_dim=v_message_dim,
-        #             dropout=dropout,
-        #             use_dst_feats=use_dst_feats,
-        #             dst_feat_msg_reduction_factor=dst_feat_msg_reduction_factor,
-        #         )
-        #     )
-        # self.conv_layers = nn.ModuleList(self.conv_layers)
 
         # create molecule update layers
         self.node_position_updaters = nn.ModuleDict()
