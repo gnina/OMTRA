@@ -1,0 +1,21 @@
+_target_: omtra.models.vector_field.VectorField
+
+
+n_vec_channels:                32
+n_cp_feats:                    8
+n_hidden_scalars:              256
+n_hidden_edge_feats:           12
+n_recycles:                    1
+n_molecule_updates:            1
+convs_per_update:              1
+separate_mol_updaters:         true
+rbf_dmax:                      10
+rbf_dim:                       32
+time_embedding_dim:            64
+token_dim:                     64
+n_heads:                       8
+dropout:                       0.1
+has_mask:                      true
+self_conditioning:             true
+rebuild_edges:                 false
+res_id_embed_dim:              64
