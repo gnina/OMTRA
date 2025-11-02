@@ -55,9 +55,10 @@ class SelfConditioningResidualLayer(nn.Module):
                     # if we are using fake atoms, we need to add an extra dimension for the fake atom type
                     self.node_generated_dims[ntype] += 1
             elif modality.data_key == 'x': # positions
-                self.node_generated_dims[ntype] += rbf_dim
+                self.node_generated_dims[ntype] += rbf_dim + 6 # rbf + x_diff + x_hat
             elif modality.data_key == 'v': # vectors
-                self.node_generated_dims[ntype] += int(self.n_pharmvec_channels**2)
+                # self.node_generated_dims[ntype] += int(self.n_pharmvec_channels**2)
+                raise NotImplementedError('generating vector features deprecated')
             elif modality.data_key == 'pos_enc': #position encodings
                 #self.node_generated_dims[ntype] += res_id_embed_dim
                 pass # position encodings are already calculated
@@ -75,7 +76,8 @@ class SelfConditioningResidualLayer(nn.Module):
         # if we are modeling ligand structure, we want to encode changes in edge length on lig_to_lig edges
         # this may be subject to change in the future, like if we stop maintaining edge features?
         if name_to_modality('lig_x') in modalities_generated:
-            input_dim = edge_embedding_dim + name_to_modality('lig_e').n_categories + self.rbf_dim
+            input_dim = edge_embedding_dim + name_to_modality('lig_e').n_categories + self.rbf_dim + 3
+            # current edge feat + rbf of delta dij + delta x_diff
             self.lig_edge_residual_mlp = nn.Sequential(
                 nn.Linear(input_dim, edge_embedding_dim),
                 nn.SiLU(),
@@ -108,34 +110,22 @@ class SelfConditioningResidualLayer(nn.Module):
             if m.data_key == 'x':
                 # for positions, the distance to the final position and the initial position
                 # is used to update node scalar features
+
                 if m_generated:
                     x_diff = dst_dict[m.name] - x_t[ntype]
+                    xhat = dst_dict[m.name]
                 else:
                     x_diff = torch.zeros_like(x_t[ntype])
+                    xhat = torch.zeros_like(x_t[ntype])
                 dij = _norm_no_nan(x_diff)
                 dij_rbf = _rbf(dij, D_max=self.rbf_dmax, D_count=self.rbf_dim)
-                node_res_input = dij_rbf
-
-                # also, the displacement vector is used to update node vector features
-                if m_generated:
-                    v_t[ntype][:, -1, :] = x_diff / dij.unsqueeze(-1)
+                node_res_input = torch.cat([xhat, x_diff, dij_rbf], dim=-1)
 
             elif m.data_key == 'v':
                 # for vectors, pairwise distances between vector features are used
                 # to update node scalar features
                 # has shape (n_nodes, n_pharmvec_channels, n_pharmvec_channels, 3)
-                if m_generated:
-                    dij = dst_dict[m.name].unsqueeze(1) - v_t[ntype][:, :self.n_pharmvec_channels].unsqueeze(2)
-                    dij = _norm_no_nan(dij) # has shape (n_nodes, n_pharmvec_channels, n_pharmvec_channels)
-                    # flatten to shape (n_nodes, n_pharmvec_channels+n_pharmvec_channels)
-                    dij = rearrange(dij, 'n c1 c2 -> n (c1 c2)')
-                else:
-                    dij = torch.zeros(g.num_nodes(ntype), self.n_pharmvec_channels**2, device=g.device, dtype=v_t[ntype].dtype)
-                node_res_input = dij
-
-                # also, the last self.n_pharmvec_channels of the vector features are set previously predicted values
-                if m_generated:
-                    v_t[ntype][:, -self.n_pharmvec_channels:, :] = dst_dict[m.name]
+                raise NotImplementedError('generating vector features deprecated')
             elif m.is_categorical:
                 # for categorical features, we just add the final state
                 if m_generated:
@@ -146,6 +136,7 @@ class SelfConditioningResidualLayer(nn.Module):
                     node_res_input = tfn.one_hot(g.nodes[ntype].data[f'{m.data_key}_t'], m.n_categories+extra_dim)
             elif m.data_key == 'pos_enc':
                 # we dont need to add to/change the position encodings, they are already calculated
+                # TODO: protein pos encoding should not be a modality
                 continue
             else:
                 raise ValueError(f"Unexpected modality: {m.name}")
@@ -163,8 +154,8 @@ class SelfConditioningResidualLayer(nn.Module):
         if name_to_modality('lig_x') in task.modalities_generated:
             # for edge features, we add the distance to the final position and the initial position
             etype = ("lig", "lig_to_lig", "lig")
-            d_edge_t = self.edge_distances(g, etype, node_positions=g.nodes['lig'].data["x_t"])
-            d_edge_1 = self.edge_distances(g, etype, node_positions=dst_dict["lig_x"])
+            d_edge_t, x_diff_t = self.edge_distances(g, etype, node_positions=g.nodes['lig'].data["x_t"])
+            d_edge_1, x_diff_1 = self.edge_distances(g, etype, node_positions=dst_dict["lig_x"])
             d_input = (d_edge_1 - d_edge_t)[upper_edge_mask['lig_to_lig']]
 
             if 'lig_e' in dst_dict: 
@@ -174,11 +165,13 @@ class SelfConditioningResidualLayer(nn.Module):
             else:
                 last_pred_state = tfn.one_hot(g.edges['lig_to_lig'].data['e_t'][upper_edge_mask['lig_to_lig']], name_to_modality('lig_e').n_categories)
         
+            x_diff_input = x_diff_1[upper_edge_mask['lig_to_lig']] - x_diff_t[upper_edge_mask['lig_to_lig']]
 
             edge_residual_inputs = [
                 e_t['lig_to_lig'][upper_edge_mask['lig_to_lig']],  # current state of the edge
                 last_pred_state,  # final state of the edge
                 d_input,  # change in edge length
+                x_diff_input,  # change in edge position
             ]
             edge_residual = self.lig_edge_residual_mlp(torch.cat(edge_residual_inputs, dim=-1))
             edge_feats_w_residual = e_t['lig_to_lig'][upper_edge_mask['lig_to_lig']] + edge_residual
@@ -225,4 +218,6 @@ class SelfConditioningResidualLayer(nn.Module):
             # x_diff = g.edata['x_diff'] / dij
             d = _rbf(dij, D_max=self.rbf_dmax, D_count=self.rbf_dim)
 
-        return d
+            x_diff = g.edges[etype].data["x_diff"]
+
+        return d, x_diff
