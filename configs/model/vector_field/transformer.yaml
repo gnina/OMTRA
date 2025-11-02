@@ -19,3 +19,4 @@ has_mask:                      true
 self_conditioning:             true
 rebuild_edges:                 false
 res_id_embed_dim:              64
+pos_emb:                       true

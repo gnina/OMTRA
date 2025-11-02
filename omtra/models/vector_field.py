@@ -37,6 +37,7 @@ from omtra.data.graph.utils import get_batch_idxs
 from omtra.utils.graph import g_local_scope
 from omtra.data.graph.layout import GraphLayout
 from omtra.models.transformer import TransformerWrapper
+from omtra.models.embeddings.pos_embed import get_pos_embedding
 
 # from line_profiler import LineProfiler, profile
 
@@ -84,6 +85,7 @@ class VectorField(nn.Module):
         fake_atoms: bool = False,
         res_id_embed_dim: int = 64,
         n_heads=8,
+        pos_emb: bool = True,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -101,6 +103,7 @@ class VectorField(nn.Module):
         self.has_mask = has_mask
         self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
+        self.pos_emb = pos_emb
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -475,6 +478,22 @@ class VectorField(nn.Module):
             node_scalar_features[ntype] = self.scalar_embedding[ntype](
                 node_scalar_features[ntype]
             )
+
+        if self.pos_emb:
+            for ntype in node_scalar_features.keys():
+                global_node_idx = torch.arange(
+                    g.num_nodes(ntype), device=device
+                )
+                bnn = g.batch_num_nodes(ntype)
+                rel_node_starts = torch.zeros(1+bnn.shape[0], device=bnn.device)
+                rel_node_starts[1:] = torch.cumsum(bnn, dim=0)
+                rel_node_starts = rel_node_starts[:-1]
+                relative_node_idx = global_node_idx - rel_node_starts[node_batch_idx[ntype]]
+                pos_emb = get_pos_embedding(
+                    relative_node_idx,
+                    self.n_hidden_scalars,
+                )
+                node_scalar_features[ntype] += pos_emb
 
         if self.self_conditioning and prev_dst_dict is None:
             train_self_condition = self.training and (torch.rand(1) > 0.5).item()
