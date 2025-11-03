@@ -56,6 +56,7 @@ class SelfConditioningResidualLayer(nn.Module):
                     self.node_generated_dims[ntype] += 1
             elif modality.data_key == 'x': # positions
                 self.node_generated_dims[ntype] += rbf_dim + 6 # rbf + x_diff + x_hat
+                # self.node_generated_dims[ntype] += rbf_dim + 6 # rbf + x_diff + x_hat
             elif modality.data_key == 'v': # vectors
                 # self.node_generated_dims[ntype] += int(self.n_pharmvec_channels**2)
                 raise NotImplementedError('generating vector features deprecated')
@@ -76,7 +77,8 @@ class SelfConditioningResidualLayer(nn.Module):
         # if we are modeling ligand structure, we want to encode changes in edge length on lig_to_lig edges
         # this may be subject to change in the future, like if we stop maintaining edge features?
         if name_to_modality('lig_x') in modalities_generated:
-            input_dim = edge_embedding_dim + name_to_modality('lig_e').n_categories + self.rbf_dim + 3
+            # input_dim = edge_embedding_dim + name_to_modality('lig_e').n_categories + self.rbf_dim + 3
+            input_dim = edge_embedding_dim + name_to_modality('lig_e').n_categories + self.rbf_dim
             # current edge feat + rbf of delta dij + delta x_diff
             self.lig_edge_residual_mlp = nn.Sequential(
                 nn.Linear(input_dim, edge_embedding_dim),
@@ -113,13 +115,18 @@ class SelfConditioningResidualLayer(nn.Module):
 
                 if m_generated:
                     x_diff = dst_dict[m.name] - x_t[ntype]
-                    xhat = dst_dict[m.name]
+                    # xhat = dst_dict[m.name]
                 else:
                     x_diff = torch.zeros_like(x_t[ntype])
-                    xhat = torch.zeros_like(x_t[ntype])
+                    # xhat = torch.zeros_like(x_t[ntype])
                 dij = _norm_no_nan(x_diff)
                 dij_rbf = _rbf(dij, D_max=self.rbf_dmax, D_count=self.rbf_dim)
-                node_res_input = torch.cat([xhat, x_diff, dij_rbf], dim=-1)
+                # node_res_input = torch.cat([xhat, x_diff, dij_rbf], dim=-1)
+                node_res_input = dij_rbf
+
+                # also, the displacement vector is used to update node vector features
+                if m_generated:
+                    v_t[ntype][:, -1, :] = x_diff / dij.unsqueeze(-1)
 
             elif m.data_key == 'v':
                 # for vectors, pairwise distances between vector features are used
@@ -165,13 +172,13 @@ class SelfConditioningResidualLayer(nn.Module):
             else:
                 last_pred_state = tfn.one_hot(g.edges['lig_to_lig'].data['e_t'][upper_edge_mask['lig_to_lig']], name_to_modality('lig_e').n_categories)
         
-            x_diff_input = x_diff_1[upper_edge_mask['lig_to_lig']] - x_diff_t[upper_edge_mask['lig_to_lig']]
+            # x_diff_input = x_diff_1[upper_edge_mask['lig_to_lig']] - x_diff_t[upper_edge_mask['lig_to_lig']]
 
             edge_residual_inputs = [
                 e_t['lig_to_lig'][upper_edge_mask['lig_to_lig']],  # current state of the edge
                 last_pred_state,  # final state of the edge
                 d_input,  # change in edge length
-                x_diff_input,  # change in edge position
+                # x_diff_input,  # change in edge position
             ]
             edge_residual = self.lig_edge_residual_mlp(torch.cat(edge_residual_inputs, dim=-1))
             edge_feats_w_residual = e_t['lig_to_lig'][upper_edge_mask['lig_to_lig']] + edge_residual
