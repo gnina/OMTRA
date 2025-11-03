@@ -55,7 +55,7 @@ class SelfConditioningResidualLayer(nn.Module):
                     # if we are using fake atoms, we need to add an extra dimension for the fake atom type
                     self.node_generated_dims[ntype] += 1
             elif modality.data_key == 'x': # positions
-                self.node_generated_dims[ntype] += rbf_dim + 6 # rbf + x_diff + x_hat
+                self.node_generated_dims[ntype] += rbf_dim 
                 # self.node_generated_dims[ntype] += rbf_dim + 6 # rbf + x_diff + x_hat
             elif modality.data_key == 'v': # vectors
                 # self.node_generated_dims[ntype] += int(self.n_pharmvec_channels**2)
