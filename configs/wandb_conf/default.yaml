@@ -1,5 +1,5 @@
 group: null
 mode: online
 name: ${name}
-project: omtra
+project: online_conf
 entity: koes-group

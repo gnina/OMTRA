@@ -1,0 +1,15 @@
+# Task group for testing confidence module
+# Focuses only on rigid_docking_pharmacophore_condensed
+defaults:
+  - _self_
+  - datamodule: default
+
+task_phases:
+  - duration_batches: null
+    tasks:
+      - name: rigid_docking_pharmacophore_condensed
+        probability: 1.0
+
+dataset_task_coupling:
+  rigid_docking_pharmacophore_condensed:
+    - [plinder, 1.0]

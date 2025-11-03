@@ -17,3 +17,5 @@ t_alpha: 1.8
 cat_loss_weight: 1.0
 time_scaled_loss: False
 pharm_var: 0.0
+train_confidence: False
+confidence_loss_weight: 0.1
