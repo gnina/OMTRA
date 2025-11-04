@@ -16,6 +16,7 @@ import json
 from omtra.utils import omtra_root
 from pathlib import Path
 OmegaConf.register_new_resolver("omtra_root", omtra_root, replace=True)
+from omtra.constants import protein_atom_map
 
 default_config_path = Path(omtra_root()) / 'configs'
 default_config_path = str(default_config_path)
@@ -138,19 +139,108 @@ def parse_args():
 
     p.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
 
+    p.add_argument(
+        "--anchor1",
+        type=str,
+        default=None,
+        help="First protein anchor atom selection (PyMOL format, e.g., /pocket2///EH `20/CB`0)"
+    )
+
+    p.add_argument(
+        "--anchor2",
+        type=str,
+        default=None,
+        help="Second protein anchor atom selection (PyMOL format, e.g., /pocket2//B/MK8`27/CB)"
+    )
+
     return p.parse_args()
 
 
-def write_mols_to_sdf(mols, filename):
+def _first_field(data_dict, candidates):
     """
-    Write a list of RDKit molecules to an SDF file.
+    Return (value, key_name) for the first key in 'candidates' found in data_dict, 
+    or (None, None) if none exist.
     """
-    writer = Chem.SDWriter(str(filename))
-    writer.SetKekulize(False)
-    for mol in mols:
-        if mol is not None:
-            writer.write(mol)
-    writer.close()
+    for key in candidates:
+        if key in data_dict:
+            return data_dict[key], key
+    return None, None
+
+def parse_anchor_args(args, g_list):
+    """
+    Map --anchor1/--anchor2 (e.g. '20:CB') to prot_atom node indices for each graph in g_list.
+    Accepts multiple schema variants:
+      - atom name idx: 'a_1_true' OR 'prot_atom_name_1_true' OR 'prot_atom_name'
+      - residue id   : 'res_id' OR 'prot_atom_resids' OR 'res_id_1_true'
+    """
+    if args.anchor1 is None and args.anchor2 is None:
+        return None
+    if (args.anchor1 is None) ^ (args.anchor2 is None):
+        raise ValueError("Both --anchor1 and --anchor2 must be specified together")
+    
+    def _parse(s):
+        parts = s.split(':')
+        if len(parts) != 2:
+            raise ValueError(f"Anchor format should be 'RESID:ATOMNAME', got: {s}")
+        return int(parts[0]), parts[1].strip()
+    
+    resid1, atomname1 = _parse(args.anchor1)
+    resid2, atomname2 = _parse(args.anchor2)
+    
+    # map atom names -> indices in protein_atom_map
+    name_to_idx = {name: i for i, name in enumerate(protein_atom_map)}
+    if atomname1 not in name_to_idx or atomname2 not in name_to_idx:
+        raise ValueError(f"Unknown atom name(s): {atomname1}, {atomname2}. "
+                        f"Expected one of {sorted(set(protein_atom_map))[:10]}...")
+    
+    aidx1 = name_to_idx[atomname1]
+    aidx2 = name_to_idx[atomname2]
+    
+    pairs = []
+    for gi, g in enumerate(g_list):
+        if 'prot_atom' not in g.ntypes:
+            raise ValueError("Graph has no 'prot_atom' node type; cannot resolve anchors.")
+        
+        d = g.nodes['prot_atom'].data
+        
+        # residue ids
+        res_id, res_key = _first_field(d, ['res_id', 'prot_atom_resids', 'res_id_1_true'])
+        if res_id is None:
+            raise ValueError(
+                f"Missing residue id field in prot_atom node data; "
+                f"looked for ['res_id','prot_atom_resids','res_id_1_true']. "
+                f"Available keys: {list(d.keys())}"
+            )
+        
+        # atom-name index field
+        an, an_key = _first_field(d, ['a_1_true', 'prot_atom_name_1_true', 'prot_atom_name'])
+        if an is None:
+            raise ValueError(
+                "Graph lacks atom-name indices needed for anchor matching. "
+                "Need one of ['a_1_true','prot_atom_name_1_true','prot_atom_name']. "
+                f"Available keys: {list(d.keys())}"
+            )
+        
+        # Build masks (everything is tensor)
+        m1 = (res_id == resid1) & (an == aidx1)
+        m2 = (res_id == resid2) & (an == aidx2)
+        
+        idxs1 = torch.nonzero(m1, as_tuple=False).flatten()
+        idxs2 = torch.nonzero(m2, as_tuple=False).flatten()
+        
+        if len(idxs1) != 1 or len(idxs2) != 1:
+            raise ValueError(
+                f"Ambiguous/missing anchor(s) in graph {gi} using fields "
+                f"res='{res_key}', name='{an_key}'. "
+                f"{args.anchor1} -> {len(idxs1)} hits, {args.anchor2} -> {len(idxs2)} hits. "
+                "If multiple chains share the same res_id, ensure chain info is present "
+                "and disambiguate, or use residue ids unique within the graph."
+            )
+        
+        pairs.append((int(idxs1[0]), int(idxs2[0])))
+    
+    return pairs
+
 
 def generate_sample_names(n_systems: int, n_replicates: int) -> List[str]:
     """
@@ -271,65 +361,93 @@ def main(args):
     if not ckpt_path.exists():
         raise FileNotFoundError(f"{ckpt_path} not found")
     
-    # 2) load the exact train‐time config
-    train_cfg_path = ckpt_path.parent.parent / '.hydra' / 'config.yaml'
-    train_cfg = quick_load.load_trained_model_cfg(train_cfg_path)
-
-    # apply some changes to the config to enable sampling
-    train_cfg.num_workers = 0
-    if args.pharmit_path:
-        train_cfg.pharmit_path = args.pharmit_path
-    if args.plinder_path:
-        train_cfg.plinder_path = args.plinder_path
-    if args.crossdocked_path:
-        train_cfg.crossdocked_path = args.crossdocked_path
-
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
-    # 4) instantiate datamodule & model
-    dm  = quick_load.datamodule_from_config(train_cfg)
-    multitask_dataset = dm.load_dataset(args.split)
     model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
     
     # get task we are sampling for
     task_name: str = args.task
     task: Task = task_name_to_class(task_name)
 
-    # get raw dataset object
-    if args.dataset == 'plinder':
-        plinder_link_version = task.plinder_link_version
-        dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
-    elif args.dataset == 'pharmit':
-        dataset = multitask_dataset.datasets['pharmit']
-    elif args.dataset == 'crossdocked':
-        dataset = multitask_dataset.datasets['crossdocked']
-    else:
-        raise ValueError(f"Unknown dataset {args.dataset}")
-
     # get g_list
     if task.unconditional:
         g_list = None
         n_replicates = args.n_samples
     else:
-
-        if args.sys_idx_file is None:
-            dataset_idxs = range(args.dataset_start_idx, args.dataset_start_idx + args.n_samples)
+        # Check if g_list was provided from input files from cli
+        if hasattr(args, 'g_list_from_files') and args.g_list_from_files is not None:
+            g_list = args.g_list_from_files
+            n_replicates = args.n_replicates
         else:
-            # read in pre-determined index file
-            with open(args.sys_idx_file, "r") as f:
-                line = f.readline().strip()
-                dataset_idxs = [int(i) for i in line.split(",")]
-                dataset_idxs = dataset_idxs[:args.n_samples]
+            # 2) load the exact train‐time config
+            train_cfg_path = ckpt_path.parent.parent / '.hydra' / 'config.yaml'
+            train_cfg = quick_load.load_trained_model_cfg(train_cfg_path)
 
-        g_list = [ dataset[(task_name, i)].to(device) for i in dataset_idxs ]
-        n_replicates = args.n_replicates
+            # apply some changes to the config to enable sampling
+            train_cfg.num_workers = 0
+            if args.pharmit_path:
+                train_cfg.pharmit_path = args.pharmit_path
+            if args.plinder_path:
+                train_cfg.plinder_path = args.plinder_path
+            if args.crossdocked_path:
+                train_cfg.crossdocked_path = args.crossdocked_path
+
+            # instantiate datamodule & model
+            dm  = quick_load.datamodule_from_config(train_cfg)
+            multitask_dataset = dm.load_dataset(args.split)
+
+            # get raw dataset object
+            if args.dataset == 'plinder':
+                plinder_link_version = task.plinder_link_version
+                dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
+            elif args.dataset == 'pharmit':
+                dataset = multitask_dataset.datasets['pharmit']
+            elif args.dataset == 'crossdocked':
+                dataset = multitask_dataset.datasets['crossdocked']
+            else:
+                raise ValueError(f"Unknown dataset {args.dataset}")
+
+            if args.sys_idx_file is None:
+                dataset_idxs = range(args.dataset_start_idx, args.dataset_start_idx + args.n_samples)
+            else:
+                # read in pre-determined index file
+                with open(args.sys_idx_file, "r") as f:
+                    line = f.readline().strip()
+                    dataset_idxs = [int(i) for i in line.split(",")]
+                    dataset_idxs = dataset_idxs[:args.n_samples]
+
+            g_list = [ dataset[(task_name, i)].to(device) for i in dataset_idxs ]
+            n_replicates = args.n_replicates
 
     # set coms if protein is present
-    if 'protein_identity' in task.groups_present and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed'])):
-        coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
+    if (
+        g_list is not None
+        and 'protein_identity' in task.groups_present
+        and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed']))
+    ):
+        # coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
+        coms = []
+        for g in g_list:
+            if 'lig' in g.ntypes and 'x_1_true' in g.nodes['lig'].data:
+                coms.append(g.nodes['lig'].data['x_1_true'].mean(dim=0))
+            else:
+                # No ligand in graph - use protein center as COM
+                coms.append(g.nodes['prot_atom'].data['x_1_true'].mean(dim=0))
     else:
         coms = None
+
+    anchor_idx_pairs = parse_anchor_args(args, g_list) if g_list is not None else None
+
+    ###### test #######
+    if anchor_idx_pairs is not None:
+        print(f"Anchor pairs: {anchor_idx_pairs}")
+        if g_list is not None and len(g_list) > 0:
+            print(f"Edge types in first graph: {g_list[0].etypes}")
+            for etype in g_list[0].etypes:
+                print(f"  {etype}: {g_list[0].num_edges(etype)} edges")
+    ###### test #######
+
 
     sampled_systems = model.sample(
         g_list=g_list,
@@ -343,8 +461,17 @@ def main(args):
         stochastic_sampling=args.stochastic_sampling,
         noise_scaler=args.noise_scaler, # for stochastic sampling 
         eps=args.eps,
-        n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None
+        n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None,
+        anchor_idx_pairs=anchor_idx_pairs
     )
+
+    ###### test #######
+    if anchor_idx_pairs is not None:
+        print(f"After sampling, checking first system:")
+        final_g = sampled_systems[0].g
+        print(f"  prot_atom_covalent_lig edges: {final_g.num_edges('prot_atom_covalent_lig')}")
+        print(f"  lig_covalent_prot_atom edges: {final_g.num_edges('lig_covalent_prot_atom')}")
+    ###### test #######
 
     if args.output_dir is None:
         vis_str = 'vis' if args.visualize else 'novis'
@@ -366,26 +493,29 @@ def main(args):
             sys.write_ligand(lig_xt_file, trajectory=True, endpoint=False)
             sys.write_ligand(lig_xhat_file, trajectory=True, endpoint=True)
     elif not task.unconditional and not args.visualize:
+        # determine number of systems even if g_list is None (e.g., file inputs)
+        n_systems = len(g_list) if g_list is not None else 1
         # write ground truth for everything in the system, once per system
-        write_ground_truth(
-            n_systems=len(g_list),
-            n_replicates=n_replicates,
-            task=task,
-            output_dir=output_dir,
-            sampled_systems=sampled_systems,
-            g_list=g_list
-            )
+        if g_list is not None and not (hasattr(args, 'g_list_from_files') and args.g_list_from_files is not None):
+            write_ground_truth(
+                n_systems=n_systems,
+                n_replicates=n_replicates,
+                task=task,
+                output_dir=output_dir,
+                sampled_systems=sampled_systems,
+                g_list=g_list
+                )
 
         # collect all the ligands for each system
         sample_names = generate_sample_names(
-            n_systems=len(g_list), 
+            n_systems=n_systems, 
             n_replicates=n_replicates
         )
         for sys_id, replicates in enumerate(
             group_samples_by_system(
             sample_names=sample_names,
             sample_objects=sampled_systems,
-            n_systems=len(g_list),
+            n_systems=n_systems,
             n_replicates=n_replicates
             )
         ):
@@ -410,18 +540,21 @@ def main(args):
                     f.write(sum(pharms))
 
     elif not task.unconditional and args.visualize:
+        # determine number of systems even if g_list is None (e.g., file inputs)
+        n_systems = len(g_list) if g_list is not None else 1
         # write ground truth for everything in the system, once per system
-        write_ground_truth(
-            n_systems=len(g_list),
-            n_replicates=n_replicates,
-            task=task,
-            output_dir=output_dir,
-            sampled_systems=sampled_systems,
-            g_list=g_list)
+        if g_list is not None and not (hasattr(args, 'g_list_from_files') and args.g_list_from_files is not None):
+            write_ground_truth(
+                n_systems=n_systems,
+                n_replicates=n_replicates,
+                task=task,
+                output_dir=output_dir,
+                sampled_systems=sampled_systems,
+                g_list=g_list)
         
         # collect all the ligands for each system
         sample_names = generate_sample_names(
-            n_systems=len(g_list), 
+            n_systems=n_systems, 
             n_replicates=n_replicates
         )
         for sample_idx, (sample_name, system) in enumerate(zip(

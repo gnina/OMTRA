@@ -425,12 +425,20 @@ class VectorField(nn.Module):
                     )
                 )
             # should be positional encodings
+            # elif modality.data_key == "pos_enc":
+            #     if ntype not in node_scalar_features:
+            #         node_scalar_features[ntype] = []
+            #     node_scalar_features[ntype].append(
+            #         g.nodes[ntype].data[f"{modality.data_key}_t"]
+            #     )
+
             elif modality.data_key == "pos_enc":
-                if ntype not in node_scalar_features:
-                    node_scalar_features[ntype] = []
-                node_scalar_features[ntype].append(
-                    g.nodes[ntype].data[f"{modality.data_key}_t"]
-                )
+                if f"{modality.data_key}_t" in g.nodes[ntype].data:
+                    if ntype not in node_scalar_features:
+                        node_scalar_features[ntype] = []
+                    node_scalar_features[ntype].append(
+                        g.nodes[ntype].data[f"{modality.data_key}_t"]
+                    )
 
         # loop back over node types, and anything without vector features should be given a zero vector
         for ntype in node_scalar_features.keys():

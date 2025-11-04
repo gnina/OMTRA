@@ -594,7 +594,7 @@ class OMTRA(pl.LightningModule):
         eps: float = 0.01,
         # use_gt_n_lig_atoms: bool = False,
         n_lig_atom_margin: Union[float, None] = None,
-
+        anchor_idx_pairs: Optional[List[Tuple[int, int]]] = None,
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -624,6 +624,7 @@ class OMTRA(pl.LightningModule):
         # if this is purely unconditional sampling
         # we create initial graphs with no data
         protein_present = "protein_structure" in groups_present
+        anchor_pairs_flat: Optional[List[Tuple[int, int]]] = None
         g_flat: List[dgl.DGLHeteroGraph] = []
         if g_list is None:
             g_flat = []
@@ -651,6 +652,19 @@ class OMTRA(pl.LightningModule):
                     com_i = coms[idx]
 
                 coms_flat.extend([com_i] * n_replicates)
+
+        if anchor_idx_pairs is not None:
+            if not protein_present:
+                raise ValueError("anchor_idx_pairs provided but no protein_structure present.")
+            if g_list is None:
+                raise ValueError("anchor_idx_pairs requires g_list (conditioned sampling).")
+            if len(anchor_idx_pairs) != len(g_list):
+                raise ValueError(f"anchor_idx_pairs must align with g_list: got {len(anchor_idx_pairs)} vs {len(g_list)}")
+            # replicate each pair for its n_replicates copies
+            anchor_pairs_flat = []
+            for pair in anchor_idx_pairs:
+                anchor_pairs_flat.extend([pair] * n_replicates)
+            assert len(anchor_pairs_flat) == len(g_flat)
 
         # TODO: sample number of ligand atoms
         add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"])
@@ -759,7 +773,28 @@ class OMTRA(pl.LightningModule):
                 )
                 assert edge_idxs.shape[0] == 2
                 g_i.add_edges(u=edge_idxs[0], v=edge_idxs[1], etype="lig_to_lig")
-        
+
+                # add covalent edges 
+                if anchor_pairs_flat is not None:
+                    prot_anchor_1, prot_anchor_2 = anchor_pairs_flat[g_idx]
+                    # Use first ligand atom for anchor_1, last for anchor_2
+                    lig_anchor_1 = 0  # first ligand atom
+                    lig_anchor_2 = n_lig_atoms[g_idx].item() - 1  # last atom
+                    g_i.add_edges(u=[prot_anchor_1, prot_anchor_2], 
+                                  v=[lig_anchor_1, lig_anchor_2],
+                                  etype="prot_atom_covalent_lig")
+                    g_i.add_edges(u=[lig_anchor_1, lig_anchor_2],
+                                  v=[prot_anchor_1, prot_anchor_2],
+                                  etype="lig_covalent_prot_atom")
+                    
+                    ####### test #######
+                    print(f"Added covalent edges for graph {g_idx}:")
+                    print(f"  prot_atom_covalent_lig: {g_i.num_edges('prot_atom_covalent_lig')} edges")
+                    print(f"  lig_covalent_prot_atom: {g_i.num_edges('lig_covalent_prot_atom')} edges")
+                    print(f"  From protein atoms: {prot_anchor_1}, {prot_anchor_2}")
+                    print(f"  To ligand atoms: {lig_anchor_1}, {lig_anchor_2}")
+                    ####### test #######
+
         add_pharm = "pharmacophore" in groups_generated
         if protein_present and add_pharm:
             if any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"]):
@@ -803,6 +838,14 @@ class OMTRA(pl.LightningModule):
 
         # TODO: batch the graphs
         g = dgl.batch(g_flat).to(device)
+
+        ####### test #######
+        print(f"After batching:")
+        print(f"  prot_atom_covalent_lig edges: {g.num_edges('prot_atom_covalent_lig')}")
+        print(f"  lig_covalent_prot_atom edges: {g.num_edges('lig_covalent_prot_atom')}")
+        ####### test #######
+
+
         com_batch = torch.stack(coms_flat, dim=0).to(device)
 
         # sample prior distributions for each modality
@@ -842,7 +885,10 @@ class OMTRA(pl.LightningModule):
                     continue
             data_src = g.nodes[m.entity_name] if m.is_node else g.edges[m.entity_name]
             dk = m.data_key
-            data_src.data[f"{dk}_t"] = data_src.data[f"{dk}_1_true"]
+            
+            if f"{dk}_1_true" in data_src.data:
+                data_src.data[f"{dk}_t"] = data_src.data[f"{dk}_1_true"]
+            # data_src.data[f"{dk}_t"] = data_src.data[f"{dk}_1_true"]
 
 
         # optionally set the number of timesteps for the integration
@@ -911,6 +957,7 @@ class OMTRA(pl.LightningModule):
         noise_scaler: float = 1.0,
         eps: float = 0.01,
         n_lig_atom_margin: Union[float, None] = None,
+        anchor_idx_pairs: Optional[List[Tuple[int, int]]] = None,
     ) -> List[SampledSystem]:
         
         n_samples = len(g_list) if g_list is not None else 1
@@ -924,6 +971,7 @@ class OMTRA(pl.LightningModule):
             g_chunk = g_list[start_idx:end_idx]
             coms_chunk = coms[start_idx:end_idx]
             n_chunk = len(g_chunk)
+            anchor_chunk = anchor_idx_pairs[start_idx:end_idx] if anchor_idx_pairs else None 
 
             # Determine reps per batch for this chunk
             reps_per_batch = max(1, max_batch_size // n_chunk)
@@ -945,6 +993,7 @@ class OMTRA(pl.LightningModule):
                                             noise_scaler=noise_scaler,
                                             eps=eps,
                                             n_lig_atom_margin=n_lig_atom_margin,
+                                            anchor_idx_pairs=anchor_chunk,
                                             )
                 # re-order samples
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):

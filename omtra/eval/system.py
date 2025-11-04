@@ -840,6 +840,7 @@ def pharm_to_xyz(pos: torch.Tensor, pharm_elements: List[str]):
 
 def write_mols_to_sdf(mols: List[Chem.Mol], filename: Union[str, Path]):
     """Write a list of rdkit molecules to an sdf file."""
+    Path(filename).parent.mkdir(parents=True, exist_ok=True)
     filename = Path(filename)
     if not filename.suffix == ".sdf":
         raise ValueError("Output file must have .sdf extension.")
