@@ -543,7 +543,7 @@ class OMTRA(pl.LightningModule):
             g.nodes['lig'].data['x_1_pred'] = vf_output['lig_x']
 
             # compute ground truth LDDT
-            lddt_true = compute_lddt(g) # TODO: detach gradients (we dont want confidence metric to influence structure generation?)
+            lddt_true = compute_lddt(g).detach() # detach gradients (we dont want confidence metric to influence structure generation)
 
             # predict LDDT with confidence module
             atom_features = g.nodes['lig'].data['node_scalar_features']
