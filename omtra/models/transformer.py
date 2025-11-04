@@ -225,24 +225,23 @@ class LigandPairBiasEmbedder(nn.Module):
         B, S, _ = lig_feats.shape
         pair_bias = lig_feats.new_zeros((B, S, S, self.pair_dim))
 
-        if lig_edge_feats is not None and lig_edge_feats.numel() > 0:
-            lig_edge_feats = lig_edge_feats.to(device)
-            src, dst = graph.edges(etype="lig_to_lig")
-            src = src.to(device)
-            dst = dst.to(device)
+        lig_edge_feats = lig_edge_feats.to(device)
+        src, dst = graph.edges(etype="lig_to_lig")
+        src = src.to(device)
+        dst = dst.to(device)
 
-            node_batch = layout.node_batch_idxs['lig'].to(device)
-            node_offsets = layout.node_offsets['lig'].to(device)
+        node_batch = layout.node_batch_idxs['lig'].to(device)
+        node_offsets = layout.node_offsets['lig'].to(device)
 
-            node_ids = torch.arange(node_batch.shape[0], device=device)
-            node_pos = node_ids - node_offsets[node_batch]
+        node_ids = torch.arange(node_batch.shape[0], device=device)
+        node_pos = node_ids - node_offsets[node_batch]
 
-            src_pos = node_pos[src]
-            dst_pos = node_pos[dst]
-            edge_batch = node_batch[src]
+        src_pos = node_pos[src]
+        dst_pos = node_pos[dst]
+        edge_batch = node_batch[src]
 
-            pair_bias[edge_batch, src_pos, dst_pos] = lig_edge_feats
-            pair_bias[edge_batch, dst_pos, src_pos] = lig_edge_feats
+        pair_bias[edge_batch, src_pos, dst_pos] = lig_edge_feats
+        pair_bias[edge_batch, dst_pos, src_pos] = lig_edge_feats
 
         pair_dists = torch.cdist(lig_pos, lig_pos, p=2.0)
         rbf_bias = _rbf(
