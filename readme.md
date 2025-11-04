@@ -14,6 +14,14 @@ chmod +x build_env.sh
 ./build_env.sh
 ```
 
+```bash
+git clone https://github.com/gnina/OMTRA.git
+cd OMTRA
+mamba create -n environment,yml
+mamba activate omtra
+pip install -e ,.
+```
+
 # TODO:
 - [ ] filter private library pharmit compounds
 - [ ] harmonic prior
