@@ -26,7 +26,7 @@ class MolXACE:
     c: Optional[Union[np.ndarray, torch.Tensor]] = None
     e: Optional[Union[np.ndarray, torch.Tensor]] = None  # corresponds to edge attributes (bond orders)
 
-    #chiral: Optional[Union[np.ndarray, torch.Tensor]] = None
+    chiral: Optional[Union[np.ndarray, torch.Tensor]] = None
 
     impl_H: Optional[Union[np.ndarray, torch.Tensor]] = None
     aro: Optional[Union[np.ndarray, torch.Tensor]] = None
@@ -72,7 +72,7 @@ class MolXACE:
             dense_xace = MolXACE(
                 x=self.x,
                 cond_a=self.cond_a,
-                #chiral=self.chiral,
+                chiral=self.chiral,
                 e=bond_types,
                 edge_idxs=edge_idxs
             )
@@ -82,7 +82,7 @@ class MolXACE:
                 x=self.x,
                 a=self.a,
                 c=self.c,
-                #chiral=self.chiral,
+                chiral=self.chiral,
                 impl_H=self.impl_H,
                 aro=self.aro,
                 hyb=self.hyb,
@@ -97,7 +97,7 @@ class MolXACE:
                 x=self.x,
                 a=self.a,
                 c=self.c,
-                #chiral=self.chiral,
+                chiral=self.chiral,
                 e=bond_types,
                 edge_idxs=edge_idxs
             )
@@ -244,8 +244,8 @@ def add_fake_atoms(mol: MolXACE, fake_atom_p: float, cond_a_typer: CondensedAtom
     fake_atom_positions = fake_atom_positions + torch.randn_like(fake_atom_positions)
     mol.x = torch.cat((mol.x, fake_atom_positions), dim=0)
 
-    #fake_atom_chirality = torch.full_like(mol.chiral[anchor_atom_idxs], fill_value=len(lig_atom_chirality_map))
-    #mol.chiral = torch.cat((mol.chiral, fake_atom_chirality), dim=0)
+    fake_atom_chirality = torch.zeros_like(mol.chiral[anchor_atom_idxs])
+    mol.chiral = torch.cat((mol.chiral, fake_atom_chirality), dim=0)
 
     # TODO: dataset class initialize CondensedAtomTyper and pass to add_fake_atoms. Right now done by Pharmit dataclass
 

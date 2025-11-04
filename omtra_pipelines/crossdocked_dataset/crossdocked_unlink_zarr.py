@@ -51,6 +51,7 @@ class CrossdockedNoLinksZarrConverter:
         category: str = None,
         num_workers: int = 1,
         batch_size: int = 200,
+        include_all_tuples: bool = True, #flag to include systems with condensed atom types that are not in pharmit or plinder
     ):
         self.output_path = Path(output_path)
         self.struc_chunk_size = struc_chunk_size
@@ -61,6 +62,7 @@ class CrossdockedNoLinksZarrConverter:
         self.category = category
         self.num_workers = num_workers
         self.batch_size = batch_size
+        self.include_all_tuples = include_all_tuples
 
         if not self.output_path.exists():
             self.store = zarr.storage.LocalStore(str(self.output_path))
@@ -202,7 +204,7 @@ class CrossdockedNoLinksZarrConverter:
                     dtype=np.int32,
                 )
 
-                #Add extra ligand features
+                #Add extra ligand features and chirality
                 if group == self.ligand:
                     lig_node_group = self.root['ligand']
                     n_atoms = lig_node_group['coords'].shape[0]
@@ -215,6 +217,15 @@ class CrossdockedNoLinksZarrConverter:
                         dtype=np.int8, 
                         overwrite=False,
                         attributes=['impl_H', 'aro', 'hyb', 'ring', 'chiral', 'frag']
+                    )
+
+                    lig_node_group.create_array(
+                        "atom_chirality", 
+                        shape=(n_atoms, 1), 
+                        chunks=(nodes_per_chunk, 1), 
+                        dtype=np.int8, 
+                        overwrite=False,
+                        attributes=['chiral']
                     )
 
             # Initialize lookup tables/attrs
@@ -452,7 +463,7 @@ class CrossdockedNoLinksZarrConverter:
                 all_aro = np.concatenate([data.atom_aro for data in data_with_atoms])
                 all_hyb = np.concatenate([data.atom_hyb for data in data_with_atoms])
                 all_ring = np.concatenate([data.atom_ring for data in data_with_atoms])
-                all_chiral = np.concatenate([data.atom_chiral for data in data_with_atoms])
+                all_chiral = np.concatenate([data.atom_chiral_binary for data in data_with_atoms])
                 all_frag = np.concatenate([data.fragments for data in data_with_atoms])
                 
                 # Single column_stack operation to create (total_atoms, 6) array
@@ -461,6 +472,9 @@ class CrossdockedNoLinksZarrConverter:
                 ])
                 
                 group["extra_feats"].append(all_extra_feats)
+
+                all_chirality = np.vstack([data.atom_chiral for data in data_batch if len(data.coords) > 0])
+                group["atom_chirality"].append(all_chirality)
 
         return indices
     
@@ -541,8 +555,14 @@ class CrossdockedNoLinksZarrConverter:
                 
                 result = processor.process_system(save_pockets=False)
                 if result:
-                    # Check for invalid tuples in extra ligand features (only append if no invalid tuples)
-                    if self.invalid_tuple_check(result) == False: #means there isnt an invalid tuple
+                    if self.include_all_tuples == False:
+                        # Check for invalid tuples in extra ligand features (only append if no invalid tuples)
+                        if self.invalid_tuple_check(result) == False: #means there isnt an invalid tuple
+                            sysdata = result["systems_list"]
+                            system_data_list.append(sysdata)
+                        else:
+                            logger.info(f"Skipping system with receptor: {rec_path}, ligand: {lig_path} due to invalid tuples.")
+                    else:
                         sysdata = result["systems_list"]
                         system_data_list.append(sysdata)
             except Exception as e:

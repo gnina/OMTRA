@@ -13,7 +13,8 @@ from omtra.constants import (
     protein_element_map,
     protein_atom_map,
     bond_type_map,
-    num_condensed_atom_types
+    num_condensed_atom_types,
+    lig_atom_chirality_map
 )
 
 
@@ -132,11 +133,20 @@ Modality.register(MODALITY_REGISTER,
 
 Modality.register(MODALITY_REGISTER,
     name='lig_chiral',
-    group='ligand_chirality',
+    group='ligand_identity',
     graph_entity='node',
     entity_name='lig',
     data_key='chiral',
-    n_categories= 5, 
+    n_categories= len(lig_atom_chirality_map), 
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='lig_chiral_condensed',
+    group='ligand_identity_condensed',
+    graph_entity='node',
+    entity_name='lig',
+    data_key='chiral',
+    n_categories= len(lig_atom_chirality_map), 
 )
 
 Modality.register(MODALITY_REGISTER,

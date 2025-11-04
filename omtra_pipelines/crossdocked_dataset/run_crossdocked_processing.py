@@ -43,6 +43,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=500, help="Batch size of how many receptor-ligand pairs to process in each batch")
     parser.add_argument("--n_cpus", type=int, default=8, help="Number of CPUs to use for parallel processing")
     parser.add_argument("--max_pending", type=int, default=32, help="Maximum number of pending jobs in the pool")
+    parser.add_argument("--include_all_tuples", type=bool, default=True, help="Whether to include systems with condensed atom typed tuples that are not in pharmit or plinder")
     
     args = parser.parse_args() 
     if args.max_batches == "None":
@@ -101,7 +102,8 @@ if __name__ == "__main__":
         
         converter_train = CrossdockedNoLinksZarrConverter(
             output_path=str(output_dir / current_folder /f"train.zarr"), 
-            num_workers=args.n_cpus
+            num_workers=args.n_cpus,
+            include_all_tuples=args.include_all_tuples
             )
 
         batches_train = converter_train.get_ligand_receptor_batches_types(
@@ -129,7 +131,8 @@ if __name__ == "__main__":
 
         converter_test = CrossdockedNoLinksZarrConverter(
             output_path=str(output_dir / current_folder /f"val.zarr"), 
-            num_workers=args.n_cpus
+            num_workers=args.n_cpus,
+            include_all_tuples=args.include_all_tuples
         )
 
         batches_test = converter_test.get_ligand_receptor_batches_types(

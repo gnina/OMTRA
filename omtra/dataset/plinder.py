@@ -350,9 +350,9 @@ class PlinderDataset(ZarrDataset):
             atom_charges=self.slice_array(
                 "ligand/atom_charges", lig_atom_start, lig_atom_end
             ),  # c
-            # atom_chiral=self.slice_array(
-            #     "ligand/atom_chirality", lig_atom_start, lig_atom_end
-            # )[:, 0],  # chiral
+            atom_chiral=self.slice_array(
+                "ligand/atom_chirality", lig_atom_start, lig_atom_end
+            )[:, 0],  # chiral
             bond_types=self.slice_array(
                 "ligand/bond_types", lig_bond_start, lig_bond_end
             ),  # e
@@ -703,7 +703,7 @@ class PlinderDataset(ZarrDataset):
         node_data = {
             "lig": {
                 "x_1_true": lig_xace.x,
-                # "chiral_1_true": lig_xace.chiral
+                "chiral_1_true": lig_xace.chiral
             }
         }
 

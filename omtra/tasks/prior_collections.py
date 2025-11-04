@@ -17,7 +17,7 @@ for modality in 'ace':
 denovo_ligand_condensed = {'lig_x': {'type': 'gaussian', 'params': {'ot': True}},
                            'lig_e_condensed': dict(type='masked'),
                            'lig_cond_a': dict(type='masked'),
-                           'lig_chiral': dict(type='masked')}
+                           'lig_chiral_condensed': dict(type='masked')}
 
 # de novo ligand with extra atom features
 denovo_ligand_extra_feats = {

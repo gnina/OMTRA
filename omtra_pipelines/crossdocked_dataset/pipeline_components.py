@@ -434,10 +434,13 @@ class SystemProcessor:
             coords=P, types=X, vectors=V, interactions=I
         )
         logger.info("Extracted pharmacophore data")
+        
         #Calculate extra ligand features
         extra_lig_features = ligand_properties(xace_mols[0].rdkit_mol)
-
         lig_fragments = fragment_molecule(xace_mols[0].rdkit_mol)
+
+        # Compute chirality
+        chirality = get_chirality(xace_mols[0].rdkit_mol)
         
         ligand_data = LigandData(
                 sdf=ligand_path,
@@ -454,8 +457,10 @@ class SystemProcessor:
                 atom_aro=extra_lig_features[:,1],
                 atom_hyb=extra_lig_features[:,2],
                 atom_ring=extra_lig_features[:,3],
-                atom_chiral=extra_lig_features[:,4],
-                fragments=lig_fragments
+                atom_chiral_binary=extra_lig_features[:,4],
+                fragments=lig_fragments,
+                # chirality
+                atom_chiral=chirality,
             )
         logger.info("LigandData Object created.")
         return (ligand_data, pharmacophores_data)

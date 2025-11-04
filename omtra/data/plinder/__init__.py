@@ -55,7 +55,7 @@ class LigandData:
     )
     atom_types: Optional[np.ndarray] = None
     atom_charges:Optional[np.ndarray] = None
-    #atom_chiral: Optional[np.ndarray] = None
+    atom_chiral: Optional[np.ndarray] = None
     # extra feats
     atom_impl_H: Optional[np.ndarray] = None
     atom_aro: Optional[np.ndarray] = None
@@ -85,7 +85,7 @@ class LigandData:
     def to_xace_mol(self, dense=False) -> MolXACE:
         xace_dict = {
             'x': self.coords,
-            #'chiral': self.atom_chiral,
+            'chiral': self.atom_chiral,
             'e': self.bond_types,
             'edge_idxs': self.bond_indices,
         }
