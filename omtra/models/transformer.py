@@ -6,6 +6,7 @@ import torch_scatter
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from typing import List, Dict, Optional
 from einops.layers.torch import Rearrange
+from einops import rearrange
 from omtra.data.graph.layout import GraphLayout
 from omtra.utils.graph import g_local_scope
 from omtra.models.gvp import _rbf
@@ -346,7 +347,7 @@ class TransformerWrapper(nn.Module):
 
         # map scalars + coords to d_model, linear transformation of coords
         self.in_proj = nn.Sequential(
-            nn.Linear(self.S + 3, d_model, bias=False),
+            nn.Linear(self.S + 3 + n_vec_channels*3, d_model, bias=False),
             # nn.LayerNorm(self.S + 3),
         )
 
@@ -370,17 +371,18 @@ class TransformerWrapper(nn.Module):
         **kwargs,
     ):
         # Concatenate scalars with coordinates
-        for ntype in self.ntype_order:
+        for ntype in scalar_feats:
             scal = scalar_feats.get(ntype)
-            if scal is None or scal.numel() == 0:
-                continue
             coords = coord_feats.get(ntype)
-            if coords is None or coords.numel() == 0:
-                coords = scal.new_zeros((scal.shape[0], 3))
+            vecs = vec_feats.get(ntype) # has shape (N, C, 3)
+
+            # flatten vec feats
+            # TODO: is there a better way to use einops for this? 
+            vecs = rearrange(vecs, 'N C D -> N (C D)')  # (N, 3*C)
 
             # TODO: projection doesn't need to happen here. it can happen
             # after we pack all node types together.
-            feat_input = torch.cat([scal, coords], dim=-1)  # (N, S + 3)
+            feat_input = torch.cat([scal, coords, vecs], dim=-1)  # (N, S + 3)
             out  = self.in_proj(feat_input)   # (N, d_model)
             
             # add input feature to graph
@@ -460,7 +462,7 @@ class TransformerWrapper(nn.Module):
             out_scalars[ntype] = H_new
 
         edge_feats_out = {}
-        for etype in edge_feats:
-            edge_feats_out[etype] = g.edges[etype].data[self.trfmr_pair_feat_key]
+        # for etype in edge_feats:
+        #     edge_feats_out[etype] = g.edges[etype].data[self.trfmr_pair_feat_key]
 
         return out_scalars, edge_feats_out

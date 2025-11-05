@@ -43,24 +43,6 @@ from omtra.priors.align import rigid_alignment
 
 # from line_profiler import LineProfiler, profile
 
-# class NodeTypeMLP(nn.Module):
-#     def __init__(self, node_types: List[str], in_dim: int, d_model: int, dropout: float = 0.1):
-#         super().__init__()
-#         self.proj = nn.ModuleDict({
-#             ntype: nn.Sequential(
-#                 nn.LayerNorm(in_dim),
-#                 nn.Linear(in_dim, d_model),
-#                 nn.GELU(),
-#                 nn.Dropout(dropout),
-#                 nn.Linear(d_model, d_model),
-#             ) for ntype in node_types
-#         })
-#     def forward(self, ntype: str, x: torch.Tensor) -> torch.Tensor:
-#         return self.proj[ntype](x)
-
-
-
-
 class VectorField(nn.Module):
     def __init__(
         self,
@@ -72,10 +54,6 @@ class VectorField(nn.Module):
         n_cp_feats: int = 0,
         n_hidden_scalars: int = 64,
         n_hidden_edge_feats: int = 64,
-        n_recycles: int = 1,
-        n_molecule_updates: int = 1,
-        convs_per_update: int = 1,
-        separate_mol_updaters: bool = True,
         rbf_dmax=18,
         rbf_dim=32,
         time_embedding_dim: int = 64,
@@ -83,11 +61,11 @@ class VectorField(nn.Module):
         dropout: float = 0.0,
         has_mask: bool = True,
         self_conditioning: bool = False,
-        rebuild_edges: bool = False,
         fake_atoms: bool = False,
         res_id_embed_dim: int = 64,
         n_heads=8,
         pos_emb: bool = False,
+        n_pre_gvp_convs: int = 1,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -96,19 +74,13 @@ class VectorField(nn.Module):
         self.n_hidden_scalars = n_hidden_scalars
         self.n_hidden_edge_feats = n_hidden_edge_feats
         self.n_vec_channels = n_vec_channels
-        self.n_recycles = n_recycles
-        self.separate_mol_updaters: bool = separate_mol_updaters
         self.interpolant_scheduler = interpolant_scheduler
         self.td_coupling: TaskDatasetCoupling = td_coupling
         self.time_embedding_dim = time_embedding_dim
         self.self_conditioning = self_conditioning
         self.has_mask = has_mask
-        self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
         self.pos_emb = pos_emb
-
-        self.convs_per_update = convs_per_update
-        self.n_molecule_updates = n_molecule_updates
 
         self.rbf_dmax = rbf_dmax
         self.rbf_dim = rbf_dim
@@ -232,27 +204,49 @@ class VectorField(nn.Module):
                 nn.LayerNorm(n_hidden_edge_feats),
             )
 
-        self.conv_layers = nn.ModuleList([
-            TransformerWrapper(
+        self.pre_convs = nn.ModuleList([])
+        for _ in range(n_pre_gvp_convs):
+            self.pre_convs.append(
+                HeteroGVPConv(
+                    node_types=self.node_types,
+                    edge_types=self.edge_types,
+                    scalar_size=n_hidden_scalars,
+                    vector_size=n_vec_channels,
+                    n_cp_feats=n_cp_feats,
+                    edge_feat_size=self.edge_feat_sizes,
+                    n_message_gvps=3,
+                    n_update_gvps=3,
+                    message_norm=1,
+                    rbf_dmax=rbf_dmax,
+                    rbf_dim=rbf_dim,
+                    dropout=0.0,
+                )
+            )
+
+
+        # edge embedding following pre-convs
+        self.pre_edge_embedders = nn.ModuleDict()
+        for etype in self.edge_types:
+            if self.edge_feat_sizes[etype] == 0:
+                continue
+            self.pre_edge_embedders[etype] = EdgeUpdate(
+                n_hidden_scalars,
+                n_hidden_edge_feats,
+                rbf_dim=rbf_dim,
+            )
+
+        self.transformer = TransformerWrapper(
                 node_types=list(self.node_types),
                 n_hidden_scalars=self.n_hidden_scalars,
                 n_vec_channels=self.n_vec_channels,
                 d_model=256, n_layers=4, n_heads=n_heads, 
-                dim_ff=1024, use_residual=False,
+                dim_ff=1024, use_residual=True,
                 pair_dim=n_hidden_edge_feats,
                 dropout=dropout,
             )
-        ])
-
-        # create molecule update layers
-        self.node_position_updaters = nn.ModuleDict()
-        self.edge_updaters = nn.ModuleDict()
-        if self.separate_mol_updaters:
-            n_updaters = n_molecule_updates
-        else:
-            n_updaters = 1
 
         # for every modality being generated that is a node position, create NodePositionUpdate layers
+        self.node_position_updaters = nn.ModuleDict()
         for m in modalities_generated_cls:
             is_node_position = (
                 m.graph_entity == "node" and m.data_key == "x"
@@ -260,18 +254,15 @@ class VectorField(nn.Module):
             if not is_node_position:
                 continue
             ntype = m.entity_name
-            self.node_position_updaters[ntype] = nn.ModuleList()
-            for _ in range(n_updaters):
-                self.node_position_updaters[ntype].append(
-                    NodePositionUpdate(
+            self.node_position_updaters[ntype] = NodePositionUpdate(
                         n_hidden_scalars,
                         n_vec_channels,
                         n_gvps=3,
                         n_cp_feats=n_cp_feats,
                     )
-                )
 
         # for every edge modality being generated, create EdgeUpdate layers
+        self.edge_updaters = nn.ModuleDict()
         for m in modalities_present_cls:
             if m.graph_entity != "edge":
                 continue
@@ -280,15 +271,11 @@ class VectorField(nn.Module):
                 # skip edges without edge features, although i don't think we shouuld
                 # have edge features being generated that are empty
                 continue
-            self.edge_updaters[etype] = nn.ModuleList()
-            for _ in range(n_updaters):
-                self.edge_updaters[etype].append(
-                    EdgeUpdate(
+            self.edge_updaters[etype] = EdgeUpdate(
                         n_hidden_scalars,
                         n_hidden_edge_feats,
                         rbf_dim=rbf_dim,
                     )
-                )
 
         # need node output heads for node categorical features and node vector features.
         # node positions will be covered by the node update module.
@@ -590,89 +577,89 @@ class VectorField(nn.Module):
         extract_latents_for_confidence=False,
     ):
         x_diff, d = self.precompute_distances(g)
-        for recycle_idx in range(self.n_recycles):
-            for conv_idx, conv in enumerate(self.conv_layers):
-                # perform a single convolution which updates node scalar and vector features (but not positions)
-                node_scalar_features, edge_features = conv(
-                    g,
-                    scalar_feats=node_scalar_features,
-                    coord_feats=node_positions,
-                    vec_feats=node_vec_features,
-                    edge_feats=edge_features,
-                    x_diff=x_diff,
-                    d=d,
-                )
-                # every convs_per_update convolutions, update the node positions and edge features
-                # TODO: this code has gotten hairy, the molecule update operation should be collected into a separate method to make denoise_graph cleaner
-                if (conv_idx + 1) % self.convs_per_update == 0:
-                    if self.separate_mol_updaters:
-                        updater_idx = conv_idx // self.convs_per_update
-                    else:
-                        updater_idx = 0
-                    last_conv = conv_idx == len(self.conv_layers) - 1
-                    last_recycle = recycle_idx == self.n_recycles - 1
-                    last_update = last_conv and last_recycle
+        modalities_generated = task_class.modalities_generated
 
-                    modalities_generated = task_class.modalities_generated
+        # do some gvp convolutions before the transformer
+        for conv in self.pre_convs:
+            node_scalar_features, node_vec_features = conv(
+                g,
+                node_scalar_features,
+                node_positions,
+                node_vec_features,
+                edge_features,
+                d=d,
+                x_diff=x_diff,
+            )
 
-                    # iterate over positions being generated, update them
-                    ntypes_updated = set()
-                    for m in modalities_generated:
-                        is_position = m.graph_entity == "node" and m.data_key == "x"
-                        if not is_position:
-                            continue
-                        ntype = m.entity_name
-                        if g.num_nodes(ntype) == 0:
-                            continue
-                        node_positions[ntype] = self.node_position_updaters[ntype][
-                            updater_idx
-                        ](
-                            node_scalar_features[ntype],
-                            node_positions[ntype],
-                            node_vec_features[ntype],
-                        )
-                        ntypes_updated.add(ntype)
+        # update edge features after pre-convs
+        for etype in edge_features:
+            edge_features[etype] = self.pre_edge_embedders[etype](
+                g,
+                node_scalar_features,
+                edge_features[etype],
+                d=d[etype],
+                etype=etype,
+            )
 
-                    # recompute x_diff and d for the updated node positions
-                    for canonical_etype in g.canonical_etypes:
-                        if g.num_edges(canonical_etype) == 0:
-                            continue
-                        src_ntype, etype, dst_ntype = canonical_etype
-                        edges_need_update = src_ntype in ntypes_updated or dst_ntype in ntypes_updated
-                        if not edges_need_update:
-                            continue
-                        x_diff_etype, d_etype = self.precompute_distances(
-                            g, node_positions, etype=etype
-                        )
-                        x_diff.update(x_diff_etype)
-                        d.update(d_etype)
-                        
 
-                    # iterate over edge features being modeled and update them
-                    # implicit assumption here that edges with modalities defined on them are not being rebuilt
-                    for m in task_class.modalities_present:
-                        if m.is_node:
-                            continue
-                        etype = m.entity_name
-                        if g.num_edges(etype) == 0:
-                            continue
-                        edge_features[etype] = self.edge_updaters[etype][
-                            updater_idx
-                        ](
-                            g,
-                            node_scalar_features,
-                            edge_features[etype],
-                            d=d[etype],
-                            etype=etype,
-                        )
+        # pass through the transformer
+        node_scalar_features, edge_features_out = self.transformer(
+            g,
+            scalar_feats=node_scalar_features,
+            coord_feats=node_positions,
+            vec_feats=node_vec_features,
+            edge_feats=edge_features,
+            x_diff=x_diff,
+            d=d,
+        )
+        edge_features.update(edge_features_out)
 
-                    if self.rebuild_edges and not last_update:
-                        g = remove_edges(g, lig_only=True)
-                        g = build_edges(g, task_class, node_batch_idx, self.graph_config, lig_only=True)
-                        edges_to_rebuild = [k for k in x_diff if 'lig' in k and k != 'lig_to_lig']
-                        x_diff_rebuilt, d_rebuilt = self.precompute_distances(g, node_positions, etype=edges_to_rebuild)
-                        x_diff.update(x_diff_rebuilt)
-                        d.update(d_rebuilt)
+        # iterate over positions being generated, update them
+        ntypes_updated = set()
+        for m in modalities_generated:
+            is_position = m.graph_entity == "node" and m.data_key == "x"
+            if not is_position:
+                continue
+            ntype = m.entity_name
+            if g.num_nodes(ntype) == 0:
+                continue
+            node_positions[ntype] = self.node_position_updaters[ntype](
+                node_scalar_features[ntype],
+                node_positions[ntype],
+                node_vec_features[ntype],
+            )
+            ntypes_updated.add(ntype)
+
+        # recompute x_diff and d for the updated node positions
+        for canonical_etype in g.canonical_etypes:
+            if g.num_edges(canonical_etype) == 0:
+                continue
+            src_ntype, etype, dst_ntype = canonical_etype
+            edges_need_update = src_ntype in ntypes_updated or dst_ntype in ntypes_updated
+            if not edges_need_update:
+                continue
+            x_diff_etype, d_etype = self.precompute_distances(
+                g, node_positions, etype=etype
+            )
+            x_diff.update(x_diff_etype)
+            d.update(d_etype)
+            
+
+        # iterate over edge features being modeled and update them
+        # implicit assumption here that edges with modalities defined on them are not being rebuilt
+        for m in task_class.modalities_present:
+            if m.is_node:
+                continue
+            etype = m.entity_name
+            if g.num_edges(etype) == 0:
+                continue
+            edge_features[etype] = self.edge_updaters[etype](
+                g,
+                node_scalar_features,
+                edge_features[etype],
+                d=d[etype],
+                etype=etype,
+            )
 
         logits = {}
         for m in task_class.modalities_generated:
