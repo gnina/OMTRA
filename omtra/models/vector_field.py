@@ -1253,7 +1253,7 @@ class EdgeUpdate(nn.Module):
         input_dim = n_node_scalars * 2 + n_edge_feats + rbf_dim
 
         self.edge_update_fn = nn.Sequential(
-            nn.LayerNorm(input_dim),
+            # nn.LayerNorm(input_dim),
             nn.Linear(input_dim, n_edge_feats),
             nn.SiLU(),
             nn.Linear(n_edge_feats, n_edge_feats),
@@ -1273,8 +1273,8 @@ class EdgeUpdate(nn.Module):
             d
         ]
 
-        # edge_feats = self.edge_norm(
-        #     edge_feats + self.edge_update_fn(torch.cat(mlp_inputs, dim=-1))
-        # )
-        edge_feats = edge_feats + self.edge_norm(self.edge_update_fn(torch.cat(mlp_inputs, dim=-1)))
+        edge_feats = self.edge_norm(
+            edge_feats + self.edge_update_fn(torch.cat(mlp_inputs, dim=-1))
+        )
+        # edge_feats = edge_feats + self.edge_norm(self.edge_update_fn(torch.cat(mlp_inputs, dim=-1)))
         return edge_feats

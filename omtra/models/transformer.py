@@ -226,17 +226,21 @@ class LigandPairBiasEmbedder(nn.Module):
         self.rbf_d_max = rbf_d_max
         # self.atom_offset_encoder = AtomOffsetEncoder(catompair=pair_dim)
 
+        # self.rbf_proj = nn.Sequential(
+        #     nn.Linear(pair_dim*2 + rbf_count, pair_dim*2, bias=False),
+        #     nn.SiLU(),
+        #     nn.Linear(pair_dim*2, pair_dim, bias=False),
+        #     nn.SiLU(),
+        #     nn.Linear(pair_dim, pair_dim, bias=False),
+        #     nn.LayerNorm(pair_dim)
+        # )
         self.rbf_proj = nn.Sequential(
-            nn.Linear(pair_dim*2 + rbf_count, pair_dim*2, bias=False),
-            nn.SiLU(),
-            nn.Linear(pair_dim*2, pair_dim, bias=False),
-            nn.SiLU(),
-            nn.Linear(pair_dim, pair_dim, bias=False),
-            nn.LayerNorm(pair_dim)
+            nn.Linear(pair_dim + rbf_count, pair_dim, bias=False),
+            nn.LayerNorm(pair_dim),
         )
 
-        self.s_i_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
-        self.s_j_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
+        # self.s_i_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
+        # self.s_j_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
 
         self.layer = PairTransformerLayer(
             hidden_dim=hidden_dim,
@@ -258,13 +262,13 @@ class LigandPairBiasEmbedder(nn.Module):
         lig_pos = lig_pos.to(device)
         lig_mask = lig_mask.to(device)
 
-        proj_inputs = [pair_feats]
+        # proj_inputs = [pair_feats]
 
         pair_bias = pair_feats
 
         # inject scalar feature contributions to pair bias
-        single_projection = (self.s_i_proj(lig_feats).unsqueeze(2) + self.s_j_proj(lig_feats).unsqueeze(1))
-        proj_inputs.append(single_projection)
+        # single_projection = (self.s_i_proj(lig_feats).unsqueeze(2) + self.s_j_proj(lig_feats).unsqueeze(1))
+        # proj_inputs.append(single_projection)
 
         # inject pairwise distances into pair bias via RBFs
         pair_dists = torch.cdist(lig_pos, lig_pos, p=2.0)
@@ -275,9 +279,11 @@ class LigandPairBiasEmbedder(nn.Module):
             D_count=self.rbf_count,
         )
         # offset_bias = self.atom_offset_encoder(lig_pos)
-        proj_inputs.append(offset_bias)
-        rbf_proj_input = torch.cat(proj_inputs, dim=-1)
-        pair_bias = pair_bias + self.rbf_proj(rbf_proj_input)
+        # proj_inputs.append(offset_bias)
+        # rbf_proj_input = torch.cat(proj_inputs, dim=-1)
+        rbf_proj_input = torch.cat((pair_bias, offset_bias), dim=-1)
+        # pair_bias = pair_bias + self.rbf_proj(rbf_proj_input)
+        pair_bias = self.rbf_proj(rbf_proj_input)
 
         single_feats = self.layer(lig_feats, pair_bias, lig_mask)
 
