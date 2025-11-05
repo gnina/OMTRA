@@ -56,13 +56,14 @@ class GraphLayout:
 
     @classmethod
     def layout_and_pad(cls, g: dgl.DGLHeteroGraph, *args, **kwargs):
-        layout = cls(g, *args, **kwargs)
-        padded_node_feats, attention_masks = layout.graph_to_padded_sequence(g)
-        return layout, padded_node_feats, attention_masks
+        layout = cls(g)
+        padded_seqs_output = layout.graph_to_padded_sequence(g, *args, **kwargs)
+        return layout, *padded_seqs_output
 
     def graph_to_padded_sequence(
         self,
         g: dgl.DGLHeteroGraph,
+        allowed_feat_names=None
         ):
 
         batch_size = g.batch_size
@@ -70,6 +71,7 @@ class GraphLayout:
         
         # Dictionary to store all padded features and attention masks
         padded_node_feats = {}
+        padded_edge_feats = {}
         attention_masks = {}
         
         # Process each node type
@@ -98,6 +100,10 @@ class GraphLayout:
             
             # Process each feature for this node type
             for feat_name, feat_tensor in node_data.items():
+
+                if allowed_feat_names is not None and feat_name not in allowed_feat_names:
+                    continue
+
                 feat_shape = feat_tensor.shape
                 
                 additional_dims = feat_shape[1:]  # All dimensions after the first
@@ -116,61 +122,170 @@ class GraphLayout:
 
             attention_masks[ntype] = attention_mask
         
-        return padded_node_feats, attention_masks
+        # Process each edge type
+        for canonical_etype in g.canonical_etypes:
+            src_type, etype, dst_type = canonical_etype
+            
+            if g.num_edges(etype) == 0:
+                continue
+            
+            # Get max nodes for source and destination types
+            max_src_nodes = self.max_nodes[src_type]
+            max_dst_nodes = self.max_nodes[dst_type]
+            
+            if max_src_nodes == 0 or max_dst_nodes == 0:
+                continue
+            
+            # Get edge data
+            edge_data = g.edges[etype].data
+            if len(edge_data) == 0:
+                continue
+            
+            padded_edge_feats[etype] = {}
+            
+            # Get edge indices
+            src_ids, dst_ids = g.edges(etype=etype)
+            n_edges = len(src_ids)
+            
+            # Get batch indices for edges
+            edge_batch_ids = self.edge_batch_idxs[etype]
+            
+            # Get positions of source and destination nodes in their padded sequences
+            src_graph_ids = self.node_batch_idxs[src_type][src_ids]
+            dst_graph_ids = self.node_batch_idxs[dst_type][dst_ids]
+            
+            src_offsets = self.node_offsets[src_type]
+            dst_offsets = self.node_offsets[dst_type]
+            
+            src_pos_in_graph = src_ids - src_offsets[src_graph_ids]
+            dst_pos_in_graph = dst_ids - dst_offsets[dst_graph_ids]
+            
+            # Process each edge feature
+            for feat_name, feat_tensor in edge_data.items():
+
+                if allowed_feat_names is not None and feat_name not in allowed_feat_names:
+                    continue
+
+                feat_shape = feat_tensor.shape
+                additional_dims = feat_shape[1:]  # All dimensions after the first (edge dimension)
+                
+                # Create padded tensor with shape (B, N, M, D...)
+                padded_shape = (batch_size, max_src_nodes, max_dst_nodes) + additional_dims
+                padded_feats = torch.zeros(padded_shape, device=device, dtype=feat_tensor.dtype)
+                
+                # Fill in the padded tensor
+                padded_feats[edge_batch_ids, src_pos_in_graph, dst_pos_in_graph] = feat_tensor
+                padded_edge_feats[etype][feat_name] = padded_feats
+        
+        return padded_node_feats, attention_masks, padded_edge_feats
 
     def padded_sequence_to_graph(
         self,
         g: dgl.DGLHeteroGraph,
-        padded_node_feats: Dict[str, Dict[str, torch.Tensor]],
+        padded_node_feats: Dict[str, Dict[str, torch.Tensor]] = None,
         attention_masks: Dict[str, torch.Tensor] = None,
-        inplace: bool = True
+        padded_edge_feats: Dict[str, Dict[str, torch.Tensor]] = None,
+        inplace: bool = True,
+        allowed_feat_names=None
     ):
         """
-        Convert padded node features back to DGL graph format.
+        Convert padded node and edge features back to DGL graph format.
         
         Args:
             g: DGL heterogeneous graph
             padded_node_feats: Dict mapping node types to dict of feature names to padded tensors
             attention_masks: Optional attention masks to validate which positions are valid
+            padded_edge_feats: Dict mapping edge types to dict of feature names to padded tensors
             inplace: If True, modify the graph in place. If False, return feature dict.
+            allowed_feat_names: Optional set of feature names to process. If None, process all.
         
         Returns:
-            If inplace=False, returns dict mapping node types to feature dicts
+            If inplace=False, returns tuple of dicts for unpacked node and edge features.
+            If inplace=True, returns the modified graph.
         """
         # Dictionary to store unpacked features (if not inplace)
         unpacked_features = {} if not inplace else None
         
         # Process each node type
-        for ntype in padded_node_feats.keys():
-            if g.num_nodes(ntype) == 0:
-                continue
-            
-            n_nodes = g.num_nodes(ntype)
-            node_ids = torch.arange(n_nodes, device=self.device)
-            graph_ids = self.node_batch_idxs[ntype]
-            node_pos_in_graph = node_ids - self.node_offsets[ntype][graph_ids]
-            
-            if not inplace:
-                unpacked_features[ntype] = {}
-            
-            # Process each feature for this node type
-            for feat_name, padded_tensor in padded_node_feats[ntype].items():
-                # Extract the relevant features using advanced indexing
-                unpacked_feats = padded_tensor[graph_ids, node_pos_in_graph]
+        if padded_node_feats is not None:
+            for ntype in padded_node_feats.keys():
+                if g.num_nodes(ntype) == 0:
+                    continue
                 
-                # Optional: validate against attention mask if provided
-                # if attention_masks is not None and ntype in attention_masks:
-                #     expected_mask = attention_masks[ntype][graph_ids, node_pos_in_graph]
-                #     if not torch.all(expected_mask):
-                #         print(f"Warning: Some features for {ntype}.{feat_name} are being extracted from masked positions")
+                n_nodes = g.num_nodes(ntype)
+                node_ids = torch.arange(n_nodes, device=self.device)
+                graph_ids = self.node_batch_idxs[ntype]
+                node_pos_in_graph = node_ids - self.node_offsets[ntype][graph_ids]
                 
-                if inplace:
-                    # Add features directly to the graph
-                    g.nodes[ntype].data[feat_name] = unpacked_feats
+                if not inplace:
+                    unpacked_features[ntype] = {}
+                
+                # Process each feature for this node type
+                for feat_name, padded_tensor in padded_node_feats[ntype].items():
+
+                    if allowed_feat_names is not None and feat_name not in allowed_feat_names:
+                        continue
+
+                    # Extract the relevant features using advanced indexing
+                    unpacked_feats = padded_tensor[graph_ids, node_pos_in_graph]
+                    
+                    if inplace:
+                        # Add features directly to the graph
+                        g.nodes[ntype].data[feat_name] = unpacked_feats
+                    else:
+                        # Store in return dictionary
+                        unpacked_features[ntype][feat_name] = unpacked_feats
+        
+        # Process each edge type
+        unpacked_edge_features = {}
+        if padded_edge_feats is not None:
+            for etype in padded_edge_feats.keys():
+                if g.num_edges(etype) == 0:
+                    continue
+                
+                # Get edge indices
+                src_ids, dst_ids = g.edges(etype=etype)
+                n_edges = len(src_ids)
+                
+                # Get the source and destination types for this edge type
+                if isinstance(etype, tuple):
+                    src_type, _, dst_type = etype
                 else:
-                    # Store in return dictionary
-                    unpacked_features[ntype][feat_name] = unpacked_feats
+                    # For homogeneous graphs or when etype is a string
+                    canonical_etype = g.to_canonical_etype(etype)
+                    src_type, _, dst_type = canonical_etype
+                
+                # Get batch indices and positions for edges
+                edge_batch_ids = self.edge_batch_idxs[etype]
+                
+                src_graph_ids = self.node_batch_idxs[src_type][src_ids]
+                dst_graph_ids = self.node_batch_idxs[dst_type][dst_ids]
+                
+                src_offsets = self.node_offsets[src_type]
+                dst_offsets = self.node_offsets[dst_type]
+                
+                src_pos_in_graph = src_ids - src_offsets[src_graph_ids]
+                dst_pos_in_graph = dst_ids - dst_offsets[dst_graph_ids]
+                
+                if not inplace and etype not in unpacked_features:
+                    unpacked_edge_features[etype] = {}
+                
+                # Process each feature for this edge type
+                for feat_name, padded_tensor in padded_edge_feats[etype].items():
+
+                    if allowed_feat_names is not None and feat_name not in allowed_feat_names:
+                        continue
+
+                    # Extract the relevant features from (B, N, M, D...) to (K, D...)
+                    unpacked_feats = padded_tensor[edge_batch_ids, src_pos_in_graph, dst_pos_in_graph]
+                    
+                    if inplace:
+                        # Add features directly to the graph
+                        g.edges[etype].data[feat_name] = unpacked_feats
+                    else:
+                        # Store in return dictionary
+                        unpacked_edge_features[etype][feat_name] = unpacked_feats
         
         if not inplace:
-            return unpacked_features
+            return unpacked_features, unpacked_edge_features
         return g

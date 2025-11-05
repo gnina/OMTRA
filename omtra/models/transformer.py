@@ -179,6 +179,34 @@ class PairTransformerLayer(nn.Module):
         return x
 
 
+class AtomOffsetEncoder(nn.Module):
+    def __init__(self, catompair: int):
+        super().__init__()
+        # LinearNoBias layers
+        self.lin_d   = nn.Linear(3, catompair, bias=False)  # for d_lm (R^3 -> R^C)
+        self.lin_inv = nn.Linear(1, catompair, bias=False)  # for 1/(1+||d||^2)
+    
+    def forward(self, ref_pos: torch.Tensor) -> torch.Tensor:
+        """
+        ref_pos: (B, N, 3)
+        returns:
+            p_lm: (B, N, N, Catompair)
+        """
+        # idea taken from AF3 AtomAttentionEncoder, aglorithm 5 in AF3 paper
+
+        # (2) d_lm = f_l^ref_pos - f_m^ref_pos  -> shape (B, N, N, 3)
+        d_lm = ref_pos.unsqueeze(2) - ref_pos.unsqueeze(1)              # (B, N, N, 3)
+
+        # (4) p_lm = LinearNoBias(d_lm)
+        p_lm = self.lin_d(d_lm)                    # (B, N, N, C)
+
+        # (5) p_lm += LinearNoBias( 1 / (1 + ||d_lm||^2) ) * v_lm
+        dist2 = (d_lm ** 2).sum(dim=-1, keepdim=True)         # (B, N, N, 1)
+        inv   = 1.0 / (1.0 + dist2)
+        p_lm = p_lm + self.lin_inv(inv)
+
+        return p_lm
+
 class LigandPairBiasEmbedder(nn.Module):
     """Computes ligand pair bias and applies the pair-biased attention layer."""
 
@@ -187,19 +215,28 @@ class LigandPairBiasEmbedder(nn.Module):
         hidden_dim: int,
         pair_dim: int,
         num_heads: int,
-        rbf_count: int = 24,
-        rbf_d_min: float = 0.0,
-        rbf_d_max: float = 12.0,
+        # rbf_count: int = 24,
+        # rbf_d_min: float = 0.0,
+        # rbf_d_max: float = 12.0,
     ) -> None:
         super().__init__()
         self.pair_dim = pair_dim
-        self.rbf_count = rbf_count
-        self.rbf_d_min = rbf_d_min
-        self.rbf_d_max = rbf_d_max
+        # self.rbf_count = rbf_count
+        # self.rbf_d_min = rbf_d_min
+        # self.rbf_d_max = rbf_d_max
+        self.atom_offset_encoder = AtomOffsetEncoder(catompair=pair_dim)
+
         self.rbf_proj = nn.Sequential(
-            nn.Linear(pair_dim + rbf_count, pair_dim, bias=False),
-            nn.LayerNorm(pair_dim),
+            nn.Linear(pair_dim*2, pair_dim, bias=False),
+            nn.SiLU(),
+            nn.Linear(pair_dim, pair_dim, bias=False),
+            nn.SiLU(),
+            nn.Linear(pair_dim, pair_dim, bias=False),
         )
+
+        self.s_i_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
+        self.s_j_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
+
         self.layer = PairTransformerLayer(
             hidden_dim=hidden_dim,
             pair_dim=pair_dim,
@@ -211,9 +248,7 @@ class LigandPairBiasEmbedder(nn.Module):
         lig_feats: torch.Tensor,
         lig_mask: torch.Tensor,
         lig_pos: torch.Tensor,
-        layout: GraphLayout,
-        graph: dgl.DGLHeteroGraph,
-        lig_edge_feats: torch.Tensor,
+        pair_feats: torch.Tensor,
     ) -> torch.Tensor:
         if lig_feats.size(1) == 0:
             return lig_feats
@@ -222,38 +257,26 @@ class LigandPairBiasEmbedder(nn.Module):
         lig_pos = lig_pos.to(device)
         lig_mask = lig_mask.to(device)
 
-        B, S, _ = lig_feats.shape
-        pair_bias = lig_feats.new_zeros((B, S, S, self.pair_dim))
+        pair_bias = pair_feats
 
-        lig_edge_feats = lig_edge_feats.to(device)
-        src, dst = graph.edges(etype="lig_to_lig")
-        src = src.to(device)
-        dst = dst.to(device)
+        # inject scalar feature contributions to pair bias
+        pair_bias = pair_bias + (self.s_i_proj(lig_feats).unsqueeze(2) + self.s_j_proj(lig_feats).unsqueeze(1))
 
-        node_batch = layout.node_batch_idxs['lig'].to(device)
-        node_offsets = layout.node_offsets['lig'].to(device)
+        # inject pairwise distances into pair bias via RBFs
+        # pair_dists = torch.cdist(lig_pos, lig_pos, p=2.0)
+        # offset_bias = _rbf(
+        #     pair_dists,
+        #     D_min=self.rbf_d_min,
+        #     D_max=self.rbf_d_max,
+        #     D_count=self.rbf_count,
+        # )
+        offset_bias = self.atom_offset_encoder(lig_pos)
+        rbf_proj_input = torch.cat((pair_bias, offset_bias), dim=-1)
+        pair_bias = pair_bias + self.rbf_proj(rbf_proj_input)
 
-        node_ids = torch.arange(node_batch.shape[0], device=device)
-        node_pos = node_ids - node_offsets[node_batch]
+        single_feats = self.layer(lig_feats, pair_bias, lig_mask)
 
-        src_pos = node_pos[src]
-        dst_pos = node_pos[dst]
-        edge_batch = node_batch[src]
-
-        pair_bias[edge_batch, src_pos, dst_pos] = lig_edge_feats
-        pair_bias[edge_batch, dst_pos, src_pos] = lig_edge_feats
-
-        pair_dists = torch.cdist(lig_pos, lig_pos, p=2.0)
-        rbf_bias = _rbf(
-            pair_dists,
-            D_min=self.rbf_d_min,
-            D_max=self.rbf_d_max,
-            D_count=self.rbf_count,
-        )
-        pair_bias = torch.cat((pair_bias, rbf_bias), dim=-1)
-        pair_bias = self.rbf_proj(pair_bias)
-
-        return self.layer(lig_feats, pair_bias, lig_mask)
+        return single_feats, pair_bias
 
 
 class TransformerWrapper(nn.Module):
@@ -319,7 +342,8 @@ class TransformerWrapper(nn.Module):
         # map d_model back to scalars only
         self.out_proj = nn.Linear(d_model, self.S, bias=True)
 
-        self.trfmr_feat_key = "temp_key"
+        self.trfmr_node_feat_key = "temp_key"
+        self.trfmr_pair_feat_key = "temp_pair_key"
 
 
     @g_local_scope
@@ -349,33 +373,37 @@ class TransformerWrapper(nn.Module):
             out  = self.in_proj(feat_input)   # (N, d_model)
             
             # add input feature to graph
-            g.nodes[ntype].data[self.trfmr_feat_key] = out
+            g.nodes[ntype].data[self.trfmr_node_feat_key] = out
 
-        layout, padded_node_feats, attention_masks = GraphLayout.layout_and_pad(g)
+        # insert lig_to_lig feats into graph
+        # TODO: possibly shouldn't hard-code this bc we will also have npnde_to_npnde feats later
+        for etype in edge_feats.keys():
+            g.edges[etype].data[self.trfmr_pair_feat_key] = edge_feats[etype]
 
-        # do attention with pair bias for ligand nodes
-        lig_feats = padded_node_feats['lig'][self.trfmr_feat_key]
-        lig_mask = attention_masks['lig'].to(lig_feats.device)
-        lig_edge_feats = edge_feats.get("lig_to_lig") if edge_feats is not None else None
-
-        padded_node_feats['lig'][self.trfmr_feat_key] = self.ligand_embedder(
-            lig_feats=lig_feats,
-            lig_mask=lig_mask,
-            lig_pos=padded_node_feats['lig']['x_t'],
-            layout=layout,
-            graph=g,
-            lig_edge_feats=lig_edge_feats,
+        layout, padded_node_feats, attention_masks, padded_edge_feats = GraphLayout.layout_and_pad(
+            g,
+            allowed_feat_names=[self.trfmr_node_feat_key, self.trfmr_pair_feat_key, 'x_t'],
         )
+
+        # do attention with pair bias for ligand nodes        
+        init_lig_feats, lig_pair_feats = self.ligand_embedder(
+            lig_feats=padded_node_feats['lig'][self.trfmr_node_feat_key],
+            lig_mask=attention_masks['lig'],
+            lig_pos=padded_node_feats['lig']['x_t'],
+            pair_feats=padded_edge_feats['lig_to_lig'][self.trfmr_pair_feat_key],
+        )
+        padded_node_feats['lig'][self.trfmr_node_feat_key] = init_lig_feats
+        padded_edge_feats['lig_to_lig'][self.trfmr_pair_feat_key] = lig_pair_feats
 
 
         # Pack all node types to one sequence
         X_list, M_list, sizes = [], [], []
         for ntype in self.ntype_order:
             bucket = padded_node_feats.get(ntype)
-            if bucket is None or self.trfmr_feat_key not in bucket:
+            if bucket is None or self.trfmr_node_feat_key not in bucket:
                 sizes.append(0)
                 continue
-            X = bucket[self.trfmr_feat_key]  # (B, n_max, d_model)
+            X = bucket[self.trfmr_node_feat_key]  # (B, n_max, d_model)
             M = (~attention_masks[ntype]).to(torch.bool)
             X_list.append(X)
             M_list.append(M)
@@ -395,19 +423,21 @@ class TransformerWrapper(nn.Module):
         for ntype, nmax in zip(self.ntype_order, sizes):
             if nmax == 0:
                 continue
-            padded_node_feats[ntype][self.trfmr_feat_key] = Y_all[:, offset:offset + nmax, :]
+            padded_node_feats[ntype][self.trfmr_node_feat_key] = Y_all[:, offset:offset + nmax, :]
             offset += nmax
 
         # back to DGL graph
         layout.padded_sequence_to_graph(
-            g, padded_node_feats, attention_masks=attention_masks, inplace=True
+            g, 
+            padded_node_feats, 
+            attention_masks=attention_masks, 
+            padded_edge_feats=padded_edge_feats, 
+            inplace=True,
         )
-
-        # back to original size
+        
         out_scalars: Dict[str, torch.Tensor] = {}
-
         for ntype, H_old in scalar_feats.items():
-            Y_ntype = g.nodes[ntype].data.get(self.trfmr_feat_key)
+            Y_ntype = g.nodes[ntype].data.get(self.trfmr_node_feat_key)
             if Y_ntype is None:
                 # pass through if this ntype wasn't present
                 out_scalars[ntype] = H_old
@@ -418,4 +448,8 @@ class TransformerWrapper(nn.Module):
                 H_new = H_new + H_old
             out_scalars[ntype] = H_new
 
-        return out_scalars, vec_feats
+        edge_feats_out = {}
+        for etype in edge_feats:
+            edge_feats_out[etype] = g.edges[etype].data[self.trfmr_pair_feat_key]
+
+        return out_scalars, edge_feats_out

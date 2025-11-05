@@ -238,7 +238,7 @@ class VectorField(nn.Module):
                 n_hidden_scalars=self.n_hidden_scalars,
                 n_vec_channels=self.n_vec_channels,
                 d_model=256, n_layers=4, n_heads=n_heads, 
-                dim_ff=1024, use_residual=True,
+                dim_ff=1024, use_residual=False,
                 pair_dim=n_hidden_edge_feats,
                 dropout=dropout,
             )
@@ -593,7 +593,7 @@ class VectorField(nn.Module):
         for recycle_idx in range(self.n_recycles):
             for conv_idx, conv in enumerate(self.conv_layers):
                 # perform a single convolution which updates node scalar and vector features (but not positions)
-                node_scalar_features, node_vec_features = conv(
+                node_scalar_features, edge_features = conv(
                     g,
                     scalar_feats=node_scalar_features,
                     coord_feats=node_positions,
@@ -1207,6 +1207,7 @@ class NodePositionUpdate(nn.Module):
     def __init__(self, n_scalars, n_vec_channels, n_gvps: int = 3, n_cp_feats: int = 0):
         super().__init__()
 
+        # TODO: should update_pos have > 1 layer?
         self.update_pos = nn.Linear(n_scalars, 3, bias=False)
         nn.init.zeros_(self.update_pos.weight)
 
