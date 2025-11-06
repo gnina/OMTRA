@@ -341,7 +341,14 @@ class OMTRA(pl.LightningModule):
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device, coms=coms)
+        samples = self.sample(
+            task_name, 
+            g_list=g_list, 
+            n_replicates=n_replicates, 
+            n_timesteps=200, 
+            n_lig_atom_margin=0.1,
+            device=device, 
+            coms=coms)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         if not self.eval_config:
