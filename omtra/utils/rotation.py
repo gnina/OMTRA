@@ -126,3 +126,15 @@ def rotate_ground_truth(g: dgl.DGLHeteroGraph):
         # Update the graph feature
         g.nodes[ntype].data['x_1_true'] = x_rotated
     return g
+
+def system_offset(g: dgl.DGLHeteroGraph, offset_std: float = 0.0):
+
+    if offset_std <= 0.0:
+        return g
+
+    offset = torch.randn(1,3, device=g.device)*offset_std
+    for ntype in g.ntypes:
+        if 'x_1_true' not in g.nodes[ntype].data:
+            continue
+        g.nodes[ntype].data['x_1_true'] += offset
+    return g

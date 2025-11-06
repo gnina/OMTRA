@@ -14,6 +14,7 @@ from omtra.constants import (
     protein_element_map,
     protein_atom_map,
 )
+from omtra.utils.rotation import rotate_ground_truth, center_on_ligand_gt, system_offset
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.data.xace_ligand import add_k_hop_edges, MolXACE, add_fake_atoms
@@ -1016,6 +1017,17 @@ class PlinderDataset(ZarrDataset):
             
             # Add the position embeddings to the graph's protein atom nodes
             g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
+
+        # center ground truth coordinates on ligand
+        g = center_on_ligand_gt(g)
+        # apply random rotation to ground truth coordinates
+        g = rotate_ground_truth(g)
+
+        # apply system offset
+        # TODO: expose as a config parameter
+        offset_std = 0.0
+        if offset_std > 0:
+            g = system_offset(g, offset_std=offset_std)
 
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)
