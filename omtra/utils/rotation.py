@@ -111,10 +111,13 @@ def center_on_ligand_gt(g: dgl.DGLHeteroGraph):
 
 def rotate_ground_truth(g: dgl.DGLHeteroGraph):
 
+    device = g.device
+    dtype = g.nodes[g.ntypes[0]].data['x_1_true'].dtype
+    
     # random rotation matrix
-    R = random_rotations(1, 
-        dtype=g.nodes[ntype].data['x_1_true'].dtype, 
-        device=g.device).squeeze(0)
+    R = random_rotations(1,
+        dtype=dtype,
+        device=device).squeeze(0)
 
     for ntype in g.ntypes:
         if 'x_1_true' not in g.nodes[ntype].data:
