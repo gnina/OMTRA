@@ -65,6 +65,7 @@ class PlinderDataset(ZarrDataset):
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
         res_id_embed_dim: int = 64,
         max_pharms_sampled: int = 8,
+        sys_offset_std: float = 0.0
     ):
         super().__init__(
             split,
@@ -80,6 +81,7 @@ class PlinderDataset(ZarrDataset):
         self.use_fake_atoms = self.fake_atom_p > 0
         self.pskip_factor = pskip_factor
         self.weighted_sampling = pskip_factor > 0.0 and split == 'train'
+        self.sys_offset_std = sys_offset_std
 
         self.res_id_embed_dim = res_id_embed_dim
 
@@ -1025,9 +1027,8 @@ class PlinderDataset(ZarrDataset):
 
         # apply system offset
         # TODO: expose as a config parameter
-        offset_std = 0.0
-        if offset_std > 0:
-            g = system_offset(g, offset_std=offset_std)
+        if self.sys_offset_std > 0:
+            g = system_offset(g, offset_std=self.sys_offset_std)
 
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)

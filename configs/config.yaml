@@ -23,6 +23,7 @@ edges_per_batch: 300000 # TODO: it might be the case the pharmit and plinder tas
 num_workers: 2
 max_steps: 1000 # number of steps to train for
 fake_atom_p: 0.3 # upper bound on fraction of fake atoms added to a molecule
+sys_offset_std: 1.5 # standard deviation of random system offset noise added to atom positions
 distort_p: 0.2  # upper bound on fraction of atoms distorted
 plinder_pskip_factor: 0.0 # 0 -> no weighted sampling, 1 -> uniform sampling over clusters
 res_id_embed_dim: 64 # dimension of residue id embedding

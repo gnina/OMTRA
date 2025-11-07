@@ -62,6 +62,7 @@ class CrossdockedDataset(ZarrDataset):
         prior_config: Optional[DictConfig] = None,
         fake_atom_p: float = 0.0,
         res_id_embed_dim: int = 64,
+        sys_offset_std: float = 0.0
     ):
         #zarr files are read by the init function of the parent class, ZarrDataset
         super().__init__(
@@ -72,6 +73,7 @@ class CrossdockedDataset(ZarrDataset):
         self.graph_config = graph_config
         self.prior_config = prior_config
         self.fake_atom_p = fake_atom_p
+        self.sys_offset_std = sys_offset_std
 
         self.res_id_embed_dim = res_id_embed_dim
 
@@ -1017,9 +1019,8 @@ class CrossdockedDataset(ZarrDataset):
 
         # apply system offset
         # TODO: expose as a config parameter
-        offset_std = 0.0
-        if offset_std > 0:
-            g = system_offset(g, offset_std=offset_std)
+        if self.sys_offset_std > 0:
+            g = system_offset(g, offset_std=self.sys_offset_std)
 
 
         # get prior functions

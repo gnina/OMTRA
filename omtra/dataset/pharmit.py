@@ -30,6 +30,7 @@ class PharmitDataset(ZarrDataset):
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
                  max_pharms_sampled: int = 8,
+                 sys_offset_std: float = 0.0
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
@@ -37,6 +38,7 @@ class PharmitDataset(ZarrDataset):
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = fake_atom_p > 0
         self.max_pharms_sampled = max_pharms_sampled
+        self.sys_offset_std = sys_offset_std
 
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
@@ -234,9 +236,8 @@ class PharmitDataset(ZarrDataset):
 
         # apply system offset
         # TODO: expose as a config parameter
-        offset_std = 0.0
-        if offset_std > 0:
-            g = system_offset(g, offset_std=offset_std)
+        if self.sys_offset_std > 0:
+            g = system_offset(g, offset_std=self.sys_offset_std)
 
         # sample priors
         priors_fns = get_prior(task_class, self.prior_config, training=True)
