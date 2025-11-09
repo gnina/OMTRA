@@ -1,5 +1,8 @@
 _target_: omtra.models.vector_field.VectorField
 
+defaults:
+  - _self_
+  - transformer_cfg: default
 
 n_vec_channels:                32
 n_cp_feats:                    8
@@ -9,10 +12,8 @@ rbf_dmax:                      10
 rbf_dim:                       32
 time_embedding_dim:            64
 token_dim:                     64
-n_heads:                       8
-dropout:                       0.1
 has_mask:                      true
 self_conditioning:             true
 res_id_embed_dim:              64
-pos_emb:                       true
+pos_emb:                       false
 n_pre_gvp_convs:               1

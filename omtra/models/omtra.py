@@ -152,6 +152,7 @@ class OMTRA(pl.LightningModule):
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
             fake_atoms=self.fake_atom_p>0.0,
+            _recursive_=False,
         )
 
         if not ligand_encoder.is_empty():

@@ -8,7 +8,8 @@ import dgl.function as fn
 from collections import defaultdict
 from typing import Union, Callable, Dict, Optional
 from typing import List
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
+from hydra.utils import instantiate
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.models.self_conditioning import SelfConditioningResidualLayer
@@ -36,12 +37,13 @@ from omtra.constants import (
 from omtra.data.graph.utils import get_batch_idxs
 from omtra.utils.graph import g_local_scope
 from omtra.data.graph.layout import GraphLayout
-from omtra.models.transformer import TransformerWrapper
 from omtra.models.embeddings.pos_embed import get_pos_embedding
 
 from omtra.priors.align import rigid_alignment
 
 # from line_profiler import LineProfiler, profile
+
+_default_transformer_cfg = DictConfig({'_target_': 'omtra.models.transformer.TransformerWrapper'})
 
 class VectorField(nn.Module):
     def __init__(
@@ -58,14 +60,13 @@ class VectorField(nn.Module):
         rbf_dim=32,
         time_embedding_dim: int = 64,
         token_dim: int = 64,
-        dropout: float = 0.0,
         has_mask: bool = True,
         self_conditioning: bool = False,
         fake_atoms: bool = False,
         res_id_embed_dim: int = 64,
-        n_heads=8,
         pos_emb: bool = False,
         n_pre_gvp_convs: int = 1,
+        transformer_cfg: Optional[DictConfig] = _default_transformer_cfg,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -235,15 +236,13 @@ class VectorField(nn.Module):
                 rbf_dim=rbf_dim,
             )
 
-        self.transformer = TransformerWrapper(
-                node_types=list(self.node_types),
-                n_hidden_scalars=self.n_hidden_scalars,
-                n_vec_channels=self.n_vec_channels,
-                d_model=256, n_layers=4, n_heads=n_heads, 
-                dim_ff=1024, use_residual=True,
-                pair_dim=n_hidden_edge_feats,
-                dropout=dropout,
-            )
+        self.transformer = instantiate(
+            transformer_cfg,
+            node_types=list(self.node_types),
+            n_hidden_scalars=self.n_hidden_scalars,
+            n_vec_channels=self.n_vec_channels,
+            pair_dim=self.n_hidden_edge_feats,
+        )
 
         # for every modality being generated that is a node position, create NodePositionUpdate layers
         self.node_position_updaters = nn.ModuleDict()
