@@ -79,7 +79,7 @@ class OMTRA(pl.LightningModule):
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
         pharm_var: float = 0.0,
-
+        lr_warmup_steps: int = 0,  # NEW: number of linear warmup steps (0 disables warmup)
     ):
         super().__init__()
 
@@ -101,6 +101,7 @@ class OMTRA(pl.LightningModule):
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
         self.pharm_var = pharm_var
+        self.lr_warmup_steps = lr_warmup_steps
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -518,6 +519,22 @@ class OMTRA(pl.LightningModule):
         optimizer = hydra.utils.instantiate(
             self.optimizer_cfg, params=self.parameters()
         )
+        # Linear LR warmup
+        if self.lr_warmup_steps and self.lr_warmup_steps > 0:
+            def lr_lambda(current_step: int):
+                if current_step < self.lr_warmup_steps:
+                    return float(current_step + 1) / float(self.lr_warmup_steps)
+                return 1.0
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "step",
+                    "frequency": 1,
+                    "name": "lr_warmup",
+                },
+            }
         return optimizer
 
     def sample_conditional_path(
