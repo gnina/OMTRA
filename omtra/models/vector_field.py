@@ -184,7 +184,7 @@ class VectorField(nn.Module):
         )
 
         # projection operator for global conditioning
-        self.c_proj = nn.Linear(self.task_embedding_dim + time_embedding_dim, n_hidden_scalars, bias=False)
+        self.c_proj = nn.Linear(self.task_embedding_dim + n_hidden_scalars, n_hidden_scalars, bias=False)
 
         # for each node type, create a function for initial node embeddings
         self.scalar_embedding = nn.ModuleDict()
