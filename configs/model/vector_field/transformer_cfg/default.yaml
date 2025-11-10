@@ -1,6 +1,5 @@
 _target_: omtra.models.transformer.TransformerWrapper
 
-d_model: 256
 n_layers: 4
 n_heads: 8
 dim_ff: 1024

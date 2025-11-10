@@ -272,7 +272,6 @@ class TransformerWrapper(nn.Module):
                  node_types: List[str],
                  n_hidden_scalars: int,
                  n_vec_channels: int,
-                 d_model: int = 256,
                  pair_dim: int = 32,
                  n_layers: int = 4,
                  n_heads: int = 8,
@@ -285,21 +284,21 @@ class TransformerWrapper(nn.Module):
         self.ntype_order = list(node_types)
         self.S = n_hidden_scalars
         self.C = n_vec_channels
-        self.d_model = d_model
+        self.d_model = n_hidden_scalars
         self.use_residual = use_residual
         self.pair_dim = pair_dim
         self.use_qk_norm = use_qk_norm
 
         # in_dim = n_hidden_scalars + 3 * n_vec_channels
         if dim_ff is None:
-            dim_ff = 4 * d_model
+            dim_ff = 4 * self.d_model
         
         # # pre-MLP per node type
         # self.pre_mlp = NodeTypeMLP(self.ntype_order, in_dim=in_dim, d_model=d_model, dropout=dropout)
 
         # Create interleaved layers
         self.ligand_embedder = LigandPairBiasEmbedder(
-            hidden_dim=d_model,
+            hidden_dim=self.d_model,
             pair_dim=pair_dim,
             num_heads=n_heads,
         )
@@ -309,13 +308,13 @@ class TransformerWrapper(nn.Module):
         for _ in range(n_layers):
             if use_qk_norm:
                 layer = QKNormTransformerEncoderLayer(
-                    d_model=d_model,
+                    d_model=self.d_model,
                     n_heads=n_heads,
                     dropout=dropout,
                 )
             else:
                 layer = TransformerEncoderLayer(
-                d_model=d_model,
+                d_model=self.d_model,
                 nhead=n_heads,
                 dim_feedforward=dim_ff,
                 dropout=dropout,
@@ -327,12 +326,12 @@ class TransformerWrapper(nn.Module):
 
         # map scalars + coords to d_model, linear transformation of coords
         self.in_proj = nn.Sequential(
-            nn.Linear(self.S + 3 + n_vec_channels*3, d_model, bias=False),
+            nn.Linear(self.S + 3 + n_vec_channels*3, self.d_model, bias=False),
             # nn.LayerNorm(self.S + 3),
         )
 
         # map d_model back to scalars only
-        self.out_proj = nn.Linear(d_model, self.S, bias=True)
+        self.out_proj = nn.Linear(self.d_model, self.S, bias=True)
 
         self.trfmr_node_feat_key = "temp_key"
         self.trfmr_pair_feat_key = "temp_pair_key"
@@ -348,6 +347,7 @@ class TransformerWrapper(nn.Module):
         edge_feats=None,
         x_diff=None,
         d=None,
+        global_conditioning=None,
         **kwargs,
     ):
         # Concatenate scalars with coordinates
@@ -412,7 +412,17 @@ class TransformerWrapper(nn.Module):
         Y_all = X_all
 
         for layer in self.layers:
-            Y_all = layer(Y_all, src_key_padding_mask=M_all)
+            # TODO: remove this once we prove that the qknorm + adaln works better than vanilla transformer
+            if self.use_qk_norm:
+                kwargs = {
+                    'src_key_padding_mask': M_all,
+                    'c': global_conditioning,
+                }
+            else:
+                kwargs = {
+                    'src_key_padding_mask': M_all,
+                }
+            Y_all = layer(Y_all, **kwargs)
 
         # back to per-ntype padded tensors
         offset = 0

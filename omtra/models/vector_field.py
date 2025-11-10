@@ -10,6 +10,7 @@ from typing import Union, Callable, Dict, Optional
 from typing import List
 from omegaconf import DictConfig, OmegaConf
 from hydra.utils import instantiate
+from omtra.models.embeddings.time_embed import TimestepEmbedder
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.models.self_conditioning import SelfConditioningResidualLayer
@@ -38,6 +39,7 @@ from omtra.data.graph.utils import get_batch_idxs
 from omtra.utils.graph import g_local_scope
 from omtra.data.graph.layout import GraphLayout
 from omtra.models.embeddings.pos_embed import get_pos_embedding
+from omtra.models.adaln import AdaLNWeightGenerator
 
 from omtra.priors.align import rigid_alignment
 
@@ -170,10 +172,19 @@ class VectorField(nn.Module):
         
         self.edge_types = sorted(list(self.edge_types))
 
+        # create timestep embedder
+        self.time_embedder = TimestepEmbedder(
+            hidden_dim=n_hidden_scalars,
+            frequency_embedding_dim=time_embedding_dim,
+        )
+
         # create a task embedding
         self.task_embedding = nn.Embedding(
             len(td_coupling.task_space), self.task_embedding_dim
         )
+
+        # projection operator for global conditioning
+        self.c_proj = nn.Linear(self.task_embedding_dim + time_embedding_dim, n_hidden_scalars, bias=False)
 
         # for each node type, create a function for initial node embeddings
         self.scalar_embedding = nn.ModuleDict()
@@ -181,7 +192,9 @@ class VectorField(nn.Module):
             n_cat_feats = self.ntype_cat_feats[
                 ntype
             ]  # number of categorical features for this node type
-            input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
+            # input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
+            # with adaln, we don't need task or time embedding dim added to node scalar embeddings 
+            input_dim = n_cat_feats * token_dim # + self.time_embedding_dim + self.task_embedding_dim
             if res_id_embed_dim is not None and ntype == 'prot_atom':
                 input_dim += res_id_embed_dim
 
@@ -337,6 +350,28 @@ class VectorField(nn.Module):
                 fake_atoms=fake_atoms,
             )
 
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        self.apply(_basic_init)
+
+        # Initialize task embedding table:
+        nn.init.normal_(self.task_embedding.weight, std=0.02)
+
+        # intialize embedding tables for all categorical modalities
+        for mod in self.token_embeddings.values():
+            nn.init.normal_(mod.weight, std=0.02)
+
+        # Initialize timestep embedding MLP:
+        nn.init.normal_(self.time_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.time_embedder.mlp[2].weight, std=0.02)
+
     @g_local_scope
     def forward(
         self,
@@ -443,28 +478,19 @@ class VectorField(nn.Module):
             task_idx
         )  # tensor of shape (batch_size, token_dim)
 
-        # add time and task embedding to node scalar features
+        # get time embedding
+        t_emb = self.time_embedder(t)
+
+        # construct global conditioning tensor (time + task)
+        global_conditioning = self.c_proj(torch.cat([task_embedding_batch, t_emb], dim=-1))
+
+        # generate initial scalar embeddings
         for ntype in node_scalar_features.keys():
-            # add time embedding to node scalar features
-            if self.time_embedding_dim == 1:
-                node_scalar_features[ntype].append(
-                    t[node_batch_idx[ntype]].unsqueeze(-1)
-                )
-            else:
-                t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
-                t_emb = t_emb[node_batch_idx[ntype]]
-                node_scalar_features[ntype].append(t_emb)
-
-            node_scalar_features[ntype].append(
-                task_embedding_batch[node_batch_idx[ntype]]
-            )  # expand task embedding for each node in the batch
-
-            # concatenate all initial node scalar features and pass through the embedding layer
-            node_scalar_features[ntype] = torch.cat(
+            cat_feats = torch.cat(
                 node_scalar_features[ntype], dim=-1
             )
             node_scalar_features[ntype] = self.scalar_embedding[ntype](
-                node_scalar_features[ntype]
+                cat_feats
             )
 
         if self.pos_emb:
@@ -517,6 +543,7 @@ class VectorField(nn.Module):
                         upper_edge_mask,
                         apply_softmax=True,
                         remove_com=False,
+                        global_conditioning=global_conditioning,
                     )
 
         if self.self_conditioning and prev_dst_dict is not None:
@@ -548,6 +575,7 @@ class VectorField(nn.Module):
             upper_edge_mask,
             apply_softmax,
             remove_com,
+            global_conditioning=global_conditioning,
             extract_latents_for_confidence=extract_latents_for_confidence,
         )
 
@@ -573,6 +601,7 @@ class VectorField(nn.Module):
         upper_edge_mask: Dict[str, torch.Tensor],
         apply_softmax: bool = False,
         remove_com: bool = False,
+        global_conditioning: Optional[torch.Tensor] = None,
         extract_latents_for_confidence=False,
     ):
         x_diff, d = self.precompute_distances(g)
@@ -589,6 +618,8 @@ class VectorField(nn.Module):
                 d=d,
                 x_diff=x_diff,
             )
+
+        # TODO: adaln operations for edge and node position updates
 
         # update edge features after pre-convs
         for etype in edge_features:
@@ -610,6 +641,7 @@ class VectorField(nn.Module):
             edge_feats=edge_features,
             x_diff=x_diff,
             d=d,
+            global_conditioning=global_conditioning,
         )
         edge_features.update(edge_features_out)
 
@@ -1193,34 +1225,29 @@ class NodePositionUpdate(nn.Module):
     def __init__(self, n_scalars, n_vec_channels, n_gvps: int = 3, n_cp_feats: int = 0):
         super().__init__()
 
-        # TODO: should update_pos have > 1 layer?
-        self.update_pos = nn.Linear(n_scalars, 3, bias=False)
-        nn.init.zeros_(self.update_pos.weight)
+        # self.update_pos = nn.Linear(n_scalars, 3, bias=False)
+        # nn.init.zeros_(self.update_pos.weight)
 
-        # self.gvps = []
-        # for i in range(n_gvps):
-        #     if i == n_gvps - 1:
-        #         vectors_out = 1
-        #         vectors_activation = nn.Identity()
-        #     else:
-        #         vectors_out = n_vec_channels
-        #         vectors_activation = nn.Sigmoid()
+        self.update_pos = nn.Sequential(
+            nn.Linear(n_scalars, n_scalars),
+            nn.SiLU(),
+            nn.Linear(n_scalars, 3, bias=False),
+        )
+        nn.init.zeros_(self.update_pos[-1].weight)
 
-        #     self.gvps.append(
-        #         GVP(
-        #             dim_feats_in=n_scalars,
-        #             dim_feats_out=n_scalars,
-        #             dim_vectors_in=n_vec_channels,
-        #             dim_vectors_out=vectors_out,
-        #             n_cp_feats=n_cp_feats,
-        #             vectors_activation=vectors_activation,
-        #         )
-        #     )
-        # self.gvps = nn.Sequential(*self.gvps)
+        # self.norm = nn.LayerNorm(n_scalars, elementwise_affine=False)
+        # self.adaln_param_generator = AdaLNWeightGenerator(
+        #     d_model=n_scalars,
+        #     params=['scale', 'shift'],
+        # )
 
     def forward(
         self, scalars: torch.Tensor, positions: torch.Tensor, vectors: torch.Tensor
     ):
+
+        # adaln_params = self.adaln_param_generator(scalars)
+        # scalars =  self.norm(scalars) * (1 + adaln_params['scale']) + adaln_params['shift']
+
         vector_updates = self.update_pos(scalars)
         return positions + vector_updates
         # _, vector_updates = self.gvps((scalars, vectors))
