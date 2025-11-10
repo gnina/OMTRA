@@ -11,39 +11,9 @@ from omtra.data.graph.layout import GraphLayout
 from omtra.utils.graph import g_local_scope
 from omtra.models.gvp import _rbf
 
-class Mlp(nn.Module):
-    """MLP as used in Vision Transformer, MLP-Mixer and related networks."""
+from omtra.models.layers import Mlp
+from omtra.models.dit import QKNormTransformerEncoderLayer
 
-    def __init__(
-        self,
-        in_features,
-        hidden_features=None,
-        out_features=None,
-        act_layer=nn.GELU,
-        norm_layer=None,
-        bias=True,
-        drop=0.0,
-    ):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-
-        self.fc1 = nn.Linear(in_features, hidden_features, bias=bias)
-        self.act = act_layer()
-        self.drop1 = nn.Dropout(drop)
-        self.norm = norm_layer(hidden_features) if norm_layer is not None else nn.Identity()
-        self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
-        self.drop2 = nn.Dropout(drop)
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop1(x)
-        x = self.norm(x)
-        x = self.fc2(x)
-        x = self.drop2(x)
-        return x
-    
 
 class AttentionPairBias(nn.Module):
     """Attention pair bias layer."""
@@ -308,7 +278,9 @@ class TransformerWrapper(nn.Module):
                  n_heads: int = 8,
                  dim_ff: int | None = None,
                  dropout: float = 0.1,
-                 use_residual: bool = True):
+                 use_residual: bool = True,
+                 use_qk_norm: bool = False,
+                 ):
         super().__init__()
         self.ntype_order = list(node_types)
         self.S = n_hidden_scalars
@@ -316,6 +288,7 @@ class TransformerWrapper(nn.Module):
         self.d_model = d_model
         self.use_residual = use_residual
         self.pair_dim = pair_dim
+        self.use_qk_norm = use_qk_norm
 
         # in_dim = n_hidden_scalars + 3 * n_vec_channels
         if dim_ff is None:
@@ -334,16 +307,23 @@ class TransformerWrapper(nn.Module):
 
         # Add standard TransformerEncoderLayers
         for _ in range(n_layers):
-            std_layer = TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=n_heads,
-            dim_feedforward=dim_ff,
-            dropout=dropout,
-            batch_first=True,
-            activation="gelu",
-            norm_first=True,
-            )
-            self.layers.append(std_layer)
+            if use_qk_norm:
+                layer = QKNormTransformerEncoderLayer(
+                    d_model=d_model,
+                    n_heads=n_heads,
+                    dropout=dropout,
+                )
+            else:
+                layer = TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=n_heads,
+                dim_feedforward=dim_ff,
+                dropout=dropout,
+                batch_first=True,
+                activation="gelu",
+                norm_first=True,
+                )
+            self.layers.append(layer)
 
         # map scalars + coords to d_model, linear transformation of coords
         self.in_proj = nn.Sequential(
@@ -417,7 +397,10 @@ class TransformerWrapper(nn.Module):
                 sizes.append(0)
                 continue
             X = bucket[self.trfmr_node_feat_key]  # (B, n_max, d_model)
-            M = (~attention_masks[ntype]).to(torch.bool)
+            if self.use_qk_norm:
+                M = attention_masks[ntype].to(torch.bool)
+            else:
+                M = (~attention_masks[ntype]).to(torch.bool)
             X_list.append(X)
             M_list.append(M)
             sizes.append(X.size(1))
