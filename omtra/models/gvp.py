@@ -10,6 +10,7 @@ from torch_scatter import scatter_softmax
 from omtra.utils.graph import g_local_scope
 
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
+from omtra.data.graph.utils import get_node_batch_idxs
 
 
 # most taken from flowmol gvp (moreflowmol branch)
