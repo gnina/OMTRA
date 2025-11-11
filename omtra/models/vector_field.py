@@ -617,6 +617,7 @@ class VectorField(nn.Module):
                 edge_features,
                 d=d,
                 x_diff=x_diff,
+                node_batch_idxs=node_batch_idx,
             )
 
         # TODO: adaln operations for edge and node position updates

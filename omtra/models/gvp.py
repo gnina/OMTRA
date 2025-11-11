@@ -298,7 +298,7 @@ class HeteroGVPConv(nn.Module):
         edge_feat_size: Optional[Dict[str, int]] = None,
         message_norm: Union[float, str] = 10,
         dropout: float = 0.0,
-        pre_norm: bool = False,
+        adaln_style: str ='dit',
     ):
         super().__init__()
 
@@ -330,55 +330,15 @@ class HeteroGVPConv(nn.Module):
             self.att_func = self.compute_att_weights_per_type
 
         # dims for message reduction and also attention
-        self.s_message_dim = s_message_dim
-        self.v_message_dim = v_message_dim
-
-        if s_message_dim is None:
-            self.s_message_dim = scalar_size
-
-        if v_message_dim is None:
-            self.v_message_dim = vector_size
+        self.s_message_dim = scalar_size
+        self.v_message_dim = vector_size
 
         # determine whether we are performing compressed message passing
-        if self.s_message_dim != scalar_size or self.v_message_dim != vector_size:
-            self.compressed_messaging = True
-        else:
-            self.compressed_messaging = False
+        self.compressed_messaging = False
 
         self.node_compression = nn.ModuleDict()
         if self.compressed_messaging:
-            for ntype in self.node_types:
-                compression_gvps = []
-                for i in range(
-                    n_expansion_gvps
-                ):  # implicit here that n_expansion_gvps is the same as n_compression_gvps
-                    if i == 0:
-                        dim_feats_in = scalar_size
-                        dim_vectors_in = vector_size
-                    else:
-                        dim_feats_in = max(self.s_message_dim, scalar_size)
-                        dim_vectors_in = max(self.v_message_dim, vector_size)
-
-                    if i == n_expansion_gvps - 1:
-                        dim_feats_out = self.s_message_dim
-                        dim_vectors_out = self.v_message_dim
-                    else:
-                        dim_feats_out = max(self.s_message_dim, scalar_size)
-                        dim_vectors_out = max(self.v_message_dim, vector_size)
-
-                    compression_gvps.append(
-                        GVP(
-                            dim_vectors_in=dim_vectors_in,
-                            dim_vectors_out=dim_vectors_out,
-                            n_cp_feats=n_cp_feats,
-                            dim_feats_in=dim_feats_in,
-                            dim_feats_out=dim_feats_out,
-                            feats_activation=scalar_activation(),
-                            vectors_activation=vector_activation(),
-                            vector_gating=True,
-                        )
-                    )
-                self.node_compression[ntype] = nn.Sequential(*compression_gvps)
+            raise NotImplementedError('compressed message passing deprecataed')
         else:
             for ntype in self.node_types:
                 self.node_compression[ntype] = nn.Identity()
@@ -438,12 +398,6 @@ class HeteroGVPConv(nn.Module):
             v_dst_feats_for_messages = 0
 
         self.edge_message_fns = nn.ModuleDict()
-
-        s_slope = (
-            self.s_message_dim + extra_scalar_feats - scalar_size
-        ) / n_message_gvps
-        v_slope = (self.v_message_dim - vector_size) / n_message_gvps
-
         for etype in edge_types:
             src_ntype, _, dst_ntype = to_canonical_etype(etype)
             inv_etype = get_inv_edge_type(etype)
@@ -468,23 +422,8 @@ class HeteroGVPConv(nn.Module):
                     dim_vectors_in += v_dst_feats_for_messages
                     dim_feats_in += s_dst_feats_for_messages
 
-                # determine number of scalars output from this layer
-                # if message size is smaller than scalar size, do linear interpolation on layer sizes through the gvps
-                # otherwise, jump to final output size at first gvp and stay there to the end
-                if self.s_message_dim < scalar_size:
-                    dim_feats_out = int(s_slope * i + scalar_size)
-                    if i == n_message_gvps - 1:
-                        dim_feats_out = self.s_message_dim + extra_scalar_feats
-                else:
-                    dim_feats_out = self.s_message_dim + extra_scalar_feats
-
-                # same logic applied to the number of vectors output from this layer
-                if self.v_message_dim < vector_size:
-                    dim_vectors_out = int(v_slope * i + vector_size)
-                    if i == n_message_gvps - 1:
-                        dim_vectors_out = self.v_message_dim
-                else:
-                    dim_vectors_out = self.v_message_dim
+                dim_feats_out = self.s_message_dim + extra_scalar_feats
+                dim_vectors_out = self.v_message_dim
 
                 message_gvps.append(
                     GVP(
@@ -515,7 +454,7 @@ class HeteroGVPConv(nn.Module):
                         n_cp_feats=n_cp_feats,
                         dim_feats_in=scalar_size,
                         dim_feats_out=scalar_size,
-                        feats_activation=scalar_activation(),
+                        feats_activation=nn.GELU(approximate='tanh'),
                         vectors_activation=vector_activation(),
                         vector_gating=True,
                     )
@@ -523,8 +462,8 @@ class HeteroGVPConv(nn.Module):
 
             self.node_update_fns[ntype] = nn.Sequential(*update_gvps)
             self.dropout_layers[ntype] = GVPDropout(self.dropout_rate)
-            self.message_layer_norms[ntype] = GVPLayerNorm(self.scalar_size)
-            self.update_layer_norms[ntype] = GVPLayerNorm(self.scalar_size)
+            self.message_layer_norms[ntype] = GVPLayerNorm(self.scalar_size, self.vector_size, affine=True)
+            self.update_layer_norms[ntype] = GVPLayerNorm(self.scalar_size, self.vector_size, affine=True)
 
         if isinstance(self.message_norm, str) and self.message_norm not in [
             "mean",
@@ -546,34 +485,11 @@ class HeteroGVPConv(nn.Module):
         # if message size is smaller than node embedding size, we need to project aggregated messages back to the node embedding size
         self.message_expansion = nn.ModuleDict()
         if self.compressed_messaging:
-            for ntype in self.node_types:
-                projection_gvps = []
-                for i in range(n_expansion_gvps):
-                    if i == 0:
-                        dim_feats_in = self.s_message_dim
-                        dim_vectors_in = self.v_message_dim
-                    else:
-                        dim_feats_in = scalar_size
-                        dim_vectors_in = vector_size
-                    dim_feats_out = scalar_size
-                    dim_vectors_out = vector_size
-
-                    projection_gvps.append(
-                        GVP(
-                            dim_vectors_in=dim_vectors_in,
-                            dim_vectors_out=dim_vectors_out,
-                            n_cp_feats=n_cp_feats,
-                            dim_feats_in=dim_feats_in,
-                            dim_feats_out=dim_feats_out,
-                            feats_activation=scalar_activation(),
-                            vectors_activation=vector_activation(),
-                            vector_gating=True,
-                        )
-                    )
-                self.message_expansion[ntype] = nn.Sequential(*projection_gvps)
+            raise NotImplementedError('compressed message passing deprecated')
         else:
             for ntype in self.node_types:
                 self.message_expansion[ntype] = nn.Identity()
+
 
     @g_local_scope
     def forward(
@@ -582,19 +498,18 @@ class HeteroGVPConv(nn.Module):
         scalar_feats: Dict[str, torch.Tensor],
         coord_feats: Dict[str, torch.Tensor],
         vec_feats: Dict[str, torch.Tensor],
+        # global_conditioning: torch.Tensor,
         edge_feats: Optional[Dict[str, torch.Tensor]] = None,
         x_diff: Optional[Dict[str, torch.Tensor]] = None,
         d: Optional[Dict[str, torch.Tensor]] = None,
         passing_edges: Optional[List[str]] = None,
+        node_batch_idxs: Optional[Dict[str, torch.Tensor]] = None,
     ):
-        # vec_feat has shape (n_nodes, n_vectors, 3)å
+        # vec_feat has shape (n_nodes, n_vectors, 3)
         for ntype in self.node_types:
             if g.num_nodes(ntype) == 0:
                 continue
-            # TODO: make sure node attributes are safe across tasks/ntypes e.g. pharm nodes have a 'v', 'x' vs 'x_0' vs 'x_1_true'
-            g.nodes[ntype].data["s"] = scalar_feats[ntype]
             g.nodes[ntype].data["x"] = coord_feats[ntype]
-            g.nodes[ntype].data["v"] = vec_feats[ntype]
 
         # edge feature
         for etype in self.edge_types:
@@ -625,29 +540,53 @@ class HeteroGVPConv(nn.Module):
                 g.edges[etype].data["d"] = _rbf(
                     dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim
                 )
+            
+        if node_batch_idxs is None:
+            print('WARNING: node_batch_idxs not provided, recomputing, this is inefficient')
+            node_batch_idxs = get_node_batch_idxs(g)
 
-        # apply node compression
+        # apply pre-message layernorm
+        s_1, v_1 = {}, {}
         for ntype in self.node_types:
             if g.num_nodes(ntype) == 0:
                 continue
-            g.nodes[ntype].data["s"], g.nodes[ntype].data["v"] = (
-                self.node_compression[ntype](
-                    (g.nodes[ntype].data["s"], g.nodes[ntype].data["v"])
-                )
+            s_1[ntype], v_1[ntype] = self.message_layer_norms[ntype](
+                (scalar_feats[ntype], vec_feats[ntype])
             )
+
+        # apply modulation to initial from global context
+        # for ntype in self.node_types:
+        #     if g.num_nodes(ntype) == 0:
+        #         continue
+        #     scale_params = adaln_params_dict[ntype]['s_msa_shift']
+        #     shift_params = adaln_params_dict[ntype]['s_msa_scale']
+        #     s_1[ntype] = modulate(
+        #         s_1[ntype], 
+        #         shift_params[node_batch_idxs[ntype]], 
+        #         scale_params[node_batch_idxs[ntype]],
+        #     )
+        #     v_scale_params = adaln_params_dict[ntype]['v_msa_scale'].unsqueeze(-1) + 1
+        #     v_1[ntype] = v_1[ntype]*v_scale_params[node_batch_idxs[ntype]]
 
         if self.use_dst_feats:
             for ntype in self.node_types:
                 (
-                    g.nodes[ntype].data["s_dst_msg"],
-                    g.nodes[ntype].data["v_dst_msg"],
+                    s_1[ntype],
+                    v_1[ntype],
                 ) = self.dst_feat_msg_projection[ntype](
-                    (g.nodes[ntype].data["s"], g.nodes[ntype].data["v"])
+                    (s_1[ntype], v_1[ntype])
                 )
 
         # compute messages on passing_edges etypes or all
         if not passing_edges:
             passing_edges = self.edge_types
+
+        # get s,v on every node type so they can be used in message passing
+        for ntype in self.node_types:
+            if g.num_nodes(ntype) == 0:
+                continue
+            g.nodes[ntype].data["s"] = s_1[ntype]
+            g.nodes[ntype].data["v"] = v_1[ntype]
 
         for etype in passing_edges:
             if etype not in g.etypes or g.num_edges(etype) == 0:
@@ -664,20 +603,7 @@ class HeteroGVPConv(nn.Module):
         for etype in passing_edges:
             if etype not in g.etypes or g.num_edges(etype) == 0:
                 continue
-            """
-            g.update_all(
-                fn.copy_e("scalar_msg", "m"),
-                self.agg_func("m", "scalar_msg"),
-                etype=etype,
-            )
-            g.update_all(
-                fn.copy_e("vec_msg", "m"),
-                self.agg_func("m", "vec_msg"),
-                etype=etype,
-            )
-            """
-            
-            
+    
             scalar_agg_fns[etype] = (
                 fn.copy_e("scalar_msg", "m"),
                 self.agg_func("m", "scalar_msg"),
@@ -696,46 +622,74 @@ class HeteroGVPConv(nn.Module):
         else:
             z = self.message_norm
 
-        updated_scalar_feats = {}
-        updated_vec_feats = {}
+        s_2, v_2 = {}, {}
         for ntype in self.node_types:
             if g.num_nodes(ntype) == 0:
                 continue
+
+            # get all the parameters we'll need for adaln and gating from the dict
+            # adaln_params = adaln_params_dict[ntype]
+
+            # get aggregated scalar/vec messages
             scalar_msg = g.nodes[ntype].data["scalar_msg"] / z
             vec_msg = g.nodes[ntype].data["vec_msg"] / z
-
-            # apply projection (expansion) to aggregated messages
-            scalar_msg, vec_msg = self.message_expansion[ntype](
-                (scalar_msg, vec_msg)
-            )
 
             # dropout scalar and vector messages
             scalar_msg, vec_msg = self.dropout_layers[ntype](scalar_msg, vec_msg)
 
-            # update scalar and vector features, apply layernorm
-            scalar_feat = g.nodes[ntype].data["s"] + scalar_msg
-            vec_feat = g.nodes[ntype].data["v"] + vec_msg
-            scalar_feat, vec_feat = self.message_layer_norms[ntype](
-                (scalar_feat, vec_feat)
-            )
+            # obtain learned message norm and apply
+            # s_msg_norm = adaln_params['s_msg_norm'][node_batch_idxs[ntype]] + 1
+            # v_msg_norm = adaln_params['v_msg_norm'][node_batch_idxs[ntype]].unsqueeze(-1) + 1
+            s_1[ntype] = s_1[ntype] + scalar_msg
+            v_1[ntype] = v_1[ntype] + vec_msg
 
-            # apply node update function, apply dropout to residuals, apply layernorm
-            scalar_residual, vec_residual = self.node_update_fns[ntype](
-                (scalar_feat, vec_feat)
-            )
-            scalar_residual, vec_residual = self.dropout_layers[ntype](
-                scalar_residual, vec_residual
-            )
-            scalar_feat = scalar_feat + scalar_residual
-            vec_feat = vec_feat + vec_residual
-            scalar_feat, vec_feat = self.update_layer_norms[ntype](
-                (scalar_feat, vec_feat)
-            )
 
-            updated_scalar_feats[ntype] = scalar_feat
-            updated_vec_feats[ntype] = vec_feat
+            # apply global-context gating to s_1, v_1
+            # TODO: shouldn't use same gating for scalar and vecs
+            # s_gate_msa = adaln_params['s_msa_gate'][node_batch_idxs[ntype]]
+            # v_gate_msa = adaln_params['v_msa_gate'][node_batch_idxs[ntype]].unsqueeze(-1)
+            # s_1[ntype] = s_1[ntype] * s_gate_msa
+            # v_1[ntype] = v_1[ntype] * v_gate_msa
 
-        return updated_scalar_feats, updated_vec_feats
+
+            # apply residual connection to s_1, v_1
+            s_1[ntype] = s_1[ntype] + scalar_feats[ntype]
+            v_1[ntype] = v_1[ntype] + vec_feats[ntype]
+
+            # apply layer norm to s_1, v_1 - this forms s_2, v_2 because we will res-connect s_1 into s_2 later
+            s_2[ntype], v_2[ntype] = self.update_layer_norms[ntype]((s_1[ntype], v_1[ntype]))
+
+            # apply adaln modulation for global context on s_2
+            # TODO: need separate scale parameters for vector features!
+            # s_ff_shift = adaln_params['s_ff_shift'][node_batch_idxs[ntype]]
+            # s_ff_scale = adaln_params['s_ff_scale'][node_batch_idxs[ntype]]
+            # v_ff_scale = adaln_params['v_ff_scale'][node_batch_idxs[ntype]].unsqueeze(-1) + 1
+            # s_2[ntype] = modulate(
+            #     s_2[ntype], 
+            #     s_ff_shift, 
+            #     s_ff_scale,
+            # )
+            # v_2[ntype] = v_2[ntype]*v_ff_scale
+
+            # apply gvp node update
+            s_2[ntype], v_2[ntype] = self.node_update_fns[ntype]((s_2[ntype], v_2[ntype]))
+
+            # apply adaln gate for global context
+            # TODO: need separate gate parameters for vector features! and node type?
+            # s_ff_gate = adaln_params['s_ff_gate'][node_batch_idxs[ntype]]
+            # v_ff_gate = adaln_params['v_ff_gate'][node_batch_idxs[ntype]].unsqueeze(-1)
+            # s_2[ntype] = s_2[ntype] * s_ff_gate
+            # v_2[ntype] = v_2[ntype] * v_ff_gate
+
+            # res connection to form final output
+            s_2[ntype] = s_2[ntype] + s_1[ntype]
+            v_2[ntype] = v_2[ntype] + v_1[ntype]
+
+            # TODO: outputs are not layernormed anymore,
+            # and therefore, may have unstable magnitudes,
+            # so we may add input-layernorms to our position and edge update layers (at the level of vectorfield)
+
+        return s_2, v_2
 
     def compute_att_weights_crosstype(self, g: dgl.DGLHeteroGraph, passing_edges: List[str]):
 
@@ -855,3 +809,4 @@ class HeteroGVPConv(nn.Module):
         )
 
         return {"scalar_msg": scalar_message, "vec_msg": vector_message}
+
