@@ -72,7 +72,7 @@ class QKNormMultiheadAttention(nn.Module):
         v = self._shape(v, B, L)  # (B, nH, L, dH)
 
         # QK-normalization
-        # q, k = self.qk_norm(q, k, c)
+        q, k = self.qk_norm(q, k, c)
 
         # Convert key_padding_mask -> an additive attn_mask if present
         # F.scaled_dot_product_attention supports attn_mask (broadcasted) and no key_padding_mask,
@@ -96,7 +96,7 @@ class QKNormMultiheadAttention(nn.Module):
             attn_mask=attn_mask,
             dropout_p=self.dropout if self.training else 0.0,
             is_causal=False,
-            # scale=1.0,
+            scale=1.0,
         )  # (B, nH, L, dH)
 
         # back to (B, L, D)
