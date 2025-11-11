@@ -96,7 +96,7 @@ class QKNormMultiheadAttention(nn.Module):
             attn_mask=attn_mask,
             dropout_p=self.dropout if self.training else 0.0,
             is_causal=False,
-            scale=1.0,
+            # scale=1.0,
         )  # (B, nH, L, dH)
 
         # back to (B, L, D)
