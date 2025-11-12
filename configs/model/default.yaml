@@ -16,4 +16,4 @@ train_t_dist: uniform
 t_alpha: 1.8
 cat_loss_weight: 1.0
 time_scaled_loss: False
-pharm_var: 0.0
+pharm_pos_std: ${pharm_pos_std}
