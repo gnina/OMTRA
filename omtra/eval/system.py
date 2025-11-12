@@ -785,6 +785,7 @@ class SampledSystem:
         trajectory: bool = False, 
         endpoint: bool = False,
         ground_truth: bool = False,
+        return_content: bool = False,
         g=None):
 
         output_file = Path(output_file)
@@ -799,6 +800,8 @@ class SampledSystem:
             pharms = [self.get_pharmacophore_from_graph(g=g, kind=kind, xyz=True)]
 
         xyz_content =''.join(pharms)
+        if return_content:
+            return xyz_content
         with open(output_file, 'w') as f:
             f.write(xyz_content)
 
