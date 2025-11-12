@@ -78,7 +78,7 @@ class OMTRA(pl.LightningModule):
         t_alpha: float = 1.8,
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
-        pharm_var: float = 0.0,
+        pharm_pos_std: float = 0.0,
 
     ):
         super().__init__()
@@ -100,7 +100,7 @@ class OMTRA(pl.LightningModule):
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
-        self.pharm_var = pharm_var
+        self.pharm_pos_std = pharm_pos_std
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -399,8 +399,23 @@ class OMTRA(pl.LightningModule):
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
         
         # add noise to pharmacophore coordinates
-        if self.pharm_var > 0.0:
-            g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**0.5
+        has_pharmacophores = "pharmacophore" in task_class.groups_present
+        has_non_zero_pharms = g.num_nodes("pharm") > 0
+        if has_pharmacophores and has_non_zero_pharms and self.pharm_pos_std > 0.0:
+            x = g.nodes["pharm"].data['x_1_true'] #ground truth positions
+            
+            # sample sigma (st dev) from uniform(0, pharm_pos_std)
+            sigma_scalar = torch.rand(x.shape[0], 1, device=x.device) * self.pharm_pos_std
+            sigma = sigma_scalar.expand_as(x) # expand to all dim of x (3 coords)
+
+            #sample episilon from normal(0, sigma)
+            eps = torch.randn_like(x) * sigma #noise at each position
+
+            #add this noise to the true pharmacophore positions
+            g.nodes["pharm"].data['x_1_true'] = x + eps
+
+            #store the variance used for each pharmacophore
+            g.nodes["pharm"].data['pharm_pos_std'] = sigma_scalar #(num_nodes,1)
 
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
@@ -594,6 +609,7 @@ class OMTRA(pl.LightningModule):
         eps: float = 0.01,
         # use_gt_n_lig_atoms: bool = False,
         n_lig_atom_margin: Union[float, None] = None,
+        pharm_pos_std: Optional[torch.Tensor] = None, #std deviation for noise to be added to pharm positions
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
@@ -853,6 +869,18 @@ class OMTRA(pl.LightningModule):
         itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing, stochastic_sampling=stochastic_sampling, noise_scaler=noise_scaler, eps=eps)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
+
+        # Set pharmacophore std for sampling
+        if 'pharm' in g.ntypes and g.num_nodes('pharm') > 0:
+            if pharm_pos_std is None:
+                #Default to zeros
+                g.nodes['pharm'].data['pharm_pos_std'] = torch.zeros(
+                    g.num_nodes('pharm'), 1, device=device
+                )
+            else:
+                #Use the provided standard deviation
+                g.nodes['pharm'].data['pharm_pos_std'] = pharm_pos_std
+
 
         # pass graph to vector field..
         itg_result = self.vector_field.integrate(
