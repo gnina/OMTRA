@@ -633,7 +633,7 @@ class VectorField(nn.Module):
 
                     # recompute x_diff and d for the updated node positions
                     for canonical_etype in g.canonical_etypes:
-                        if g.num_edges(canonical_etype) != 0:
+                        if g.num_edges(canonical_etype) == 0:
                             continue
                         src_ntype, etype, dst_ntype = canonical_etype
                         edges_need_update = src_ntype in ntypes_updated or dst_ntype in ntypes_updated

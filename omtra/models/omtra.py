@@ -341,7 +341,14 @@ class OMTRA(pl.LightningModule):
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device, coms=coms)
+        samples = self.sample(
+            task_name, 
+            g_list=g_list, 
+            n_replicates=n_replicates, 
+            n_timesteps=200, 
+            n_lig_atom_margin=0.1,
+            device=device, 
+            coms=coms)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         if not self.eval_config:
@@ -628,7 +635,10 @@ class OMTRA(pl.LightningModule):
         if unconditional_n_atoms_dist is None:
             unconditional_n_atoms_dist = self.infer_n_atoms_dist(task)
 
+        # TODO: if the task is unconditional, no 
         use_gt_n_lig_atoms = n_lig_atom_margin is not None
+        graphs_with_ligs = g_list is not None and all(g.num_nodes("lig") > 0 for g in g_list)
+        use_gt_n_lig_atoms = use_gt_n_lig_atoms and graphs_with_ligs
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
