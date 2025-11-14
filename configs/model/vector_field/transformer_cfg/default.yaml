@@ -2,7 +2,7 @@ _target_: omtra.models.transformer.TransformerWrapper
 
 n_layers: 4
 n_heads: 8
-dim_ff: 1024
+dim_ff: null # defaults to 4x n_scalar_features
 use_residual: true
 dropout: 0.1
 use_qk_norm: true
