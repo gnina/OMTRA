@@ -91,6 +91,7 @@ class QKNormMultiheadAttention(nn.Module):
                 attn_mask = attn_mask + pad_mask
 
         # scaled_dot_product_attention expects (B, nH, L, dH)
+        # TODO: is attn_mask correct? I think we want it to be boolean always.
         attn_output = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=attn_mask,
@@ -106,7 +107,7 @@ class QKNormMultiheadAttention(nn.Module):
         return attn_output
     
 
-class QKNormTransformerEncoderLayer(nn.Module):
+class DiTLayer(nn.Module):
     def __init__(
         self,
         d_model,

@@ -12,7 +12,7 @@ from omtra.utils.graph import g_local_scope
 from omtra.models.gvp import _rbf
 
 from omtra.models.layers import Mlp
-from omtra.models.dit import QKNormTransformerEncoderLayer
+from omtra.models.dit import DiTLayer
 
 
 class AttentionPairBias(nn.Module):
@@ -307,7 +307,7 @@ class TransformerWrapper(nn.Module):
         # Add standard TransformerEncoderLayers
         for _ in range(n_layers):
             if use_qk_norm:
-                layer = QKNormTransformerEncoderLayer(
+                layer = DiTLayer(
                     d_model=self.d_model,
                     n_heads=n_heads,
                     dropout=dropout,
