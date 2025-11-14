@@ -5,3 +5,4 @@ n_heads: 8
 dim_ff: 1024
 use_residual: true
 dropout: 0.1
+use_qk_norm: true
