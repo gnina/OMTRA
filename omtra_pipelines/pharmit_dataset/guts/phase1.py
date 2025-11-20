@@ -140,7 +140,8 @@ class NameFinder(PharmitDBConnector):
         names = []
         failed_idxs = []
         for i, smile in enumerate(smiles_list):
-            if smiles_to_names[smile] is None:
+            if len(smiles_to_names[smile]) == 0:
+                # if a molecule has no names associated with it, it means it is a user-contributed molecule
                 failed_idxs.append(i)
                 names.append(None)
             else:
