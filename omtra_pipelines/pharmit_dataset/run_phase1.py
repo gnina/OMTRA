@@ -52,7 +52,7 @@ def parse_args():
     p.add_argument('--register_write_interval', type=int, default=10, help='Interval for recording processed chunks.')
 
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
-    p.add_argument('--n_chunks', type=int, default=10, help='Number of to process. If None, process all. This is only for testing purposes.') # set to small 
+    p.add_argument('--n_chunks', type=int, default=None, help='Number of to process. If None, process all. This is only for testing purposes.') # set to small 
     p.add_argument('--dev', action='store_true', help='Run in development mode.')   # use 
 
     args = p.parse_args()

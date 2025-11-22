@@ -8,7 +8,7 @@ autossh -M 20000 -f -N -R 2222:localhost:22 jabba
 
 ## running phase 1:
 ```console
-python run_phase1.py --batch_size=5000 --n_cpus=16
+python run_phase1.py --batch_size=50000 --n_cpus=24 --overwrite 2>&1 | tee -a output.log
 ```
 
 `2>&1 | tee -a output.log`
