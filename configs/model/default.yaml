@@ -25,3 +25,8 @@ scheduler_config:
   type: cosine_decay
   min_lr_factor: 0.1  # Optional, defaults to 0.1 (1
 
+
+scheduler_config:
+  type: cosine_decay
+  min_lr_factor: 0.1  # Optional, defaults to 0.1 (1
+
