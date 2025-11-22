@@ -245,6 +245,7 @@ class VectorField(nn.Module):
                 continue
             self.pre_edge_embedders[etype] = EdgeUpdate(
                 n_hidden_scalars,
+                self.n_vec_channels,
                 n_hidden_edge_feats,
                 rbf_dim=rbf_dim,
             )
@@ -285,6 +286,7 @@ class VectorField(nn.Module):
                 continue
             self.edge_updaters[etype] = EdgeUpdate(
                         n_hidden_scalars,
+                        self.n_vec_channels,
                         n_hidden_edge_feats,
                         rbf_dim=rbf_dim,
                     )
@@ -626,6 +628,7 @@ class VectorField(nn.Module):
             edge_features[etype] = self.pre_edge_embedders[etype](
                 g,
                 node_scalar_features,
+                node_vec_features,
                 edge_features[etype],
                 d=d[etype],
                 etype=etype,
@@ -687,6 +690,7 @@ class VectorField(nn.Module):
             edge_features[etype] = self.edge_updaters[etype](
                 g,
                 node_scalar_features,
+                node_vec_features,
                 edge_features[etype],
                 d=d[etype],
                 etype=etype,
