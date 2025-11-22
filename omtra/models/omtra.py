@@ -14,6 +14,7 @@ from pathlib import Path
 import hydra
 import os
 import functools
+import math
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
@@ -80,6 +81,7 @@ class OMTRA(pl.LightningModule):
         time_scaled_loss: bool = False,
         pharm_var: float = 0.0,
         lr_warmup_steps: int = 0,  # NEW: number of linear warmup steps (0 disables warmup)
+        scheduler_config: Optional[DictConfig] = None,
     ):
         super().__init__()
 
@@ -102,6 +104,7 @@ class OMTRA(pl.LightningModule):
         self.cat_loss_weight = cat_loss_weight
         self.pharm_var = pharm_var
         self.lr_warmup_steps = lr_warmup_steps
+        self.scheduler_config = scheduler_config
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -519,6 +522,38 @@ class OMTRA(pl.LightningModule):
         optimizer = hydra.utils.instantiate(
             self.optimizer_cfg, params=self.parameters()
         )
+
+        if self.scheduler_config is not None and self.scheduler_config.get("type") == "cosine_decay":
+            warmup_steps = self.lr_warmup_steps
+            min_lr_factor = self.scheduler_config.get("min_lr_factor", 0.1)
+            total_steps = self.trainer.estimated_stepping_batches
+
+            def lr_lambda(current_step: int):
+                if current_step < warmup_steps:
+                    return float(current_step + 1) / float(warmup_steps)
+                
+                if total_steps is None or total_steps <= warmup_steps:
+                    return 1.0
+                
+                step_since_warmup = current_step - warmup_steps
+                steps_after_warmup = total_steps - warmup_steps
+                
+                progress = float(step_since_warmup) / float(steps_after_warmup)
+                progress = min(1.0, max(0.0, progress))
+                
+                return min_lr_factor + (1.0 - min_lr_factor) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "step",
+                    "frequency": 1,
+                    "name": "cosine_decay_warmup",
+                },
+            }
+
         # Linear LR warmup
         if self.lr_warmup_steps and self.lr_warmup_steps > 0:
             def lr_lambda(current_step: int):

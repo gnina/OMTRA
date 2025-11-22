@@ -18,3 +18,8 @@ cat_loss_weight: 1.0
 time_scaled_loss: False
 pharm_var: 0.0
 lr_warmup_steps: 5000
+
+
+scheduler_config:
+  type: cosine_decay
+  min_lr_factor: 0.1  # Optional, defaults to 0.1 (1
