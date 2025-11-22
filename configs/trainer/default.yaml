@@ -6,3 +6,5 @@ max_steps: ${max_steps}
 enable_checkpointing: false
 limit_val_batches: 2 # how many batches to use for validation
 val_check_interval: 600 # after how many training steps do we do a validation step
+accumulate_grad_batches: 4
+gradient_clip_val: 1.0

@@ -1258,12 +1258,13 @@ class EdgeUpdate(nn.Module):
     def __init__(
         self,
         n_node_scalars,
+        n_vec_channels,
         n_edge_feats,
         rbf_dim=16,
     ):
         super().__init__()
 
-        input_dim = n_node_scalars * 2 + n_edge_feats + rbf_dim
+        input_dim = n_node_scalars * 2 + n_vec_channels*2*3 + n_edge_feats + rbf_dim
 
         self.edge_update_fn = nn.Sequential(
             # nn.LayerNorm(input_dim),
@@ -1274,14 +1275,23 @@ class EdgeUpdate(nn.Module):
         )
         self.edge_norm = nn.LayerNorm(n_edge_feats)
 
-    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, etype):
+    def forward(self, g: dgl.DGLGraph, node_scalars, node_vecs, edge_feats, d, etype):
         src_ntype, _, dst_ntype = to_canonical_etype(etype)
         # get indicies of source and destination nodes
         src_idxs, dst_idxs = g.edges(etype=etype)
 
+        src_node_vecs = node_vecs[src_ntype][src_idxs]
+        dst_node_vecs = node_vecs[dst_ntype][dst_idxs]
+
+        # flatten last 2 dims of node vecs
+        src_node_vecs = src_node_vecs.view(src_node_vecs.shape[0], -1)
+        dst_node_vecs = dst_node_vecs.view(dst_node_vecs.shape[0], -1)
+
         mlp_inputs = [
             node_scalars[src_ntype][src_idxs],
             node_scalars[dst_ntype][dst_idxs],
+            src_node_vecs,
+            dst_node_vecs,
             edge_feats,
             d
         ]
