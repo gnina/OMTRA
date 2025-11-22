@@ -47,7 +47,7 @@ def parse_args():
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
     p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
     p.add_argument('--max_num_atoms', type=int, default=120, help='Maximum number of atoms in a molecule.')
-    p.add_argument('--min_num_atoms', type=int, default=4, help='Minimum number of atoms in a molecule.')
+    p.add_argument('--min_num_atoms', type=int, default=6, help='Minimum number of atoms in a molecule.')
     p.add_argument('--chunk_offload_threshold', type=int, default=2000, help='Threshold for offloading chunks to disk, in MB.')
     p.add_argument('--register_write_interval', type=int, default=10, help='Interval for recording processed chunks.')
 
@@ -147,11 +147,11 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         
     # Save tensors in dictionary
     tensors = {
-        'positions': [m.positions for m in xace_mols], 
-        'atom_types': [m.atom_types for m in xace_mols], 
-        'atom_charges': [m.atom_charges for m in xace_mols], 
-        'bond_types': [m.bond_types for m in xace_mols], 
-        'bond_idxs': [m.bond_idxs for m in xace_mols], 
+        'positions': [m.x for m in xace_mols], 
+        'atom_types': [m.a for m in xace_mols], 
+        'atom_charges': [m.c for m in xace_mols], 
+        'bond_types': [m.e for m in xace_mols], 
+        'bond_idxs': [m.edge_idxs for m in xace_mols], 
         'x_pharm': x_pharm, 
         'a_pharm': a_pharm, 
         'v_pharm': v_pharm,

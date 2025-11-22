@@ -497,7 +497,7 @@ class ChunkSaver():
             'pharm_a': a_pharm,
             'pharm_v': v_pharm,
             'pharm_lookup': pharm_node_lookup,
-            'database': databases
+            'database': db
         }
 
         # Convert data types

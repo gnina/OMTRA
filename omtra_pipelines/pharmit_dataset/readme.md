@@ -6,6 +6,13 @@ To be able to shuttle things from jabba to masuda we have to setup a reverse tun
 autossh -M 20000 -f -N -R 2222:localhost:22 jabba
 ```
 
+## running phase 1:
+```console
+python run_phase1.py --batch_size=5000 --n_cpus=16
+```
+
+`2>&1 | tee -a output.log`
+
 ## running phase 2:
 
 ```console
