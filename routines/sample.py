@@ -131,8 +131,8 @@ def parse_args():
     p.add_argument(
         '--n_lig_atom_margin',
         type=float,
-        default=15,
-        help='number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set (default: 0.15, i.e. +/- 15%)'
+        default=0.075,
+        help='number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set (default: 0.075, i.e. +/- 7.5%)'
     )
     p.add_argument('--split', type=str, default='val', help='Which data split to use')
 

@@ -4,32 +4,38 @@ A multi-task generative model for small-molecule structure-based drug design.
 
 # Building the Environment
 
-For now:
+We recommend building the envornment using pip inside of a virtual environment. Our recommended procedure is:
+
+## Create conda/mamba environment
+
+```bash
+# Example using conda
+conda create -n omtra python=3.11
+conda activate omtra
+```
+
+## run the build script:
+
 ```bash
 git clone https://github.com/gnina/OMTRA.git
 cd OMTRA
-mamba create -n omtra python=3.11
-mamba activate omtra
 chmod +x build_env.sh
 ./build_env.sh
 ```
 
+This script installs the CUDA-enabled versions of PyTorch, DGL, and PyG, and then installs the OMTRA package and its dependencies.
+
+### or just do manual installation (alternative to build script)
+
 ```bash
-git clone https://github.com/gnina/OMTRA.git
-cd OMTRA
-mamba create -n environment,yml
-mamba activate omtra
-pip install -e ,.
+pip install uv
+
+# 1. Install CUDA dependencies
+uv pip install -r requirements-cuda.txt
+
+# 2. Install OMTRA
+uv pip install -e .
 ```
-
-# TODO:
-- [ ] filter private library pharmit compounds
-- [ ] harmonic prior
-- [ ] test resume functionality
-- [ ] add shape-color similarity for docking evaluation
-- [ ] use sc-rdkit for denovo evals: https://github.com/oxpig/DeLinker/blob/master/analysis/calc_SC_RDKit.py
-- [ ] add vpa: https://arxiv.org/abs/2403.04747
-
 
 # Essetial things
 
