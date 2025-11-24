@@ -420,7 +420,12 @@ class HeteroGVPConv(nn.Module):
         #         self.edge_feat_projector[etype] = nn.Identity()
 
         # Single edge feature projector for all edge types with consistent output dimension
-        self.edge_feat_projector = None #set in the message method
+        #keep edge feature projector here
+        in_dim = list(self.edge_feat_size.values())[0]
+        out_dim = self.scalar_size + self.rbf_dim
+        if self.use_dst_feats:
+            out_dim += self.scalar_size
+        self.edge_feat_projector = nn.Linear(in_dim, out_dim)
 
         self.edge_message_fns = nn.ModuleDict()
         
@@ -434,8 +439,9 @@ class HeteroGVPConv(nn.Module):
                 if i == 0:
                     dim_vectors_in += 1
                     # use max edge feature size across all edge types + edge projector?
-                    max_edge_feat_size = max(self.edge_feat_size.values(), default=0)
-                    dim_feats_in += rbf_dim + max_edge_feat_size
+                    #max_edge_feat_size = max(self.edge_feat_size.values(), default=0)
+                    dim_feats_in += rbf_dim
+                    print("Edge feature size for etype init", etype, self.edge_feat_size.get(etype, 0))
                     print("dim_feats_in for first message gvp:", dim_feats_in) 
                 else:
                     # if not first layer, input size is the output size of the previous layer
@@ -838,8 +844,6 @@ class HeteroGVPConv(nn.Module):
         vec_feats = torch.cat(vec_feats, dim=1)
 
         # create scalar features (output dim of the edge feat projector = scalar_feats + rbf_dim + (if the self.use_dst_feats) scalar_fears)
-        print("Edges src scalar shape", edges.src["s"].shape)
-        print("Edges data d shape", edges.data["d"].shape)
         scalar_feats = [edges.src["s"], edges.data["d"]]
 
         if self.use_dst_feats:
@@ -849,20 +853,10 @@ class HeteroGVPConv(nn.Module):
 
         # construct edge feature projector
         scalar_feats_dim = scalar_feats.size(1)
-        print("Scalar feats shape before edge projector", scalar_feats.shape)
 
         if self.edge_feat_size.get(etype, 0) > 0:
-            # set up edge feature projector with consistent output size
-            output_dim_edge_projector = self.rbf_dim + scalar_feats_dim
-            print("Output dim of edge projector", output_dim_edge_projector)
-            self.edge_feat_projector = nn.Sequential(
-                nn.Linear(self.edge_feat_size[etype], output_dim_edge_projector),
-            ).to(edges.data["ef"].device)
-            
-            #project edge features
-            projected_edge_feats = self.edge_feat_projector(edges.data["ef"])
-            scalar_feats = torch.cat([scalar_feats, projected_edge_feats], dim=1)
-        print("Scalar feats shape after edge projector", scalar_feats.shape)
+            scalar_feats = scalar_feats + self.edge_feat_projector(edges.data["ef"])
+
         scalar_message, vector_message = self.edge_message_fns[etype](
             (scalar_feats, vec_feats)
         )
