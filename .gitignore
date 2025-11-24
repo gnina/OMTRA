@@ -198,3 +198,17 @@ cython_debug/
 
 # Hydra outputs
 outputs/**
+
+# Multitask classifier outputs
+tuning_experiments/logs/
+tuning_experiments/final_models/
+tuning_experiments/archive/
+tuning_experiments/.claude/
+notebooks/multitask_cache/
+notebooks/logs/
+
+# Chemical space classifier outputs
+chem_space_classifier/logs/
+chem_space_classifier/final_models/
+chem_space_classifier/archive/
+chem_space_classifier/.claude/
