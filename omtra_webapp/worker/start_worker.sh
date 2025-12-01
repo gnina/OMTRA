@@ -1,8 +1,10 @@
 #!/bin/bash
+set -euo pipefail
 
-# Install webapp dependencies if not already installed
-echo "Installing webapp dependencies..."
-python -m pip install redis rq python-dotenv pyyaml hydra-core omegaconf pandas requests aiofiles pydantic
+if [ -d "/omtra" ]; then
+    export PYTHONPATH="/omtra:${PYTHONPATH:-}"
+    echo "Added /omtra to PYTHONPATH for development mode"
+fi
 
 # Start the worker
 echo "Starting OMTRA worker..."

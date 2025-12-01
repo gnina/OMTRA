@@ -7,6 +7,7 @@ pandas>=1.5.0
 requests>=2.28.0
 aiofiles>=23.0.0
 pydantic>=2.0.0
+natsort>=8.0.0
 
 # OMTRA model dependencies (installed separately in Docker)
 # torch, torch-geometric, rdkit, etc. are installed via the main OMTRA environment

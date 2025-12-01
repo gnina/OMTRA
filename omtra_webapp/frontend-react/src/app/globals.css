@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 3Dmol viewer container styles - ensure canvas fills container */
+.three-d-viewer-container canvas {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+:root {
+  --page-bg: #f8fafc;
+  --page-gradient: radial-gradient(circle at top, rgba(224, 242, 254, 0.4), transparent 50%);
+}
+
+body {
+  color: #0f172a;
+  background-color: var(--page-bg);
+  background-image: var(--page-gradient);
+  min-height: 100vh;
+  font-feature-settings:
+    'liga' 1,
+    'calt' 1,
+    'tnum' 1;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer components {
+  .surface-card {
+    @apply rounded-3xl border border-slate-100 bg-white/95 shadow-[0_15px_40px_rgba(15,23,42,0.08)];
+    backdrop-filter: blur(12px);
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+

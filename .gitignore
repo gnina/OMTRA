@@ -200,3 +200,8 @@ cython_debug/
 # Hydra outputs
 outputs/**
 omtra_webapp/models/
+
+# Node.js dependencies
+node_modules/
+**/node_modules/
+

@@ -45,3 +45,6 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["omtra*", "omtra_pipelines*"]
+
+[project.scripts]
+omtra = "cli:main"

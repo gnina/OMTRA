@@ -1,9 +1,0 @@
-streamlit==1.28.2
-requests==2.31.0
-pandas==2.1.4
-py3Dmol==2.0.4
-plotly==5.17.0
-stmol==0.0.9
-pillow==10.1.0
-aiofiles==23.2.0
-ipython-genutils==0.2.0

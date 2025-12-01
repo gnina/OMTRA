@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, model_validator
 from typing import List, Optional, Dict, Any, Union
 from enum import Enum
 import hashlib
@@ -16,18 +16,30 @@ class JobStatus(str, Enum):
 
 class SamplingParams(BaseModel):
     """Parameters for molecule sampling"""
-    sampling_mode: str = Field(default="Unconditional", description="Sampling mode: Unconditional, Pharmacophore-conditioned, or Protein-conditioned")
+    sampling_mode: str = Field(default="Unconditional", description="Sampling mode: Unconditional, Pharmacophore-conditioned, Protein-conditioned, or Protein+Pharmacophore-conditioned")
     seed: Optional[int] = Field(default=None, description="Random seed for reproducibility")
     n_samples: int = Field(default=10, ge=1, le=100, description="Number of samples to generate")
     steps: int = Field(default=100, ge=10, le=1000, description="Number of sampling steps")
     device: Optional[str] = Field(default="cuda", description="Device to run on")
+    n_lig_atoms_mean: Optional[float] = Field(default=None, ge=4, description="Mean number of atoms for ligand samples (if provided, uses normal distribution instead of dataset distribution)")
+    n_lig_atoms_std: Optional[float] = Field(default=None, ge=0.1, description="Standard deviation for number of atoms (required if n_lig_atoms_mean is provided)")
     
     @validator('sampling_mode')
     def validate_sampling_mode(cls, v):
-        valid_modes = ["Unconditional", "Pharmacophore-conditioned", "Protein-conditioned"]
+        valid_modes = ["Unconditional", "Pharmacophore-conditioned", "Protein-conditioned", "Protein+Pharmacophore-conditioned"]
         if v not in valid_modes:
             raise ValueError(f"sampling_mode must be one of {valid_modes}")
         return v
+    
+    @model_validator(mode='after')
+    def validate_atoms_params(self):
+        n_lig_atoms_mean = self.n_lig_atoms_mean
+        n_lig_atoms_std = self.n_lig_atoms_std
+        if n_lig_atoms_mean is not None and n_lig_atoms_std is None:
+            raise ValueError("n_lig_atoms_std is required when n_lig_atoms_mean is provided")
+        if n_lig_atoms_mean is None and n_lig_atoms_std is not None:
+            raise ValueError("n_lig_atoms_mean is required when n_lig_atoms_std is provided")
+        return self
 
 
 class UploadInfo(BaseModel):
@@ -108,43 +120,3 @@ def generate_upload_token() -> str:
     return str(uuid.uuid4())
 
 
-def calculate_file_hash(content: bytes) -> str:
-    """Calculate SHA256 hash of file content"""
-    return hashlib.sha256(content).hexdigest()
-
-
-def validate_filename(filename: str) -> str:
-    """Sanitize and validate filename"""
-    import os
-    import re
-    
-    # Remove path components
-    filename = os.path.basename(filename)
-    
-    # Replace dangerous characters
-    filename = re.sub(r'[^\w\-_\.]', '_', filename)
-    
-    # Ensure it doesn't start with a dot
-    if filename.startswith('.'):
-        filename = 'file_' + filename
-        
-    # Truncate if too long
-    if len(filename) > 100:
-        name, ext = os.path.splitext(filename)
-        filename = name[:96] + ext
-        
-    return filename
-
-
-def validate_file_extension(filename: str, allowed_extensions: List[str]) -> bool:
-    """Validate file extension"""
-    import os
-    ext = os.path.splitext(filename)[1].lower()
-    return ext in [e.lower() for e in allowed_extensions]
-
-
-def get_mime_type(filename: str) -> str:
-    """Get MIME type for a filename"""
-    import mimetypes
-    mime_type, _ = mimetypes.guess_type(filename)
-    return mime_type or "application/octet-stream"

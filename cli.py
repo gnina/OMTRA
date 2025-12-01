@@ -15,9 +15,10 @@ def create_parser():
     
     # sampling args
     parser.add_argument(
-        "checkpoint",
+        "--checkpoint",
         type=Path,
-        help="Path to the model checkpoint (required)"
+        default=None,
+        help="Path to the model checkpoint (inferred from --task if not provided)"
     )
     parser.add_argument(
         "--task",
@@ -110,8 +111,20 @@ def create_parser():
     parser.add_argument(
         '--n_lig_atom_margin',
         type=float,
-        default=15,
+        default=0.15,
         help='number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set (default: 0.15, i.e. +/- 15 percent)'
+    )
+    parser.add_argument(
+        '--n_lig_atoms_mean',
+        type=float,
+        default=None,
+        help='Mean number of atoms for ligand samples (if provided with --n_lig_atoms_std, uses normal distribution instead of dataset distribution)'
+    )
+    parser.add_argument(
+        '--n_lig_atoms_std',
+        type=float,
+        default=None,
+        help='Standard deviation for number of atoms (required if --n_lig_atoms_mean is provided)'
     )
     parser.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
 
@@ -186,8 +199,22 @@ def run_sample(args):
     from routines.sample import main as sample_main
     import torch
     from omtra.tasks.register import task_name_to_class
+    from omtra.utils.checkpoints import get_checkpoint_path_for_task, TASK_TO_CHECKPOINT
     
     task = task_name_to_class(args.task)
+    
+    if args.checkpoint is None:
+        checkpoint_dir = Path("./checkpoints")
+        checkpoint_path = get_checkpoint_path_for_task(
+            args.task,
+            checkpoint_dir=checkpoint_dir
+        )
+        if checkpoint_path is None:
+            expected_ckpt = TASK_TO_CHECKPOINT.get(args.task, "unknown")
+            print(f"Error: No checkpoint found for task '{args.task}'")
+            print(f"expected checkpoint: {expected_ckpt} at {checkpoint_dir.absolute()}")
+            sys.exit(1)
+        args.checkpoint = checkpoint_path
     
     has_protein, has_ligand, has_pharmacophore = _check_available_files(args)
     
@@ -217,7 +244,6 @@ def run_sample(args):
         args.g_list_from_files = g_list
     
     if hasattr(args, 'checkpoint') and args.checkpoint:
-        from pathlib import Path
         args.checkpoint = Path(args.checkpoint)
     
     sample_main(args)
