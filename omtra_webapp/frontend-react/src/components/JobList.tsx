@@ -129,8 +129,8 @@ export function JobList({ onJobSelect }: JobListProps) {
               <div className="flex items-center justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-2">
-                    <span className="font-mono text-sm font-semibold text-slate-900">
-                      {job.job_id.substring(0, 12)}...
+                    <span className="font-mono text-sm font-semibold text-slate-900 break-all">
+                      {job.job_id}
                     </span>
                     <span
                       className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border ${statusColors[status]}`}

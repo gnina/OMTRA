@@ -9,15 +9,56 @@ interface InteractionDiagram2DProps {
   filename: string;
 }
 
-interface DiagramError {
+export interface DiagramError {
   message: string;
   reason?: string;
   statusCode?: number;
 }
 
 // Cache errors per filename to avoid retrying failed diagrams
-const errorCache = new Map<string, DiagramError>();
-const svgCache = new Map<string, string>();
+export const errorCache = new Map<string, DiagramError>();
+export const svgCache = new Map<string, string>();
+
+// Helper function to extract error details from API error
+export const extractInteractionDiagramErrorDetails = (err: any): DiagramError => {
+  const message = 'PoseView failed to generate diagram';
+  let reason: string | undefined;
+  let statusCode: number | undefined;
+
+  if (err?.response) {
+    statusCode = err.response.status;
+    const detail = err.response.data?.detail || err.response.data?.message || err.response.data;
+
+    if (typeof detail === 'string') {
+      reason = detail;
+    } else if (detail) {
+      reason = typeof detail === 'object' ? JSON.stringify(detail) : String(detail);
+    }
+  } else if (err?.message) {
+    reason = err.message;
+  }
+
+  return { message, reason, statusCode };
+};
+
+// Prefetch diagram for given job+filename combination so that the UI can show it instantly later.
+export async function prefetchInteractionDiagram(jobId: string, filename: string): Promise<void> {
+  const cacheKey = `${jobId}/${filename}`;
+
+  if (svgCache.has(cacheKey) || errorCache.has(cacheKey)) {
+    return;
+  }
+
+  try {
+    const svg = await apiClient.getInteractionDiagram(jobId, filename);
+    svgCache.set(cacheKey, svg);
+    errorCache.delete(cacheKey);
+  } catch (err) {
+    const errorDetails = extractInteractionDiagramErrorDetails(err);
+    errorCache.set(cacheKey, errorDetails);
+    svgCache.delete(cacheKey);
+  }
+}
 
 export function InteractionDiagram2D({ jobId, filename }: InteractionDiagram2DProps) {
   // Check cache immediately during initialization - compute synchronously
@@ -36,32 +77,6 @@ export function InteractionDiagram2D({ jobId, filename }: InteractionDiagram2DPr
   const [isLoading, setIsLoading] = useState(!initialCachedError && !initialCachedSvg); // Only loading if no cache
   const [error, setError] = useState<DiagramError | null>(initialCachedError);
   const previousFilenameRef = useRef<string>(filename);
-
-  // Helper function to extract error details from API error
-  const extractErrorDetails = (err: any): DiagramError => {
-    // Always use the same simple message - never override this
-    const message = 'PoseView failed to generate diagram';
-    let reason: string | undefined;
-    let statusCode: number | undefined;
-
-    if (err?.response) {
-      // Axios error with response
-      statusCode = err.response.status;
-      const detail = err.response.data?.detail || err.response.data?.message || err.response.data;
-      
-      if (typeof detail === 'string') {
-        reason = detail;
-      } else if (detail) {
-        reason = typeof detail === 'object' ? JSON.stringify(detail) : String(detail);
-      }
-    } else if (err?.message) {
-      // Standard Error object - use the message as reason
-      reason = err.message;
-    }
-
-    // Always return the simple message, never the detail as message
-    return { message, reason, statusCode };
-  };
 
   // Use useLayoutEffect to check cache synchronously before paint - runs before browser paints
   useLayoutEffect(() => {
@@ -130,7 +145,7 @@ export function InteractionDiagram2D({ jobId, filename }: InteractionDiagram2DPr
       } catch (err) {
         console.error('Failed to load diagram:', err);
         if (previousFilenameRef.current === filename) {
-          const errorDetails = extractErrorDetails(err);
+          const errorDetails = extractInteractionDiagramErrorDetails(err);
           setError(errorDetails);
           setIsLoading(false);
           // Cache the error so we don't retry automatically
@@ -162,7 +177,7 @@ export function InteractionDiagram2D({ jobId, filename }: InteractionDiagram2DPr
       // Cache successful SVG
       svgCache.set(cacheKey, svg);
     } catch (err) {
-      const errorDetails = extractErrorDetails(err);
+      const errorDetails = extractInteractionDiagramErrorDetails(err);
       setError(errorDetails);
       setIsLoading(false);
       // Cache the error

@@ -7,7 +7,7 @@ import { JobStatus } from '@/types';
 import { Loader2, Download, ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import { MolecularViewer } from './MolecularViewer';
 import { MetricsTable } from './MetricsTable';
-import { InteractionDiagram2D } from './InteractionDiagram2D';
+import { InteractionDiagram2D, prefetchInteractionDiagram } from './InteractionDiagram2D';
 
 interface JobViewerProps {
   jobId: string;
@@ -35,6 +35,32 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
   });
 
   const isLoading = statusLoading || (status?.state === 'SUCCEEDED' && resultLoading);
+
+  // Background: once results exist, start PoseView (2D) generation for all samples,
+  // but do NOT block or sequence this before any 3D loading.
+  useEffect(() => {
+    if (!result) return;
+    const mode = result.params.sampling_mode;
+    if (mode !== 'Protein-conditioned' && mode !== 'Protein+Pharmacophore-conditioned') {
+      return;
+    }
+
+    const sdfFilesForPrefetch = result.artifacts
+      .filter((a) => a.filename.startsWith('sample_') && a.filename.endsWith('.sdf'))
+      .sort((a, b) => {
+        const numA = parseInt(a.filename.match(/\d+/)?.[0] || '0');
+        const numB = parseInt(b.filename.match(/\d+/)?.[0] || '0');
+        return numA - numB;
+      });
+
+    if (!sdfFilesForPrefetch.length) return;
+
+    sdfFilesForPrefetch.forEach((artifact) => {
+      prefetchInteractionDiagram(jobId, artifact.filename).catch(() => {
+        // Errors are cached and surfaced in the 2D component; ignore here
+      });
+    });
+  }, [jobId, result]);
 
   if (isLoading) {
     return (

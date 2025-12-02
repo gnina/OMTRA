@@ -14,11 +14,12 @@ interface JobSubmissionFormProps {
 export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
   const [apiConnected, setApiConnected] = useState<boolean | null>(null);
   const [samplingMode, setSamplingMode] = useState<SamplingMode>('Unconditional');
-  const [seed, setSeed] = useState<number>(42);
-  const [nSamples, setNSamples] = useState<number>(10);
-  const [steps, setSteps] = useState<number>(100);
-  const [nLigAtomsMean, setNLigAtomsMean] = useState<number | null>(null);
-  const [nLigAtomsStd, setNLigAtomsStd] = useState<number | null>(null);
+  const [seedInput, setSeedInput] = useState('42');
+  const [nSamplesInput, setNSamplesInput] = useState('10');
+  const [stepsInput, setStepsInput] = useState('100');
+  const [nLigAtomsMeanInput, setNLigAtomsMeanInput] = useState('');
+  const [nLigAtomsStdInput, setNLigAtomsStdInput] = useState('');
+  const [autoAtomCount, setAutoAtomCount] = useState<number | null>(null);
   const [useCustomJobId, setUseCustomJobId] = useState(false);
   const [customJobId, setCustomJobId] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
@@ -34,14 +35,16 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
   const [selectedPharmacophoreIndices, setSelectedPharmacophoreIndices] = useState<Set<number>>(new Set());
   const [ligandContent, setLigandContent] = useState<string | null>(null);
   const [proteinContent, setProteinContent] = useState<string | null>(null);
+  const ATOM_STD_MARGIN = 0.15;
 
   const resetForm = () => {
     setSamplingMode('Unconditional');
-    setSeed(42);
-    setNSamples(10);
-    setSteps(100);
-    setNLigAtomsMean(null);
-    setNLigAtomsStd(null);
+    setSeedInput('42');
+    setNSamplesInput('10');
+    setStepsInput('100');
+    setNLigAtomsMeanInput('');
+    setNLigAtomsStdInput('');
+    setAutoAtomCount(null);
     setUploadedFiles([]);
     setUploadTokens([]);
     setExtractedPharmacophores([]);
@@ -89,6 +92,7 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
     const prevFileMap = new Map(uploadedFiles.map((file, idx) => [fileSignature(file), idx]));
     const shouldExtract =
       samplingMode === 'Pharmacophore-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned';
+    let detectedAtomCount: number | null = null;
 
     try {
       for (const file of files) {
@@ -110,21 +114,33 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
         newTokens.push(initResponse.upload_token);
 
         const filename = file.name.toLowerCase();
+        let cachedFileText: string | null = null;
+
+        if (filename.endsWith('.sdf')) {
+          cachedFileText = await file.text();
+          const atoms = estimateAtomCountFromSdf(cachedFileText);
+          if (atoms !== null && atoms > 0 && detectedAtomCount === null) {
+            detectedAtomCount = atoms;
+          }
+        }
 
         if (shouldExtract && filename.endsWith('.sdf')) {
           try {
             const result = await apiClient.extractPharmacophore(file);
             setExtractedPharmacophores(result.pharmacophores);
             setSelectedPharmacophoreIndices(new Set());
-            const content = await file.text();
-            setLigandContent(btoa(content));
+            const ligandText = cachedFileText ?? (await file.text());
+            setLigandContent(btoa(ligandText));
           } catch (err: any) {
             const detail = err?.response?.data?.detail ?? err.message;
             setError(`Failed to extract pharmacophore: ${detail}`);
           }
         }
 
-        if (samplingMode === 'Protein+Pharmacophore-conditioned' && (filename.endsWith('.pdb') || filename.endsWith('.cif'))) {
+        if (
+          samplingMode === 'Protein+Pharmacophore-conditioned' &&
+          (filename.endsWith('.pdb') || filename.endsWith('.cif'))
+        ) {
           const content = await file.text();
           setProteinContent(btoa(content));
         }
@@ -134,7 +150,16 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
       setUploadTokens(newTokens);
 
       const hasSdf = files.some((file) => file.name.toLowerCase().endsWith('.sdf'));
+      if (hasSdf && detectedAtomCount !== null) {
+        const derivedStd = Math.max(detectedAtomCount * ATOM_STD_MARGIN, 0.1);
+        setAutoAtomCount(detectedAtomCount);
+        setNLigAtomsMeanInput(detectedAtomCount.toString());
+        setNLigAtomsStdInput(formatFloatInput(derivedStd));
+      }
       if (!hasSdf) {
+        setAutoAtomCount(null);
+        setNLigAtomsMeanInput('');
+        setNLigAtomsStdInput('');
         setExtractedPharmacophores([]);
         setSelectedPharmacophoreIndices(new Set());
         setLigandContent(null);
@@ -201,21 +226,74 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
         }
       }
 
-      // Validate atoms parameters
-      if ((nLigAtomsMean !== null && nLigAtomsStd === null) || (nLigAtomsMean === null && nLigAtomsStd !== null)) {
+      const parsedSamples = parseInt(nSamplesInput, 10);
+      if (Number.isNaN(parsedSamples)) {
+        setError('Number of samples must be a valid integer');
+        setIsSubmitting(false);
+        return;
+      }
+      if (parsedSamples < 1 || parsedSamples > 100) {
+        setError('Number of samples must be between 1 and 100');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const parsedSteps = parseInt(stepsInput, 10);
+      if (Number.isNaN(parsedSteps)) {
+        setError('Sampling steps must be a valid integer');
+        setIsSubmitting(false);
+        return;
+      }
+      if (parsedSteps < 10 || parsedSteps > 1000) {
+        setError('Sampling steps must be between 10 and 1000');
+        setIsSubmitting(false);
+        return;
+      }
+
+      let parsedSeed: number | null = null;
+      if (seedInput.trim() !== '') {
+        const numericSeed = Number(seedInput);
+        if (!Number.isInteger(numericSeed) || numericSeed < 0) {
+          setError('Random seed must be a non-negative integer');
+          setIsSubmitting(false);
+          return;
+        }
+        parsedSeed = numericSeed;
+      }
+
+      const meanProvided = nLigAtomsMeanInput.trim() !== '';
+      const stdProvided = nLigAtomsStdInput.trim() !== '';
+      if ((meanProvided && !stdProvided) || (!meanProvided && stdProvided)) {
         setError('Both mean and standard deviation must be provided together for atom count distribution');
         setIsSubmitting(false);
         return;
       }
 
+      let parsedMean: number | null = null;
+      let parsedStd: number | null = null;
+      if (meanProvided && stdProvided) {
+        parsedMean = Number(nLigAtomsMeanInput);
+        parsedStd = Number(nLigAtomsStdInput);
+        if (!Number.isFinite(parsedMean) || parsedMean < 4) {
+          setError('Mean number of atoms must be at least 4');
+          setIsSubmitting(false);
+          return;
+        }
+        if (!Number.isFinite(parsedStd) || parsedStd <= 0) {
+          setError('Standard deviation must be a positive number');
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
       // Submit job
       const params: SamplingParams = {
         sampling_mode: samplingMode,
-        seed: seed || null,
-        n_samples: nSamples,
-        steps: steps,
-        n_lig_atoms_mean: nLigAtomsMean || null,
-        n_lig_atoms_std: nLigAtomsStd || null,
+        seed: parsedSeed ?? null,
+        n_samples: parsedSamples,
+        steps: parsedSteps,
+        n_lig_atoms_mean: parsedMean,
+        n_lig_atoms_std: parsedStd,
       };
 
       const jobData = {
@@ -284,8 +362,8 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
           </label>
           <input
             type="number"
-            value={seed}
-            onChange={(e) => setSeed(parseInt(e.target.value) || 0)}
+            value={seedInput}
+            onChange={(e) => setSeedInput(e.target.value)}
             min={0}
             max={2 ** 31 - 1}
             className="w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-white text-slate-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"
@@ -298,8 +376,8 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
           </label>
           <input
             type="number"
-            value={nSamples}
-            onChange={(e) => setNSamples(parseInt(e.target.value) || 1)}
+            value={nSamplesInput}
+            onChange={(e) => setNSamplesInput(e.target.value)}
             min={1}
             max={100}
             className="w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-white text-slate-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"
@@ -312,49 +390,14 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
           </label>
           <input
             type="number"
-            value={steps}
-            onChange={(e) => setSteps(parseInt(e.target.value) || 10)}
+            value={stepsInput}
+            onChange={(e) => setStepsInput(e.target.value)}
             min={10}
             max={1000}
             className="w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-white text-slate-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"
           />
         </div>
 
-        <div className="border-t border-slate-200/60 pt-4">
-          <h4 className="text-sm font-semibold text-slate-700 mb-3">
-            Atom Count Distribution (Optional)
-          </h4>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Mean Number of Atoms
-              </label>
-              <input
-                type="number"
-                value={nLigAtomsMean ?? ''}
-                onChange={(e) => setNLigAtomsMean(e.target.value ? parseFloat(e.target.value) : null)}
-                min={4}
-                step={1}
-                placeholder="e.g., 25"
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Standard Deviation
-              </label>
-              <input
-                type="number"
-                value={nLigAtomsStd ?? ''}
-                onChange={(e) => setNLigAtomsStd(e.target.value ? parseFloat(e.target.value) : null)}
-                min={0.1}
-                step={0.1}
-                placeholder="e.g., 5.0"
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"
-              />
-            </div>
-          </div>
-        </div>
       </div>
 
       <div className="border-t border-slate-200/60 pt-6">
@@ -378,6 +421,51 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
             maxSize={25 * 1024 * 1024}
           />
         )}
+      </div>
+
+      <div className="border-t border-slate-200/60 pt-6">
+        <h4 className="text-sm font-semibold text-slate-700 mb-3">
+          Atom Count Distribution (Optional)
+        </h4>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              Mean Number of Atoms
+            </label>
+            <input
+              type="number"
+              value={nLigAtomsMeanInput}
+              onChange={(e) => setNLigAtomsMeanInput(e.target.value)}
+              min={4}
+              step={1}
+              placeholder="e.g., 25"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              Standard Deviation
+            </label>
+            <input
+              type="number"
+              value={nLigAtomsStdInput}
+              onChange={(e) => setNLigAtomsStdInput(e.target.value)}
+              min={0.1}
+              step={0.1}
+              placeholder="e.g., 5.0"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"
+            />
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          {samplingMode === 'Unconditional'
+            ? 'If you leave mean and standard deviation empty, the model will use dataset distribution for ligand sizes.'
+            : autoAtomCount
+            ? `Auto-filled using the ${autoAtomCount}-atom reference ligand. Std uses ${Math.round(
+                ATOM_STD_MARGIN * 100
+              )}% of # ligand atoms by default, and you can adjust either value.`
+            : 'Upload a ligand SDF to auto-fill these values based on its atom count. You can still adjust them manually.'}
+        </p>
       </div>
 
       {/* Pharmacophore Viewer */}
@@ -487,5 +575,34 @@ function getPharmacophoreColor(type: string): string {
     Halogen: 'cyan',
   };
   return colors[type] || 'gray';
+}
+
+function estimateAtomCountFromSdf(content: string): number | null {
+  const lines = content.split(/\r?\n/);
+  const candidates: string[] = [];
+  if (lines.length >= 4) {
+    candidates.push(lines[3]);
+  }
+  const fallback = lines.find((line) => /^\s*\d+\s+\d+/.test(line));
+  if (fallback) {
+    candidates.push(fallback);
+  }
+
+  for (const line of candidates) {
+    if (!line) continue;
+    const firstField = line.trim().split(/\s+/)[0];
+    const atomCount = parseInt(firstField, 10);
+    if (Number.isFinite(atomCount) && atomCount > 0) {
+      return atomCount;
+    }
+  }
+  return null;
+}
+
+function formatFloatInput(value: number): string {
+  if (Number.isInteger(value)) {
+    return value.toString();
+  }
+  return value.toFixed(2).replace(/\.?0+$/, '');
 }
 

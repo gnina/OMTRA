@@ -134,18 +134,6 @@ def parse_args():
         default=0.075,
         help='number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set (default: 0.075, i.e. +/- 7.5%)'
     )
-    p.add_argument(
-        '--n_lig_atoms_mean',
-        type=float,
-        default=None,
-        help='Mean number of atoms for ligand samples (if provided with --n_lig_atoms_std, uses normal distribution instead of dataset distribution)'
-    )
-    p.add_argument(
-        '--n_lig_atoms_std',
-        type=float,
-        default=None,
-        help='Standard deviation for number of atoms (required if --n_lig_atoms_mean is provided)'
-    )
     p.add_argument('--split', type=str, default='val', help='Which data split to use')
 
     p.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
@@ -353,8 +341,8 @@ def main(args):
         noise_scaler=args.noise_scaler, # for stochastic sampling 
         eps=args.eps,
         n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None,
-        n_lig_atoms_mean=args.n_lig_atoms_mean,
-        n_lig_atoms_std=args.n_lig_atoms_std
+        n_lig_atoms_mean=getattr(args, 'n_lig_atoms_mean', None),
+        n_lig_atoms_std=getattr(args, 'n_lig_atoms_std', None)
     )
 
     if args.output_dir is None:

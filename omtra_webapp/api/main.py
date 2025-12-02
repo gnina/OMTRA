@@ -1246,30 +1246,8 @@ async def get_interaction_diagram(job_id: str, filename: str):
             timeout=180.0  # 3 minutes
         )
         
-        # Check if SVG is empty or contains only a border (no actual content)
-        def is_empty_svg(svg_content: str) -> bool:
-            """Check if SVG is empty or contains only border/background"""
-            if not svg_content:
-                return True
-            # Remove whitespace and check for meaningful content
-            svg_lower = svg_content.lower()
-            # Empty SVG typically has only a border path like "M 0 0 L 600 0 L 600 600 L 0 600 Z"
-            # Check if there are any text elements, circles, or paths with more than just the border
-            has_text = '<text' in svg_lower or '<tspan' in svg_lower
-            has_circles = svg_lower.count('<circle') > 0
-            # Count paths - empty SVG usually has only 1-2 paths (border)
-            path_count = svg_lower.count('<path')
-            # Check if there are any interaction-related elements (lines, bonds, etc.)
-            has_interactions = has_text or has_circles or path_count > 2
-            # Also check if the SVG is suspiciously small (empty SVGs are usually < 500 bytes)
-            is_too_small = len(svg_content) < 500
-            return is_too_small and not has_interactions
-        
-        if not svg or is_empty_svg(svg):
+        if not svg:
             error_detail = f"Failed to generate interaction diagram for {filename}. PoseView could not detect any interactions. This can happen if the ligand is too far from the protein binding site or the coordinate systems don't align."
-            logger.error(f"All interaction diagram generation methods failed for {filename} (MolModa proxy and PoseEdit API)")
-            logger.error(f"  This usually means: 1) PoseView returned empty diagram (no interactions), 2) Ligand too far from protein, 3) Coordinate system mismatch")
-            logger.error(f"  SVG length: {len(svg) if svg else 0} bytes")
             await _cache_error(job_id, filename, 503, error_detail)
             raise HTTPException(
                 status_code=503,
