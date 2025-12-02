@@ -149,9 +149,10 @@ The pharmit dataset is available for independent use separate from OMTRA. The da
 |----------|-------------|-------------| 
 | `data_dir` | Requires | Path to Pharmit dataset Zarr store. |
 | `split` | Required | Data split. |
-| `return_type` | Required | Options: `rdkit` or `dict`. If `rdkit`, ligands are returned as RDKit molecules. Extra features will be stored as special atom properties. Pharmacophore data will not be returned. If `dict`, ligand data will be returned as a dictionary of tensors. Extra features and pharmacophore data will be stored as nested dictionaries under the keys `extra_feats` and `pharm`, respectively. |
+| `return_type` | Required | Options: `rdkit` or `dict`. If `rdkit`, ligands are returned as RDKit molecules. Extra features and pharmacophore data will not be returned. If `dict`, ligand data will be returned as a dictionary of tensors. Extra features and pharmacophore data will be stored as nested dictionaries under the keys `extra_feats` and `pharm`, respectively. |
 | `include_pharmacophore` | `False` | Include pharmacophore features. |
 | `include_extra_feats` | `False` | Include atom extra features: implicit hydrogens, aromatic flag, hybridization, ring flag, chiral flag. |
+| `n_chunks_cache` | `4` |  |
 
 #### Example Usage
 ```console
