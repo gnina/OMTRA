@@ -1,0 +1,92 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!requirements*.txt
+!package*.json
+!package-lock.json
+README.md
+readme.md
+LICENSE
+CHANGELOG
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.pytest_cache
+.coverage
+htmlcov
+
+# Node.js
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Next.js
+.next
+out
+.vercel
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Hydra outputs
+.hydra
+outputs
+multirun
+
+# Checkpoints (too large, should be mounted)
+checkpoints/*.ckpt
+checkpoints/*.pth
+checkpoints/*.pt
+
+# Job storage (runtime data)
+.jobs
+.job_storage
+job_storage
+
+# Logs
+*.log
+logs
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Docker files (don't need in build context)
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+
+# Test files
+tests
+test
+*.test.py
+*_test.py

@@ -601,6 +601,8 @@ class OMTRA(pl.LightningModule):
         eps: float = 0.01,
         # use_gt_n_lig_atoms: bool = False,
         n_lig_atom_margin: Union[float, None] = None,
+        n_lig_atoms_mean: Union[float, None] = None,
+        n_lig_atoms_std: Union[float, None] = None,
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
@@ -688,8 +690,17 @@ class OMTRA(pl.LightningModule):
             else:
                 n_pharms = None
             
+            # use normal distribution if mean and std are provided
+            if n_lig_atoms_mean is not None and n_lig_atoms_std is not None:
+                n_samples = len(g_flat)
+                n_lig_atoms = torch.normal(
+                    mean=torch.tensor(n_lig_atoms_mean).expand(n_samples),
+                    std=torch.tensor(n_lig_atoms_std).expand(n_samples)
+                )
+                n_lig_atoms = torch.clamp(n_lig_atoms.round().long(), min=4)
+            
             # use ground truth number of lig atoms
-            if use_gt_n_lig_atoms:
+            elif use_gt_n_lig_atoms:
 
                 base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
                 base_n_atoms = base_n_atoms - n_fake_atoms_gt
@@ -718,8 +729,17 @@ class OMTRA(pl.LightningModule):
                 n_pharms = None
                 n_samples = len(g_flat)
 
+            # use normal distribution if mean and std are provided
+            if n_lig_atoms_mean is not None and n_lig_atoms_std is not None:
+                n_samples_normal = len(g_flat)
+                n_lig_atoms = torch.normal(
+                    mean=torch.tensor(n_lig_atoms_mean).expand(n_samples_normal),
+                    std=torch.tensor(n_lig_atoms_std).expand(n_samples_normal)
+                )
+                n_lig_atoms = torch.clamp(n_lig_atoms.round().long(), min=4)
+
             # use ground truth number of lig atoms
-            if use_gt_n_lig_atoms:
+            elif use_gt_n_lig_atoms:
                 base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
                 base_n_atoms = base_n_atoms - n_fake_atoms_gt
                 margins = torch.clamp(base_n_atoms * n_lig_atom_margin, min=1).int()

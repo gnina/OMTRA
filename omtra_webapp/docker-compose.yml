@@ -1,0 +1,124 @@
+version: '3.8'
+
+#TODO: pull from registry instead of local images
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: omtra_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly no --save ""
+    restart: unless-stopped
+
+  api:
+    # Use pre-built local image (default)
+    image: omtra_webapp-api:${OMTRA_IMAGE_TAG:-latest}
+    pull_policy: never
+    # Uncomment below to build from source instead
+    # build: 
+    #   context: ..
+    #   dockerfile: omtra_webapp/api/Dockerfile
+    container_name: omtra_api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - API_HOST=${API_HOST:-0.0.0.0}
+      - API_PORT=8000
+      - WORKER_TIMEOUT=${WORKER_TIMEOUT:-600}
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-26214400}
+      - MAX_FILES_PER_JOB=${MAX_FILES_PER_JOB:-3}
+      - JOB_TTL_HOURS=${JOB_TTL_HOURS:-48}
+      - CHECKPOINT_DIR=/srv/app/checkpoints
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+    volumes:
+      # Source code mounts
+      # Uncomment these if building from source or developing
+      # - ./api:/app
+      # - ./shared:/app/shared
+      - job_storage:/srv/app/jobs
+      - model_cache:/srv/app/models
+      - ../checkpoints:/srv/app/checkpoints
+      # Optional
+      # - ${OMTRA_PATH:-}:/omtra:ro
+    depends_on:
+      - redis
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]
+
+  worker:
+    # Use pre-built local image (default)
+    image: omtra_webapp-worker:${OMTRA_IMAGE_TAG:-latest}
+    pull_policy: never
+    # Uncomment below to build from source instead
+    # build:
+    #   context: ..
+    #   dockerfile: omtra_webapp/worker/Dockerfile
+    container_name: omtra_worker
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - WORKER_TIMEOUT=${WORKER_TIMEOUT:-600}
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+    volumes:
+      # Source code mounts
+      # Uncomment these if building from source or developing
+      # - ./worker:/app
+      # - ./shared:/app/shared
+      - ../cli.py:/app/cli.py
+      - ../routines:/app/routines
+      # - ../omtra_pipelines/pharmit_dataset/train_dists.npz:/usr/local/lib/python3.11/dist-packages/omtra_pipelines/pharmit_dataset/train_dists.npz
+      - ../configs:/usr/local/lib/python3.11/dist-packages/configs
+      - ../omtra_pipelines:/usr/local/lib/python3.11/dist-packages/omtra_pipelines
+      - job_storage:/srv/app/jobs
+      - model_cache:/srv/app/models
+      - ../checkpoints:/srv/app/checkpoints
+      # Optional
+      # - ${OMTRA_PATH:-}:/omtra
+    depends_on:
+      - redis
+      - api
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]
+
+  frontend-react:
+    # Use pre-built local image (default)
+    image: omtra_webapp-frontend-react:${OMTRA_IMAGE_TAG:-latest}
+    pull_policy: never
+    # Uncomment below to build from source instead
+    # build:
+    #   context: ./frontend-react
+    #   dockerfile: Dockerfile
+    container_name: omtra_frontend_react
+    ports:
+      - "${FRONTEND_PORT:-5900}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - API_URL=http://api:8000
+      - NODE_ENV=production
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  job_storage:
+  model_cache:
+
+networks:
+  default:
+    name: omtra_network

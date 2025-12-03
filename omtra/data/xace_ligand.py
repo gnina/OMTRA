@@ -39,6 +39,11 @@ class MolXACE:
     tcv_counts: Optional[dict] = None
     failure_mode: Optional[str] = None
 
+    def to_torch(self):
+        self.a = torch.from_numpy(self.a).long()
+        self.c = torch.from_numpy(self.c).long()
+        self.e = torch.from_numpy(self.e).long()
+        self.edge_idxs = torch.from_numpy(self.edge_idxs).long()
 
     def sparse_to_dense(self):
         """Converts the sparse representation of the molecule to a dense representation."""
