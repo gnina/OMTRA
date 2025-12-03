@@ -1,42 +1,75 @@
-# One Model to Rule Them All
+# OMTRA
+A Multi-Task Generative model for Structure-Based Drug Design
 
-A multi-task generative model for small-molecule structure-based drug design. 
+![OMTRA](assets/omtra_fig.png)
 
-# Building the Environment
+-----------------------------------------------------------------------------------------------------
+# Installation
 
 We recommend building the envornment using pip inside of a virtual environment. Our recommended procedure is:
 
-## Create conda/mamba environment
+Create conda/mamba environment
 
 ```bash
-# Example using conda
-conda create -n omtra python=3.11
-conda activate omtra
-```
+# Create conda/mamba environment
+mamba create -n omtra python=3.11
+mamba activate omtra
 
-## run the build script:
-
-```bash
+# Clone, run build script
 git clone https://github.com/gnina/OMTRA.git
 cd OMTRA
 chmod +x build_env.sh
 ./build_env.sh
 ```
 
-This script installs the CUDA-enabled versions of PyTorch, DGL, and PyG, and then installs the OMTRA package and its dependencies.
+The build script installs the CUDA-enabled versions of PyTorch, DGL, and PyG, and then installs the OMTRA package and its dependencies.
 
-### or just do manual installation (alternative to build script)
+-----------------------------------------------------------------------------------------------------
+# Sampling 
+There are two main ways to sample a trained OMTRA model.
 
-```bash
-pip install uv
+## Option 1: OMTRA Webapp
+The OMTRA webapp and documentation can be found here [Webapp]().
 
-# 1. Install CUDA dependencies
-uv pip install -r requirements-cuda.txt
+## Option 2: rountines/sample.py
+Models: 
 
-# 2. Install OMTRA
-uv pip install -e .
+### Usage
+| Argument | Default | Description | 
+|----------|-------------|-------------| 
+| `checkpoint` | Required | Path to model checkpoint. |
+| `--task` | Required | Task to sample for (e.g. denovo_ligand). |
+| `--dataset` | `pharmit` | Dataset to sample from (e.g. pharmit). |
+| `--split` | `val` | Which data split to use. |
+| `--dataset_start_idx` | `0` | Index in the dataset to start sampling from. |
+| `--sys_idx_file` | `None` | Path to a file with pre-selected system indices. |
+| `--pharmit_path` | `None` | Path to the Pharmit dataset (optional). |
+| `--plinder_path` | `None` | Path to the Plinder dataset (optional). |
+| `--crossdocked_path` | `None` | Path to the Crossdocked dataset (optional). |
+| `--n_samples` | `100` | Number of samples to draw. |
+| `--n_replicates` | `1` | For conditional sampling: number of replicates per input sample. |
+| `--n_timseteps` | `250` | Number of integration steps to take when sampling. |
+| `--use_gt_n_lig_atoms` | `store_true` | If set, use the number of ground truth ligand atoms for de novo design. |
+| `--n_lig_atom_margin` | `0.075` | Number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set. |
+| `--stochastic_sampling` | `store_true` | If set, perform stochastic sampling. |
+| `--noise_scaler` | `1.0` | Scaling factor for noise if using stochastic sampling. |
+| `--eps` | `0.01` | g(t) param for stochastic sampling. |
+| `--visualize` | `store_true` | If set, output will contain sampling trajectories rather than the final sampled state. |
+| `--metrics` | `store_true` | If set, compute metrics for the samples. |
+| `--output_dir` | `ckpt_path.parent.parent` | Directory for outputs. |
+
+
+#### Example Usage
+```console
+python routines/sample.py 
+    <PATH>/<CHECKPOINT>.ckpt \ 
+    --task=fixed_protein_ligand_denovo_condensed \
+    --n_samples=10 \
+    --n_replicates=10 \
+    --use_gt_n_lig_atoms \
+    --visualize \
 ```
-
+-----------------------------------------------------------------------------------------------------
 # Using Docker
 
 ## Requirements
@@ -79,6 +112,10 @@ omtra --task fixed_protein_ligand_denovo_condensed \
 
 ```
 
+#TODO: does CLI require building environment first or does it use the docker image?
+#TODO: i think we need a set of instructions for use that encompass everything you want to do, either with or without the docker image. Q im not clear on: what is what docker image for? what is it not for?
+#TODO: give a nice table of options for the CLI like we did for sample.py
+
 
 ## Web Application
 
@@ -93,50 +130,13 @@ The webapp will be available at http://localhost:5900 (or the port specified in 
 
 See [`omtra_webapp/START.md`](omtra_webapp/START.md) for more details
 
+-----------------------------------------------------------------------------------------------------
+# Training
+Refer to [docs/training.md](docs/training.md) for details on training OMTRA models.
 
-# Essetial things
+-----------------------------------------------------------------------------------------------------
+# Pharmit Dataset
+Refer to [docs/pharmit_dataset.md](docs/pharmit_dataset.md) for details on the Pharmit dataset and how to use it.
 
-## Is there a pre-trained checkpoint you recommend I work with?
-
-Yes and you should remind me to write them down here.
-
-## Where is the data on the cluster? How do I tell omtra where the datasets are?
-
-### If using `routines/train.py`
-
-By default, the script will look in `data/pharmit` and `data/plinder` (paths relative to your omtra repository), for the pharmit and plinder datasets, respectively. Now these datasets are big and moving them around is difficult and we don't want to have too many duplciates floating around. You should point your script to an existing copy of the dataset. Currently, you can use these on the CSB cluster:
-
-
-```console
-plinder_path=/net/galaxy/home/koes/tjkatz/OMTRA/data/plinder
-pharmit_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit
-```
-
-## How do I sample a trained model?
-
-The sampling script is `routines/sample.py` takes a checkpoint and a task as input. There are a few other arguments to controls its behavior: `--visualize` will write out trajectories, `--output_dir` will specify where to write the output, `--n_samples` will specify how many samples to generate, `--metrics` is a true/false flag indicating whether to compute metrics on the samples. Look at the script or run `python routines/sample.py --help` for more details. Below is an example command:
-
-```console
-python routines/sample.py local/runs_from_cluster/denovo_multiupdate_2025-05-04_20-44-972429/checkpoints/batch_45000.ckpt --task=denovo_ligand --n_samples=100 --metrics --output_dir=local/dev_samples
-```
-
-## How to train?
-
-The training script is `routines/train.py`. By default this script will use hydra to read the config starting at the top level `configs/config.yaml`. You can override any arguments using the standard hydra command line syntax. 
-
-## Specifying task_group
-
-What tasks your omtra model supports is specified by the `task_group` config. You can see an example in `configs/task_group/no_protein.yaml` which would create a version of omtra that does a variety of tasks that do not involve protein structures. The genreal structure of the task group is as follows:
-
-1. `task_phases` this is essentially a list. Each item of the list describes a "phase" of training omtra; the idea is that different phases can have different task mixtures. For example, maybe you want to focus heavily on unconditional ligand generation intitally and then start to incorporate pocket-conditioned ligand generation in a second phase. Each phase has a duration (measured in minibatches) and a list of tasks + the probability of training on each task. The probabilities need not sum to one; they will be normalized. In otherwords, this specicies for each phase of trainnig, what is p(task) for each training batch.
-
-
-2. `datset_task_coupling`; this is a dictionary where each key is a task and the value is a list specifying the dataset we will use for that task, along with the probability of using the dataset for that task. In other words, the dataset task coupling is directly specifying the probability distribution p(dataset|task).
-
-Now, what are the tasks and datasets supported? We have defined registers of supported tasks and datasets. The registers are located in `omtra.tasks` and `omtra.datasets` respectively. Every task and datset is associated with a unique string; if your config file specifies a task/dataset not in the register, the training script will tell you so. There are utility functions for printing out the tasks/dataset names supported. I don't know where they are off the top of my head but I'll add them here eventually. 
-
-## training modes
-
-So importantly, we pre-train encoder/decoder pairs to obtain latent representations of ligands and protein pockets. 
-
-You can use the same training script for both encoder/decoder pairs as the omtra generative model. When using `routines/train.py`, you just need to specify the `mode` argument to distinguish between these "training modes". Currently the available modes are `omtra` and `ligand_encoder`. The config for the ligand encoder is stored in `cfg.ligand_encoder`; the specific hydra config group is `configs/ligand_encoder`. Currently the default config has the ligand_encoder set to an empty yaml file; that is, there is no ligand encoder, and there is not latent ligand genearation. When training a omtra for latent ligand generation, you need to set `mode=omtra` and you need to set `cfg.model.ligand_encoder_checkpoint` to the checkpoint for a trained ligand encoder. 
+# Evals and Reproducing Paper Results
+Refer to [docs/reproducing_results.md](docs/reproducing_results.md) for instructions on reproducing the published results.
