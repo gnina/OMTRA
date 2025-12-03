@@ -23,6 +23,7 @@ import numpy as np
 from omtra.utils import omtra_root
 import yaml
 from rdkit import Chem
+from pathlib import Path
 
 from rdkit import RDLogger
 
@@ -205,7 +206,7 @@ def pb_valid_unconditional(
     
     metrics = {}
     
-    pb_cfg_path = omtra_root()+'/configs/pb_config/default.yaml'
+    pb_cfg_path = Path(omtra_root()) / 'omtra/eval/pb_config/default.yaml'
 
     with open(pb_cfg_path, 'r') as f:
         pb_cfg = yaml.safe_load(f)
@@ -286,7 +287,7 @@ def pb_valid_conformer(
     metrics = {}
     metric_values = defaultdict(list)
     
-    pb_cfg_path = omtra_root()+'/configs/pb_config/uncond_conf.yaml'
+    pb_cfg_path = Path(omtra_root()) / 'omtra/eval/pb_config/uncond_conf.yaml'
     with open(pb_cfg_path, 'r') as f:
         pb_cfg = yaml.safe_load(f)
     
