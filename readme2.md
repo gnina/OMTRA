@@ -1,22 +1,22 @@
 # OMTRA
 A Multi-Task Generative model for Structure-Based Drug Design
 
-![OMTRA]()
+![OMTRA](assets/omtra_fig.png)
 
 -----------------------------------------------------------------------------------------------------
 # Building the Environment
 
 We recommend building the envornment using pip inside of a virtual environment. Our recommended procedure is:
 
-## Create conda/mamba environment
+Create conda/mamba environment
 
 ```bash
 # Example using conda
-conda create -n omtra python=3.11
-conda activate omtra
+mamba create -n omtra python=3.11
+mamba activate omtra
 ```
 
-### Option 1: run the build script:
+Option 1: run the build script:
 
 ```bash
 git clone https://github.com/gnina/OMTRA.git
@@ -27,7 +27,7 @@ chmod +x build_env.sh
 
 This script installs the CUDA-enabled versions of PyTorch, DGL, and PyG, and then installs the OMTRA package and its dependencies.
 
-### Option 2: manual installation
+Option 2: manual installation
 
 ```bash
 pip install uv
@@ -68,7 +68,7 @@ Models:
 | `--stochastic_sampling` | `store_true` | If set, perform stochastic sampling. |
 | `--noise_scaler` | `1.0` | Scaling factor for noise if using stochastic sampling. |
 | `--eps` | `0.01` | g(t) param for stochastic sampling. |
-| `--visualize` | `store_true` | If set, visualize the sampling process. |
+| `--visualize` | `store_true` | If set, output will contain sampling trajectories rather than the final sampled state. |
 | `--metrics` | `store_true` | If set, compute metrics for the samples. |
 | `--output_dir` | `ckpt_path.parent.parent` | Directory for outputs. |
 
