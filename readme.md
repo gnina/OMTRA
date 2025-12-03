@@ -37,6 +37,63 @@ uv pip install -r requirements-cuda.txt
 uv pip install -e .
 ```
 
+# Using Docker
+
+## Requirements
+
+- Docker and Docker Compose installed
+- NVIDIA GPU with CUDA support
+- NVIDIA Container Toolkit installed
+- Model weights downloaded to `OMTRA/checkpoints/` directory
+
+## Start CLI with pre-built image
+
+1. **Setup:**
+   ```bash
+   source docker-cli-setup.sh
+   ```
+
+   To make this permanent, add to your `~/.bashrc` or `~/.zshrc`:
+   ```bash
+   source /path/to/OMTRA/docker-cli-setup.sh
+   ```
+
+2. **Use the CLI:**
+   ```bash
+   omtra --task <task> [options]
+   ```
+   The docker image will be automatically pulled from registry on first use.
+
+#### Examples
+
+```bash
+omtra --task denovo_ligand_condensed \
+  --n_samples 100 \
+  --output_dir outputs/samples \
+  --metrics
+
+omtra --task fixed_protein_ligand_denovo_condensed \
+  --protein_file protein.pdb \
+  --ligand_file ref_ligand.sdf \
+  --n_samples 50
+
+```
+
+
+## Web Application
+
+### Quick Start
+
+```bash
+cd omtra_webapp
+docker-compose up -d
+```
+
+The webapp will be available at http://localhost:5900 (or the port specified in your `.env` file).
+
+See [`omtra_webapp/START.md`](omtra_webapp/START.md) for more details
+
+
 # Essetial things
 
 ## Is there a pre-trained checkpoint you recommend I work with?

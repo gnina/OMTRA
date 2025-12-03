@@ -157,17 +157,6 @@ def parse_args():
     return p.parse_args()
 
 
-def write_mols_to_sdf(mols, filename):
-    """
-    Write a list of RDKit molecules to an SDF file.
-    """
-    writer = Chem.SDWriter(str(filename))
-    writer.SetKekulize(False)
-    for mol in mols:
-        if mol is not None:
-            writer.write(mol)
-    writer.close()
-
 def generate_sample_names(n_systems: int, n_replicates: int) -> List[str]:
     """
     Generate names of the form 'sys_{system_idx}_rep_{rep_idx}'.
@@ -287,65 +276,73 @@ def main(args):
     if not ckpt_path.exists():
         raise FileNotFoundError(f"{ckpt_path} not found")
     
-    # 2) load the exact train‐time config
-    train_cfg_path = ckpt_path.parent.parent / '.hydra' / 'config.yaml'
-    train_cfg = quick_load.load_trained_model_cfg(train_cfg_path)
-
-    # apply some changes to the config to enable sampling
-    train_cfg.num_workers = 0
-    if args.pharmit_path:
-        train_cfg.pharmit_path = args.pharmit_path
-    if args.plinder_path:
-        train_cfg.plinder_path = args.plinder_path
-    if args.crossdocked_path:
-        train_cfg.crossdocked_path = args.crossdocked_path
-
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
-    # 4) instantiate datamodule & model
-    dm  = quick_load.datamodule_from_config(train_cfg)
-    multitask_dataset = dm.load_dataset(args.split)
     model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
     
     # get task we are sampling for
     task_name: str = args.task
     task: Task = task_name_to_class(task_name)
 
-    # get raw dataset object
-    if args.dataset == 'plinder':
-        plinder_link_version = task.plinder_link_version
-        dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
-    elif args.dataset == 'pharmit':
-        dataset = multitask_dataset.datasets['pharmit']
-    elif args.dataset == 'crossdocked':
-        dataset = multitask_dataset.datasets['crossdocked']
-    else:
-        raise ValueError(f"Unknown dataset {args.dataset}")
-
     # get g_list
     if task.unconditional:
         g_list = None
         n_replicates = args.n_samples
     else:
-
-        if args.sys_idx_file is None:
-            dataset_idxs = range(args.dataset_start_idx, args.dataset_start_idx + args.n_samples)
+        # Check if g_list was provided from input files from cli
+        if hasattr(args, 'g_list_from_files') and args.g_list_from_files is not None:
+            g_list = args.g_list_from_files
+            n_replicates = args.n_replicates
         else:
-            # read in pre-determined index file
-            with open(args.sys_idx_file, "r") as f:
-                line = f.readline().strip()
-                dataset_idxs = [int(i) for i in line.split(",")]
-                dataset_idxs = dataset_idxs[:args.n_samples]
+            # 2) load the exact train‐time config
+            train_cfg_path = ckpt_path.parent.parent / '.hydra' / 'config.yaml'
+            train_cfg = quick_load.load_trained_model_cfg(train_cfg_path)
 
-        g_list = [ dataset[(task_name, i)].to(device) for i in dataset_idxs ]
-        n_replicates = args.n_replicates
+            # apply some changes to the config to enable sampling
+            train_cfg.num_workers = 0
+            if args.pharmit_path:
+                train_cfg.pharmit_path = args.pharmit_path
+            if args.plinder_path:
+                train_cfg.plinder_path = args.plinder_path
+            if args.crossdocked_path:
+                train_cfg.crossdocked_path = args.crossdocked_path
 
-    # set coms if protein is present
-    if 'protein_identity' in task.groups_present and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed'])):
-        coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
-    else:
-        coms = None
+            # instantiate datamodule & model
+            dm  = quick_load.datamodule_from_config(train_cfg)
+            multitask_dataset = dm.load_dataset(args.split)
+
+            # get raw dataset object
+            if args.dataset == 'plinder':
+                plinder_link_version = task.plinder_link_version
+                dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
+            elif args.dataset == 'pharmit':
+                dataset = multitask_dataset.datasets['pharmit']
+            elif args.dataset == 'crossdocked':
+                dataset = multitask_dataset.datasets['crossdocked']
+            else:
+                raise ValueError(f"Unknown dataset {args.dataset}")
+
+            if args.sys_idx_file is None:
+                dataset_idxs = range(args.dataset_start_idx, args.dataset_start_idx + args.n_samples)
+            else:
+                # read in pre-determined index file
+                with open(args.sys_idx_file, "r") as f:
+                    line = f.readline().strip()
+                    dataset_idxs = [int(i) for i in line.split(",")]
+                    dataset_idxs = dataset_idxs[:args.n_samples]
+
+            g_list = [ dataset[(task_name, i)].to(device) for i in dataset_idxs ]
+            n_replicates = args.n_replicates
+
+    # set coms if protein is present, prefer ligand com
+    coms = None
+    if g_list is not None and 'protein_identity' in task.groups_present:
+        if g_list[0].num_nodes('lig') > 0 and 'x_1_true' in g_list[0].nodes['lig'].data:
+            coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
+        # fallback protein atom com if present
+        elif g_list[0].num_nodes('prot_atom') > 0 and 'x_1_true' in g_list[0].nodes['prot_atom'].data:
+            coms = [ g.nodes['prot_atom'].data['x_1_true'].mean(dim=0) for g in g_list ]
 
     sampled_systems = model.sample(
         g_list=g_list,
@@ -359,7 +356,9 @@ def main(args):
         stochastic_sampling=args.stochastic_sampling,
         noise_scaler=args.noise_scaler, # for stochastic sampling 
         eps=args.eps,
-        n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None
+        n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None,
+        n_lig_atoms_mean=getattr(args, 'n_lig_atoms_mean', None),
+        n_lig_atoms_std=getattr(args, 'n_lig_atoms_std', None)
     )
 
     if args.output_dir is None:
@@ -382,30 +381,34 @@ def main(args):
             sys.write_ligand(lig_xt_file, trajectory=True, endpoint=False)
             sys.write_ligand(lig_xhat_file, trajectory=True, endpoint=True)
     elif not task.unconditional and not args.visualize:
+        # determine number of systems even if g_list is None (e.g., file inputs)
+        n_systems = len(g_list) if g_list is not None else 1
         # write ground truth for everything in the system, once per system
-        write_ground_truth(
-            n_systems=len(g_list),
-            n_replicates=n_replicates,
-            task=task,
-            output_dir=output_dir,
-            sampled_systems=sampled_systems,
-            g_list=g_list
-            )
+        if g_list is not None and not (hasattr(args, 'g_list_from_files') and args.g_list_from_files is not None):
+            write_ground_truth(
+                n_systems=n_systems,
+                n_replicates=n_replicates,
+                task=task,
+                output_dir=output_dir,
+                sampled_systems=sampled_systems,
+                g_list=g_list
+                )
 
         # collect all the ligands for each system
         sample_names = generate_sample_names(
-            n_systems=len(g_list), 
+            n_systems=n_systems, 
             n_replicates=n_replicates
         )
         for sys_id, replicates in enumerate(
             group_samples_by_system(
             sample_names=sample_names,
             sample_objects=sampled_systems,
-            n_systems=len(g_list),
+            n_systems=n_systems,
             n_replicates=n_replicates
             )
         ):
             sys_gt_dir = output_dir / f"sys_{sys_id}_gt"
+            sys_gt_dir.mkdir(parents=True, exist_ok=True)
 
             # write all ligands
             if 'ligand_structure' in task.groups_generated:
@@ -426,18 +429,21 @@ def main(args):
                     f.write(sum(pharms))
 
     elif not task.unconditional and args.visualize:
+        # determine number of systems even if g_list is None (e.g., file inputs)
+        n_systems = len(g_list) if g_list is not None else 1
         # write ground truth for everything in the system, once per system
-        write_ground_truth(
-            n_systems=len(g_list),
-            n_replicates=n_replicates,
-            task=task,
-            output_dir=output_dir,
-            sampled_systems=sampled_systems,
-            g_list=g_list)
+        if g_list is not None and not (hasattr(args, 'g_list_from_files') and args.g_list_from_files is not None):
+            write_ground_truth(
+                n_systems=n_systems,
+                n_replicates=n_replicates,
+                task=task,
+                output_dir=output_dir,
+                sampled_systems=sampled_systems,
+                g_list=g_list)
         
         # collect all the ligands for each system
         sample_names = generate_sample_names(
-            n_systems=len(g_list), 
+            n_systems=n_systems, 
             n_replicates=n_replicates
         )
         for sample_idx, (sample_name, system) in enumerate(zip(
@@ -465,13 +471,16 @@ def main(args):
                 system.write_pharmacophore(pharm_xt_file, trajectory=True, endpoint=False)
                 system.write_pharmacophore(pharm_xhat_file, trajectory=True, endpoint=True)
 
-    if args.metrics and model.eval_config is not None:
+    if args.metrics:
+        # use config from default.yaml not ckpt
+        default_eval_path = Path(omtra_root()) / 'configs' / 'eval' / 'default.yaml'    
+        default_eval_cfg = OmegaConf.load(default_eval_path)
+
         metrics = {}
-        for eval in model.eval_config.get(task_name, []):
-            for eval_name, config  in eval.items():
-                eval_fn = get_eval(eval_name)
-                metrics.update(eval_fn(sampled_systems, config.get("params", {})))
-                
+        for eval_entry in default_eval_cfg[task_name]:
+            for eval_name, config in eval_entry.items():
+                metrics.update(get_eval(eval_name)(sampled_systems, config.get("params", {})))
+        
         metrics_file = output_dir / f"{task_name}_metrics.json"
         with open(metrics_file, 'w') as f:
             json.dump(metrics, f)

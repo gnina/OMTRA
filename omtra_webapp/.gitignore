@@ -1,0 +1,44 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Hydra outputs
+.hydra/
+
+# Log files
+*.log
+logs/
+
+# Docker volumes and data (if created locally)
+.jobs/
+.job_storage/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node.js dependencies
+node_modules/
+**/node_modules/
+
+# Next.js build outputs
+.next/
+out/
+build/

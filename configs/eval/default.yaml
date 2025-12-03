@@ -127,7 +127,7 @@ ligand_conformer_condensed:
       train: true
       params:
         rmsd_threshold: 2.0
-  - pb_valid_unconditional:
+  - pb_valid_conformer:
       train: true
       params:
         max_workers: 0
@@ -146,7 +146,7 @@ ligand_conformer_from_pharmacophore_condensed:
       train: true
       params:
         rmsd_threshold: 2.0
-  - pb_valid_unconditional:
+  - pb_valid_conformer:
       train: true
       params:
         max_workers: 0
