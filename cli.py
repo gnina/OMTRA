@@ -204,7 +204,11 @@ def run_sample(args):
     task = task_name_to_class(args.task)
     
     if args.checkpoint is None:
-        checkpoint_dir = Path("./checkpoints")
+        # allows command to work from any directory
+        cli_file = Path(__file__).resolve()
+        omtra_root = cli_file.parent
+        checkpoint_dir = omtra_root / "checkpoints"
+        
         checkpoint_path = get_checkpoint_path_for_task(
             args.task,
             checkpoint_dir=checkpoint_dir

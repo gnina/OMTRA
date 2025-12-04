@@ -37,14 +37,9 @@ omtra() {
     # Run the command in Docker
     docker run ${GPU_FLAG} --rm ${TTY_FLAG} \
       --user ${USER_ID}:${GROUP_ID} \
-      -e DGL_CACHE_HOME=/workspace/.dgl \
       -e DGLBACKEND=pytorch \
-      -e HOME=/workspace \
+      -e HOME=/tmp \
       -v "$(pwd)":/workspace \
-      -v "$(pwd)/data":/workspace/data:ro \
-      -v "$(pwd)/checkpoints":/workspace/checkpoints \
-      -v "$(pwd)/outputs":/workspace/outputs \
-      -v "$(pwd)/local":/workspace/local \
       -w /workspace \
       ${IMAGE_NAME} \
       "$@"
