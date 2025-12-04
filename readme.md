@@ -4,82 +4,37 @@ A Multi-Task Generative model for Structure-Based Drug Design
 ![OMTRA](assets/omtra_fig.png)
 
 -----------------------------------------------------------------------------------------------------
+
+there are generally two ways to use omtra.
+1. build the environment manually inside a conda/mamba env that you create. 
+2. build a docker container from a docker file or pull our pre-built docker image.
+
+
 # Installation
 
-We recommend building the envornment using pip inside of a virtual environment. Our recommended procedure is:
+There are two options:
+1. Build the OMTRA environment manually (via pip)
+2. Use the provided Docker image. This is also the recommended option if you want use the web application interface.
 
-Create conda/mamba environment
+We assume you are going to run OMTRA in an environment meeting the following criteria: 
 
-```bash
-# Create conda/mamba environment
-mamba create -n omtra python=3.11
-mamba activate omtra
-
-# Clone, run build script
-git clone https://github.com/gnina/OMTRA.git
-cd OMTRA
-chmod +x build_env.sh
-./build_env.sh
-```
-
-The build script installs the CUDA-enabled versions of PyTorch, DGL, and PyG, and then installs the OMTRA package and its dependencies.
-
------------------------------------------------------------------------------------------------------
-# Sampling 
-There are two main ways to sample a trained OMTRA model.
-
-## Option 1: OMTRA Webapp
-The OMTRA webapp and documentation can be found here [Webapp]().
-
-## Option 2: rountines/sample.py
-Models: 
-
-### Usage
-| Argument | Default | Description | 
-|----------|-------------|-------------| 
-| `checkpoint` | Required | Path to model checkpoint. |
-| `--task` | Required | Task to sample for (e.g. denovo_ligand). |
-| `--dataset` | `pharmit` | Dataset to sample from (e.g. pharmit). |
-| `--split` | `val` | Which data split to use. |
-| `--dataset_start_idx` | `0` | Index in the dataset to start sampling from. |
-| `--sys_idx_file` | `None` | Path to a file with pre-selected system indices. |
-| `--pharmit_path` | `None` | Path to the Pharmit dataset (optional). |
-| `--plinder_path` | `None` | Path to the Plinder dataset (optional). |
-| `--crossdocked_path` | `None` | Path to the Crossdocked dataset (optional). |
-| `--n_samples` | `100` | Number of samples to draw. |
-| `--n_replicates` | `1` | For conditional sampling: number of replicates per input sample. |
-| `--n_timseteps` | `250` | Number of integration steps to take when sampling. |
-| `--use_gt_n_lig_atoms` | `store_true` | If set, use the number of ground truth ligand atoms for de novo design. |
-| `--n_lig_atom_margin` | `0.075` | Number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set. |
-| `--stochastic_sampling` | `store_true` | If set, perform stochastic sampling. |
-| `--noise_scaler` | `1.0` | Scaling factor for noise if using stochastic sampling. |
-| `--eps` | `0.01` | g(t) param for stochastic sampling. |
-| `--visualize` | `store_true` | If set, output will contain sampling trajectories rather than the final sampled state. |
-| `--metrics` | `store_true` | If set, compute metrics for the samples. |
-| `--output_dir` | `ckpt_path.parent.parent` | Directory for outputs. |
-
-
-#### Example Usage
-```console
-python routines/sample.py 
-    <PATH>/<CHECKPOINT>.ckpt \ 
-    --task=fixed_protein_ligand_denovo_condensed \
-    --n_samples=10 \
-    --n_replicates=10 \
-    --use_gt_n_lig_atoms \
-    --visualize \
-```
------------------------------------------------------------------------------------------------------
-# Using Docker
-
-## Requirements
-
-- Docker and Docker Compose installed
+- Linux System
 - NVIDIA GPU with CUDA support
+
+## Building the Docker Environment
+
+## Docker Image
+
+We assume the following about your system:
+- Docker and Docker Compose installed
 - NVIDIA Container Toolkit installed
 - Model weights downloaded to `OMTRA/checkpoints/` directory
 
 ## Start CLI with pre-built image
+
+#TODO: i think the docker-cli-setup.sh only pulls the images from a registry? if so,
+ we need to make it possible for somebody to like, also define the CLI/docker override situation but
+ if they build their own image locally for the docker file. so the instructions need to make this option clear.
 
 1. **Setup:**
    ```bash
@@ -97,7 +52,38 @@ python routines/sample.py
    ```
    The docker image will be automatically pulled from registry on first use.
 
-#### Examples
+### Additional System Requirements for using Docker
+
+- Docker and Docker Compose installed
+- NVIDIA GPU with CUDA support
+- NVIDIA Container Toolkit installed
+- Model weights downloaded to `OMTRA/checkpoints/` directory
+
+## Manual Installation
+
+```bash
+# Create conda/mamba environment
+mamba create -n omtra python=3.11
+mamba activate omtra
+
+# Clone, run build script
+git clone https://github.com/gnina/OMTRA.git
+cd OMTRA
+chmod +x build_env.sh
+./build_env.sh
+```
+
+The build script installs the CUDA-enabled versions of PyTorch, DGL, and PyG, and then installs the OMTRA package and its dependencies.
+
+-----------------------------------------------------------------------------------------------------
+# Sampling 
+
+There are two ways to sample a trained OMTRA model. You can use the OMTRA web application or the command-line interface.
+
+
+## OMTRA CLI
+
+#TODO: full descripton of CLI interface. Can be inferred from cli.py
 
 ```bash
 omtra --task denovo_ligand_condensed \
@@ -112,14 +98,9 @@ omtra --task fixed_protein_ligand_denovo_condensed \
 
 ```
 
-#TODO: does CLI require building environment first or does it use the docker image?
-#TODO: i think we need a set of instructions for use that encompass everything you want to do, either with or without the docker image. Q im not clear on: what is what docker image for? what is it not for?
-#TODO: give a nice table of options for the CLI like we did for sample.py
+## OMTRA web application
 
-
-## Web Application
-
-### Quick Start
+Assuming you built the docker image? or already pulled the image? i think?
 
 ```bash
 cd omtra_webapp
