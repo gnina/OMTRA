@@ -67,9 +67,25 @@ export function MolecularViewer({ jobId, filename, samplingMode }: MolecularView
         });
         // Set background color to white
         viewer.setBackgroundColor(0xffffff);
+        
+        // Prevent clipping by overriding camera's updateProjectionMatrix
+        const viewerAny = viewer as any;
+        const camera = viewerAny.camera || viewerAny.gl?.camera || viewerAny.renderer?.camera;
+        
+        if (camera?.updateProjectionMatrix) {
+          const original = camera.updateProjectionMatrix.bind(camera);
+          camera.updateProjectionMatrix = function() {
+            this.near = 0.01;
+            this.far = 1000000;
+            return original();
+          };
+          camera.near = 0.01;
+          camera.far = 1000000;
+          camera.updateProjectionMatrix();
+        }
+        
         viewerRef.current = viewer;
         (viewer as any)._initialized = true;
-        console.log('Viewer created:', viewer);
       }
 
       const viewer = viewerRef.current;
@@ -142,8 +158,22 @@ export function MolecularViewer({ jobId, filename, samplingMode }: MolecularView
       viewer.setStyle({ model: ligandModel }, { stick: { radius: 0.15 } });
       viewerAny._ligandModel = ligandModel;
 
-      safeSetCamera(camera, ligandModel);
-      viewer.render();
+      if (viewerAny._updateCameraClipping) {
+        viewerAny._updateCameraClipping();
+      } else if (viewerAny.camera) {
+        viewerAny.camera.near = 0.01;
+        viewerAny.camera.far = 1000000;
+        viewerAny.camera.updateProjectionMatrix();
+      }
+      
+      if (camera && camera.length > 0) {
+        viewer.setView(camera);
+        viewer.render();
+      } else {
+        viewer.zoomTo({ model: ligandModel });
+        viewer.render();
+      }
+      
       hasBuiltSceneRef.current = true;
 
       // Load protein/pharmacophore in the background
@@ -166,31 +196,84 @@ export function MolecularViewer({ jobId, filename, samplingMode }: MolecularView
           proteinDataRef.current = { content: protContent, format: protFormat };
 
           // Add protein to scene
-          if (viewerRef.current && !viewerAny._proteinModel) {
+          const currentViewer = viewerRef.current;
+          const currentViewerAny = currentViewer ? (currentViewer as any) : null;
+          if (currentViewer && !currentViewerAny._proteinModel) {
             const proteinModel = viewerRef.current.addModel(
               proteinDataRef.current.content,
               proteinDataRef.current.format
             );
-            viewerRef.current.setStyle({ model: proteinModel }, { cartoon: { color: 'lightblue' } });
-            viewerAny._proteinModel = proteinModel;
+            currentViewer.setStyle({ model: proteinModel }, { cartoon: { color: 'lightblue' } });
+            currentViewerAny._proteinModel = proteinModel;
 
             // Add surface if ligand exists
-            if (viewerAny._ligandModel && !viewerAny._proteinSurface) {
+            if (currentViewerAny._ligandModel && !currentViewerAny._proteinSurface) {
               try {
-                const surface = viewerRef.current.addSurface(
+                const surface = currentViewer.addSurface(
                   window.$3Dmol.VDW,
                   { opacity: 0.6, colorscheme: 'whiteCarbon' },
                   {
                     model: proteinModel,
-                    within: { distance: 6.0, sel: { model: viewerAny._ligandModel } },
+                    within: { distance: 6.0, sel: { model: currentViewerAny._ligandModel } },
                   }
                 );
-                viewerAny._proteinSurface = surface;
+                currentViewerAny._proteinSurface = surface;
               } catch (err) {
                 console.error('Failed to add protein surface:', err);
               }
             }
-            viewerRef.current.render();
+            currentViewer.zoomTo({});
+            
+            // Force big scene bounds
+            const gl = currentViewerAny.gl;
+            if (gl && gl.scene) {
+              gl.scene.traverse((obj: any) => {
+                if (obj.geometry && obj.geometry.boundingBox) {
+                  const box = obj.geometry.boundingBox;
+                  const center = box.getCenter(new (window as any).THREE.Vector3());
+                  const size = 10000; // 10000 Angstroms
+                  box.min.set(center.x - size, center.y - size, center.z - size);
+                  box.max.set(center.x + size, center.y + size, center.z + size);
+                }
+              });
+            }
+            
+            // Update camera clipping planes before rendering
+            if (currentViewerAny._updateCameraClipping) {
+              currentViewerAny._updateCameraClipping();
+            } else {
+              // Fallback: directly set clipping planes
+              let cam = currentViewerAny.camera || currentViewerAny.gl?.camera || currentViewerAny.renderer?.camera;
+              if (cam) {
+                cam.near = 0.01;
+                cam.far = 1000000;
+                if (cam.updateProjectionMatrix) cam.updateProjectionMatrix();
+              }
+            }
+            
+            currentViewer.render();
+            
+            // Now zoom back to ligand
+            if (currentViewerAny._ligandModel) {
+              setTimeout(() => {
+                currentViewer.zoomTo({ model: currentViewerAny._ligandModel });
+                // Force clipping update after zoom
+                if (currentViewerAny._updateCameraClipping) {
+                  currentViewerAny._updateCameraClipping();
+                  setTimeout(() => currentViewerAny._updateCameraClipping(), 0);
+                  setTimeout(() => currentViewerAny._updateCameraClipping(), 10);
+                  setTimeout(() => currentViewerAny._updateCameraClipping(), 50);
+                } else {
+                  let cam = currentViewerAny.camera || currentViewerAny.gl?.camera || currentViewerAny.renderer?.camera;
+                  if (cam) {
+                    cam.near = 0.01;
+                    cam.far = 1000000;
+                    if (cam.updateProjectionMatrix) cam.updateProjectionMatrix();
+                  }
+                }
+                currentViewer.render();
+              }, 50);
+            }
           }
         } catch (err) {
           console.error('Failed to load protein data:', err);

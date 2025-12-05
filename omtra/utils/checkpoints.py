@@ -5,20 +5,20 @@ import os
 # TODO: change file names before publishing docker images
 
 TASK_TO_CHECKPOINT: Dict[str, str] = {
-    # Unconditional tasks -> uncond.ckpt
+    # Unconditional tasks
     "denovo_ligand_condensed": "uncond.ckpt",  # Unconditional de novo ligand generation
     "ligand_conformer_condensed": "uncond.ckpt",  # Unconditional ligand conformer generation
     
-    # Pharmacophore-conditioned (no protein) -> phcond.ckpt
+    # Pharmacophore-conditioned (no protein)
     "denovo_ligand_from_pharmacophore_condensed": "phcond.ckpt",  # Pharmacophore-conditioned de novo ligand generation
     "ligand_conformer_from_pharmacophore_condensed": "phcond.ckpt",  # Pharmacophore-conditioned ligand conformer generation
     
-    # Protein-conditioned -> protcond.ckpt
-    "rigid_docking_condensed": "protcond.ckpt",  # Rigid docking
+    # Protein-conditioned
+    "rigid_docking_condensed": "protcond_dock.ckpt",  # Rigid docking
     "fixed_protein_ligand_denovo_condensed": "protcond.ckpt",  # Rigid protein, de novo ligand generation
     
-    # Protein + pharmacophore -> protpharmcond.ckpt
-    "rigid_docking_pharmacophore_condensed": "protpharmcond.ckpt",  # Pharmacophore-conditioned rigid docking
+    # Protein + pharmacophore 
+    "rigid_docking_pharmacophore_condensed": "protpharmcond_dock.ckpt",  # Pharmacophore-conditioned rigid docking
     "fixed_protein_pharmacophore_ligand_denovo_condensed": "protpharmcond.ckpt",  # Rigid protein + pharmacophore, de novo ligand generation
 }
 

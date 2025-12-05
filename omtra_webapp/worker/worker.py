@@ -747,16 +747,7 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                     except Exception:
                         pass
                     if not error_msg:
-                        error_msg = str(e)
-                        if ":" in error_msg:
-                            error_msg = error_msg.split(":", 1)[-1].strip()
-                        if "Length of values" in error_msg or "does not match" in error_msg:
-                            try:
-                                Chem.SanitizeMol(mol)
-                            except Exception as sanitize_err:
-                                error_msg = str(sanitize_err)
-                                if ":" in error_msg:
-                                    error_msg = error_msg.split(":", 1)[-1].strip()
+                        error_msg = "pb_runtime_error"
                     metrics['pb_failing_checks'] = [error_msg] if error_msg and len(error_msg) > 0 and error_msg != "error" else ['error']
                     logging.warning(f"Failed to compute pb_valid for {sample_name}: {e}")
             # Only compute protein-ligand interaction metrics for protein-involving jobs
@@ -920,16 +911,7 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                         except Exception:
                             pass
                         if not error_msg:
-                            error_msg = str(e)
-                            if ":" in error_msg:
-                                error_msg = error_msg.split(":", 1)[-1].strip()
-                            if "Length of values" in error_msg or "does not match" in error_msg:
-                                try:
-                                    Chem.SanitizeMol(mol)
-                                except Exception as sanitize_err:
-                                    error_msg = str(sanitize_err)
-                                    if ":" in error_msg:
-                                        error_msg = error_msg.split(":", 1)[-1].strip()
+                            error_msg = "pb_runtime_error"
                         metrics['pb_failing_checks'] = [error_msg] if error_msg and len(error_msg) > 0 and error_msg != "error" else ['error']
                     else:
                         metrics['pb_failing_checks'] = []  # No error if sanitization passed

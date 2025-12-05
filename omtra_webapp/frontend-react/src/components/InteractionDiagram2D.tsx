@@ -98,24 +98,37 @@ export async function prefetchInteractionDiagram(jobId: string, filename: string
 export function InteractionDiagram2D({ jobId, filename }: InteractionDiagram2DProps) {
   const cacheKey = useMemo(() => `${jobId}/${filename}`, [jobId, filename]);
   
-  // Initialize from cache if available
-  const cachedError = errorCache.get(cacheKey) || null;
-  const cachedSvg = svgCache.get(cacheKey) || null;
-  const cachedSvgIsBlank = cachedSvg ? isBlankSvg(cachedSvg) : false;
+  const [svgContent, setSvgContent] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<DiagramError | null>(null);
   
-  // If cached SVG is blank, treat as error
-  const initialError = cachedError || (cachedSvgIsBlank ? { message: 'PoseView failed to generate diagram' } : null);
-  const initialSvg = cachedSvgIsBlank ? null : cachedSvg;
-  
-  const [svgContent, setSvgContent] = useState<string | null>(initialSvg);
-  const [isLoading, setIsLoading] = useState(!initialError && !initialSvg);
-  const [error, setError] = useState<DiagramError | null>(initialError);
-  
+  // Reset state and load from cache or API when filename changes
   useEffect(() => {
-    // If we have valid cache, we're done
-    if (cachedError || (cachedSvg && !cachedSvgIsBlank)) {
+    // Get cached data for this cacheKey
+    const cachedError = errorCache.get(cacheKey) || null;
+    const cachedSvg = svgCache.get(cacheKey) || null;
+    const cachedSvgIsBlank = cachedSvg ? isBlankSvg(cachedSvg) : false;
+    
+    // If we have valid cached SVG, use it immediately
+    if (cachedSvg && !cachedSvgIsBlank) {
+      setSvgContent(cachedSvg);
+      setError(null);
+      setIsLoading(false);
       return;
     }
+    
+    // If we have cached error, show it immediately
+    if (cachedError) {
+      setError(cachedError);
+      setSvgContent(null);
+      setIsLoading(false);
+      return;
+    }
+    
+    // Otherwise, reset state and load from API
+    setSvgContent(null);
+    setError(null);
+    setIsLoading(true);
     
     // Load diagram from API
     const loadDiagram = async () => {
@@ -140,6 +153,7 @@ export function InteractionDiagram2D({ jobId, filename }: InteractionDiagram2DPr
       } catch (err) {
         const errorDetails = extractInteractionDiagramErrorDetails(err);
         setError(errorDetails);
+        setSvgContent(null);
         setIsLoading(false);
         errorCache.set(cacheKey, errorDetails);
         svgCache.delete(cacheKey);
@@ -147,7 +161,7 @@ export function InteractionDiagram2D({ jobId, filename }: InteractionDiagram2DPr
     };
 
     loadDiagram();
-  }, [jobId, filename, cacheKey, cachedError, cachedSvg, cachedSvgIsBlank]);
+  }, [jobId, filename, cacheKey]);
 
   // Always render the same structure - keep UI static
   return (

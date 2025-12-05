@@ -80,6 +80,15 @@ export function PharmacophoreViewer({
           }
           
           (viewer as any)._hasProtein = true;
+          
+          // Update camera clipping planes after adding protein
+          const viewerAny = viewer as any;
+          if (viewerAny.camera) {
+            viewerAny.camera.near = 0.1;
+            viewerAny.camera.far = 10000;
+            viewerAny.camera.updateProjectionMatrix();
+          }
+          
           viewer.render();
         } catch (err) {
           console.error('Failed to load protein:', err);
@@ -105,6 +114,14 @@ export function PharmacophoreViewer({
       const viewer = window.$3Dmol.createViewer(containerRef.current, {
         defaultcolors: window.$3Dmol.rasmolElementColors,
       });
+      
+      const viewerAny = viewer as any;
+      if (viewerAny.camera) {
+            viewerAny.camera.near = 0.01;
+            viewerAny.camera.far = 1000000;
+        viewerAny.camera.updateProjectionMatrix();
+      }
+      
       viewerRef.current = viewer;
       
       // Load ligand
@@ -295,6 +312,13 @@ export function PharmacophoreViewer({
 
       // Only zoom on initial load (zoom to ligand model 0)
       viewer.zoomTo({ model: 0 });
+      
+      if (viewerAny.camera) {
+        viewerAny.camera.near = 0.01;
+        viewerAny.camera.far = 1000000;
+        viewerAny.camera.updateProjectionMatrix();
+      }
+      
       viewer.render();
 
       // Store viewer and update function for later use

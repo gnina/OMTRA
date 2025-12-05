@@ -83,8 +83,9 @@ def load_ligand_rdkit(ligand_file: Path, compute_condensed: bool = False) -> Lig
     valid_mols, failed, failures, _ = tensorizer.featurize_molecules([mol])
     if failed:
         raise ValueError(f"Ligand featurization failed: {failures}")
-    xace = valid_mols[0].sparse_to_dense()
+    xace = valid_mols[0]
     xace.to_torch()
+    xace = xace.sparse_to_dense()
 
     atom_cond_a = None
     if compute_condensed:

@@ -59,6 +59,34 @@ export default function HomePage() {
         </nav>
       </header>
 
+      {/* Disclaimer Banner */}
+      <div className="bg-amber-50 border-b border-amber-200/60">
+        <div className="mx-auto max-w-[95%] xl:max-w-[1400px] px-4 sm:px-6 lg:px-8 py-3">
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0 mt-0.5">
+              <span className="text-amber-600 text-lg">⚠️</span>
+            </div>
+            <div className="flex-1 text-sm text-amber-900">
+              <p className="font-medium mb-1">Disclaimer</p>
+              <p className="text-amber-800/90"> 
+                This is a proof of concept server for demonstration purposes. 
+                All results are public, and jobs are automatically removed after 48 hours.
+                For issues, feature requests, or to contribute, please visit our{' '}
+                <a 
+                  href="https://github.com/gnina/OMTRA" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="font-semibold underline hover:text-amber-900 transition-colors"
+                >
+                  GitHub repository
+                </a>
+                {' '}and open an issue.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <main className="flex-1">
         {/* Workspace Section */}
         <section id="workspace" className="py-8">
@@ -91,6 +119,34 @@ export default function HomePage() {
           </div>
         </section>
       </main>
+
+      {/* Footer */}
+      <footer className="bg-slate-900 text-white mt-12">
+        <div className="mx-auto max-w-[95%] xl:max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
+          <div className="border-t border-slate-800 pt-6">
+            <p className="text-sm text-slate-400 text-center">
+              © {new Date().getFullYear()} OMTRA.{' '}
+              <a 
+                href="https://github.com/gnina/OMTRA" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-slate-300 hover:text-white underline transition-colors"
+              >
+                View on GitHub
+              </a>
+              {' '}•{' '}
+              <a 
+                href="https://github.com/gnina/OMTRA/issues" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-slate-300 hover:text-white underline transition-colors"
+              >
+                Report Issues
+              </a>
+            </p>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

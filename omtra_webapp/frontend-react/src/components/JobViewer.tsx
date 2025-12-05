@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import { JobStatus } from '@/types';
@@ -16,7 +16,13 @@ interface JobViewerProps {
 
 export function JobViewer({ jobId, onBack }: JobViewerProps) {
   const [moleculeIndex, setMoleculeIndex] = useState(0);
+  const [inputValue, setInputValue] = useState('0');
   const [activeTab, setActiveTab] = useState<'3d' | '2d'>('3d');
+
+  // Sync inputValue when moleculeIndex changes from other sources (arrows, table selection)
+  useEffect(() => {
+    setInputValue(String(moleculeIndex));
+  }, [moleculeIndex]);
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['job-status', jobId],
@@ -180,19 +186,16 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
       </button>
 
       <div className="border-b border-slate-200/60 pb-4" style={{ width: '100%', minWidth: 0, overflow: 'visible' }}>
-        <div className="mb-2">
-          <h2 className="text-2xl font-semibold text-slate-900 inline-block mr-2">
+        <div className="mb-2 flex items-baseline gap-2 flex-wrap">
+          <h2 className="text-2xl font-semibold text-slate-900">
             Job Details:
           </h2>
           <span 
-            className="text-2xl font-semibold text-slate-900 align-middle" 
+            className="text-2xl font-semibold text-slate-900" 
             style={{ 
               wordBreak: 'break-all', 
               overflowWrap: 'anywhere', 
-              whiteSpace: 'normal',
-              display: 'inline-block',
-              maxWidth: '100%',
-              overflow: 'visible'
+              whiteSpace: 'normal'
             }}
           >
             {jobId}
@@ -228,6 +231,7 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
             const newIndex = Math.min(sdfFiles.length - 1, moleculeIndex + 1);
             console.log(`[JobViewer] Forward button clicked: ${moleculeIndex} -> ${newIndex}`);
             setMoleculeIndex(newIndex);
+            setInputValue(String(newIndex));
           }}
           disabled={moleculeIndex >= sdfFiles.length - 1}
           className="absolute right-4 p-3 bg-white rounded-full shadow-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 transition-all hover:scale-110"
@@ -244,14 +248,29 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
           type="number"
           min={0}
           max={sdfFiles.length - 1}
-          value={moleculeIndex}
+          value={inputValue}
           onChange={(e) => {
-            const val = parseInt(e.target.value);
-            if (!isNaN(val) && val >= 0 && val < sdfFiles.length) {
+            setInputValue(e.target.value);
+          }}
+          onBlur={(e) => {
+            const val = parseInt(e.target.value, 10);
+            if (isNaN(val) || val < 0) {
+              setMoleculeIndex(0);
+              setInputValue('0');
+            } else if (val >= sdfFiles.length) {
+              setMoleculeIndex(sdfFiles.length - 1);
+              setInputValue(String(sdfFiles.length - 1));
+            } else {
               setMoleculeIndex(val);
+              setInputValue(String(val));
             }
           }}
-          className="w-20 px-3 py-2 border border-slate-200 rounded-xl text-center bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 shadow-sm"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.currentTarget.blur();
+            }
+          }}
+          className="w-24 px-3 py-2.5 border border-slate-200 rounded-xl text-center bg-white text-slate-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"
         />
         <button
           onClick={handleDownloadAll}
@@ -292,18 +311,19 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
           
           {/* Tab Content */}
           <div className="p-4">
-            {activeTab === '3d' ? (
+            <div className={activeTab === '3d' ? 'block' : 'hidden'}>
               <MolecularViewer
                 jobId={jobId}
                 filename={currentFile.filename}
                 samplingMode={result.params.sampling_mode}
               />
-            ) : (
-              <InteractionDiagram2D 
-                jobId={jobId} 
-                filename={currentFile.filename} 
+            </div>
+            <div className={activeTab === '2d' ? 'block' : 'hidden'}>
+              <InteractionDiagram2D
+                jobId={jobId}
+                filename={currentFile.filename}
               />
-            )}
+            </div>
           </div>
         </div>
       ) : (
@@ -320,7 +340,10 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
       <MetricsTable
         jobId={jobId}
         samplingMode={result.params.sampling_mode}
-        onRowSelect={setMoleculeIndex}
+        onRowSelect={(index) => {
+          setMoleculeIndex(index);
+          setInputValue(String(index));
+        }}
         selectedIndex={moleculeIndex}
       />
     </div>
