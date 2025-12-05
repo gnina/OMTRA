@@ -56,9 +56,11 @@ outputs
 multirun
 
 # Checkpoints (too large, should be mounted)
-checkpoints/*.ckpt
-checkpoints/*.pth
-checkpoints/*.pt
+omtra/trained_models
+omtra/trained_models/**
+*.ckpt
+*.pth
+*.pt
 
 # Job storage (runtime data)
 .jobs

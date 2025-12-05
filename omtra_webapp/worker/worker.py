@@ -7,8 +7,11 @@ import shutil
 import logging
 import subprocess
 import tempfile
+import io
+import re
+import threading
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import redis
 from rq import Worker, Queue
@@ -58,6 +61,258 @@ if missing_checkpoints:
     )
 
 
+# Interaction diagram generation helpers (synchronous versions from API)
+def _embed_ligand_in_pdb(sdf_str: str, pdb_str: str) -> Optional[str]:
+    """Embed ligand coordinates from SDF into PDB file as HETATM records"""
+    try:
+        sdf_lines = sdf_str.strip().split('\n')
+        if len(sdf_lines) < 4:
+            return None
+        
+        # Find counts line
+        num_atoms, atom_start_idx = None, None
+        if len(sdf_lines) > 3:
+            try:
+                parts = sdf_lines[3].split()
+                if len(parts) > 0:
+                    num_atoms = int(parts[0])
+                    atom_start_idx = 4
+            except (ValueError, IndexError):
+                for i, line in enumerate(sdf_lines):
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        try:
+                            if 0 < int(parts[0]) < 10000 and 0 <= int(parts[1]) < 10000:
+                                num_atoms = int(parts[0])
+                                atom_start_idx = i + 1
+                                break
+                        except ValueError:
+                            continue
+        
+        if num_atoms is None or atom_start_idx is None:
+            return None
+        
+        # Parse coordinates
+        coords = []
+        for i in range(atom_start_idx, atom_start_idx + num_atoms):
+            if i < len(sdf_lines):
+                parts = sdf_lines[i].split()
+                if len(parts) >= 4:
+                    try:
+                        coords.append((float(parts[0]), float(parts[1]), float(parts[2]), parts[3]))
+                    except (ValueError, IndexError):
+                        continue
+        
+        if not coords:
+            return None
+        
+        # Insert into PDB
+        pdb_lines = pdb_str.split('\n')
+        end_idx = next((i for i, line in enumerate(pdb_lines) if line.strip() == 'END'), None)
+        max_atom_num = max((int(line[6:11].strip()) for line in pdb_lines if line.startswith(('ATOM', 'HETATM'))), default=0)
+        
+        hetatm_lines = [f"HETATM{max_atom_num + i + 1:5d}  {elem:2s}  LIG A   1    {x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00           {elem:2s}  \n"
+                       for i, (x, y, z, elem) in enumerate(coords)]
+        
+        if end_idx is not None:
+            return '\n'.join(pdb_lines[:end_idx] + hetatm_lines + ['END\n'])
+        return '\n'.join(pdb_lines + hetatm_lines + ['END\n'])
+    except Exception:
+        return None
+
+
+def _poll_job(job_id: str, poll_url: str, poll_interval: int = 1, max_polls: int = 60):
+    """Poll job status until complete"""
+    import requests
+    job = requests.get(poll_url + job_id + '/').json()
+    status = job.get('status', '')
+    current_poll = 0
+    
+    while status in ('pending', 'running'):
+        if current_poll >= max_polls:
+            return job
+        time.sleep(poll_interval)
+        job = requests.get(poll_url + job_id + '/').json()
+        status = job.get('status', '')
+        current_poll += 1
+    return job
+
+
+def _is_blank_svg(svg: str) -> bool:
+    """Check if SVG is blank or empty"""
+    if not svg or not svg.strip():
+        return True
+    # Remove whitespace and check for minimal content
+    trimmed = re.sub(r'\s+', ' ', svg.strip())
+    
+    # Check if it's just a border rectangle (single path with simple rectangle)
+    border_patterns = [
+        r'<path[^>]*d="[^"]*M\s+\d+\s+\d+\s+L\s+\d+\s+\d+\s+L\s+\d+\s+\d+\s+L\s+\d+\s+\d+\s+Z',  # Standard border
+        r'<path[^>]*d="[^"]*M\s+0\s+0\s+L\s+600\s+0\s+L\s+600\s+600\s+L\s+0\s+600\s+Z',  # Exact 600x600 border
+        r'<path[^>]*d="[^"]*M\s+0\s+0\s+L\s+\d+\s+0\s+L\s+\d+\s+\d+\s+L\s+0\s+\d+\s+Z\s+M\s+0\s+0',  # Border with extra M
+    ]
+    for pattern in border_patterns:
+        if re.search(pattern, trimmed, re.IGNORECASE):
+            # If it's a short SVG with only border, it's blank
+            if len(trimmed) < 500:
+                return True
+            # Even if longer, if it only has one path element and it's a border, it's blank
+            path_count = len(re.findall(r'<path[^>]*>', trimmed, re.IGNORECASE))
+            if path_count == 1:
+                return True
+    
+    # Check if it has meaningful content 
+    has_meaningful_content = bool(
+        re.search(r'<text[^>]*>', trimmed, re.IGNORECASE) or
+        re.search(r'<circle[^>]*r="[^"]*"[^>]*>', trimmed, re.IGNORECASE) or
+        (re.search(r'<path[^>]*d="[^"]*[ML][^"]*[ML]"', trimmed, re.IGNORECASE) and len(trimmed) > 500) or  # Multiple move/line commands (but not just a border)
+        re.search(r'<path[^>]*d="[^"]*[CcQqSsTtAaZz]', trimmed, re.IGNORECASE)  # Curved paths (bezier, arc, etc.)
+    )
+    # If it's a very short SVG with no meaningful content, it's blank
+    if not has_meaningful_content and len(trimmed) < 500:
+        return True
+    return False
+
+
+def _generate_interaction_diagram(ligand_file: Path, protein_file: Path, job_logger: logging.Logger) -> tuple:
+    """Generate interaction diagram for a single ligand file using ProteinsPlus API v2.
+    
+    Returns:
+        Tuple of (svg_content, error_message). If successful, returns (svg, None).
+        If failed, returns (None, error_message).
+    """
+    try:
+        import requests
+        
+        # Read files
+        with open(ligand_file, 'r') as f:
+            ligand_str = f.read()
+        with open(protein_file, 'r') as f:
+            protein_str = f.read()
+        
+        # Convert CIF to PDB if needed
+        if protein_file.suffix.lower() == '.cif':
+            try:
+                from biotite.structure.io import pdb
+                from biotite.structure.io.pdbx import CIFFile, get_structure
+                import biotite.structure as struc
+                
+                cif_file = CIFFile.read(str(protein_file))
+                st = get_structure(cif_file, model=1, include_bonds=False)
+                st = st[st.res_name != "HOH"]
+                st = st[st.element != "H"]
+                st = st[st.element != "D"]
+                
+                pdb_file = pdb.PDBFile()
+                pdb_file.set_structure(st)
+                pdb_stringio = io.StringIO()
+                pdb_file.write(pdb_stringio)
+                protein_str = pdb_stringio.getvalue()
+            except Exception as conv_e:
+                error_msg = f"CIF→PDB conversion failed: {conv_e}"
+                job_logger.warning(error_msg)
+                return None, error_msg
+        
+        # Ensure PDB has END record
+        protein_lines = protein_str.strip().split('\n')
+        has_end = any(line.strip() == 'END' or line.strip().startswith('END') for line in protein_lines[-5:])
+        if not has_end:
+            protein_str = protein_str.rstrip() + '\nEND\n'
+        
+        PROTEINS_PLUS_BASE = "https://proteins.plus"
+        API_BASE = f"{PROTEINS_PLUS_BASE}/api/v2"
+        UPLOAD_URL = f"{API_BASE}/molecule_handler/upload/"
+        UPLOAD_JOBS_URL = f"{API_BASE}/molecule_handler/upload/jobs/"
+        PROTEINS_URL = f"{API_BASE}/molecule_handler/proteins/"
+        LIGANDS_URL = f"{API_BASE}/molecule_handler/ligands/"
+        POSEVIEW_URL = f"{API_BASE}/poseview/"
+        POSEVIEW_JOBS_URL = f"{API_BASE}/poseview/jobs/"
+        
+        # Step 1: Embed ligand in PDB
+        combined_pdb_str = _embed_ligand_in_pdb(ligand_str, protein_str)
+        if not combined_pdb_str:
+            error_msg = "Failed to embed ligand in PDB"
+            job_logger.warning(f"{error_msg} for {ligand_file.name}")
+            return None, error_msg
+        
+        # Step 2: Extract ligand from combined PDB
+        combined_pdb_bytes = combined_pdb_str.encode('utf-8')
+        combined_pdb_file_obj = io.BytesIO(combined_pdb_bytes)
+        combined_pdb_file_obj.seek(0)
+        files = {'protein_file': ('protein.pdb', combined_pdb_file_obj, 'chemical/x-pdb')}
+        
+        preprocessing_job_submission = requests.post(UPLOAD_URL, files=files, timeout=120).json()
+        preprocessing_job = _poll_job(preprocessing_job_submission['job_id'], UPLOAD_JOBS_URL, poll_interval=1, max_polls=30)
+        
+        if preprocessing_job.get('status') != 'success':
+            error_msg = f"Preprocessing failed: {preprocessing_job.get('error', 'Unknown error')}"
+            job_logger.warning(f"{error_msg} for {ligand_file.name}")
+            return None, error_msg
+        
+        protein_combined = requests.get(f"{PROTEINS_URL}{preprocessing_job['output_protein']}/", timeout=15).json()
+        
+        if not protein_combined.get('ligand_set'):
+            error_msg = "No ligands found in combined PDB"
+            job_logger.warning(f"{error_msg} for {ligand_file.name}")
+            return None, error_msg
+        
+        ligand_id = protein_combined['ligand_set'][0]
+        
+        # Step 3: Upload original PDB
+        original_protein_bytes = protein_str.encode('utf-8')
+        original_protein_file_obj = io.BytesIO(original_protein_bytes)
+        original_protein_file_obj.seek(0)
+        files2 = {'protein_file': ('protein.pdb', original_protein_file_obj, 'chemical/x-pdb')}
+        preprocessing_job_submission2 = requests.post(UPLOAD_URL, files=files2, timeout=120).json()
+        preprocessing_job2 = _poll_job(preprocessing_job_submission2['job_id'], UPLOAD_JOBS_URL, poll_interval=1, max_polls=30)
+        
+        if preprocessing_job2.get('status') != 'success':
+            error_msg = "Failed to upload original protein"
+            job_logger.warning(f"{error_msg} for {ligand_file.name}")
+            return None, error_msg
+        
+        protein_original = requests.get(f"{PROTEINS_URL}{preprocessing_job2['output_protein']}/", timeout=15).json()
+        
+        # Step 4: Generate PoseView
+        query = {'protein_id': protein_original['id'], 'ligand_id': ligand_id}
+        poseview_job_submission = requests.post(POSEVIEW_URL, data=query, timeout=120).json()
+        poseview_job = _poll_job(poseview_job_submission['job_id'], POSEVIEW_JOBS_URL, poll_interval=1, max_polls=60)
+        
+        if poseview_job.get('status') != 'success':
+            error_msg = f"PoseView failed: {poseview_job.get('error', 'Unknown error')}"
+            job_logger.warning(f"{error_msg} for {ligand_file.name}")
+            return None, error_msg
+        
+        image_url = poseview_job.get('image')
+        if not image_url:
+            error_msg = "PoseView succeeded but no image URL"
+            job_logger.warning(f"{error_msg} for {ligand_file.name}")
+            return None, error_msg
+        
+        # Fetch SVG
+        svg_response = requests.get(image_url, timeout=30)
+        svg_response.raise_for_status()
+        svg_content = svg_response.text
+        
+        # Check if SVG is blank
+        if _is_blank_svg(svg_content):
+            error_msg = "Generated diagram is empty or blank"
+            job_logger.warning(f"{error_msg} for {ligand_file.name}")
+            return None, error_msg
+        
+        # Clean up SVG (remove width/height attributes)
+        svg_content = re.sub(r'\s+width="\d+pt"\s+height="\d+pt"', '', svg_content)
+        
+        return svg_content, None
+        
+    except Exception as e:
+        error_msg = f"Failed to generate interaction diagram: {str(e)}"
+        job_logger.warning(f"{error_msg} for {ligand_file.name}")
+        return None, error_msg
+
+
+
+
 def sampling_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Main sampling task that runs the molecular generation model
@@ -96,7 +351,9 @@ def sampling_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[st
             log_job_event(job_logger, job_id, "sampling_completed", 
                          message="Sampling completed but no result data returned" if result is None else f"Sampling completed with non-dict result: {type(result)}")
         
-        # Update job status in Redis
+        # Diagrams are already generated in parallel during sampling, so no need to generate here
+        
+        # Update job status in Redis to SUCCEEDED (only after diagrams are done)
         try:
             redis_conn = redis.from_url(REDIS_URL)
             job_data = redis_conn.get(f"job:{job_id}")
@@ -490,16 +747,7 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                     except Exception:
                         pass
                     if not error_msg:
-                        error_msg = str(e)
-                        if ":" in error_msg:
-                            error_msg = error_msg.split(":", 1)[-1].strip()
-                        if "Length of values" in error_msg or "does not match" in error_msg:
-                            try:
-                                Chem.SanitizeMol(mol)
-                            except Exception as sanitize_err:
-                                error_msg = str(sanitize_err)
-                                if ":" in error_msg:
-                                    error_msg = error_msg.split(":", 1)[-1].strip()
+                        error_msg = "pb_runtime_error"
                     metrics['pb_failing_checks'] = [error_msg] if error_msg and len(error_msg) > 0 and error_msg != "error" else ['error']
                     logging.warning(f"Failed to compute pb_valid for {sample_name}: {e}")
             # Only compute protein-ligand interaction metrics for protein-involving jobs
@@ -663,16 +911,7 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                         except Exception:
                             pass
                         if not error_msg:
-                            error_msg = str(e)
-                            if ":" in error_msg:
-                                error_msg = error_msg.split(":", 1)[-1].strip()
-                            if "Length of values" in error_msg or "does not match" in error_msg:
-                                try:
-                                    Chem.SanitizeMol(mol)
-                                except Exception as sanitize_err:
-                                    error_msg = str(sanitize_err)
-                                    if ":" in error_msg:
-                                        error_msg = error_msg.split(":", 1)[-1].strip()
+                            error_msg = "pb_runtime_error"
                         metrics['pb_failing_checks'] = [error_msg] if error_msg and len(error_msg) > 0 and error_msg != "error" else ['error']
                     else:
                         metrics['pb_failing_checks'] = []  # No error if sanitization passed
@@ -1038,6 +1277,66 @@ def run_omtra_sampler(
                 except Exception as conv_e:
                     job_logger.warning(f"CIF→PDB conversion failed: {conv_e}", exc_info=True)
             
+            # Prepare for parallel diagram generation
+            diagram_threads = []
+            diagram_lock = threading.Lock()
+            diagram_results = {}  # Track which diagrams succeeded/failed
+            
+            def generate_diagram_for_sample(sdf_file_path: Path, protein_file_path: Optional[str], sample_idx: int):
+                """Generate diagram for a single sample in a background thread"""
+                if not protein_file_path or sampling_mode not in ['Protein-conditioned', 'Protein+Pharmacophore-conditioned']:
+                    return
+                
+                try:
+                    # Convert protein_file_path to Path if it's a string
+                    protein_path = Path(protein_file_path) if isinstance(protein_file_path, str) else protein_file_path
+                    
+                    diagram_filename = f"{sdf_file_path.name}_diagram.svg"
+                    error_filename = f"{sdf_file_path.name}_diagram_error.json"
+                    cached_diagram_path = outputs_dir / diagram_filename
+                    error_path = outputs_dir / error_filename
+                    
+                    # Skip if already exists
+                    if cached_diagram_path.exists() or error_path.exists():
+                        with diagram_lock:
+                            diagram_results[sample_idx] = 'skipped'
+                        return
+                    
+                    svg, error_msg = _generate_interaction_diagram(sdf_file_path, protein_path, job_logger)
+                    
+                    if svg and not error_msg:
+                        with open(cached_diagram_path, 'w') as f:
+                            f.write(svg)
+                        with diagram_lock:
+                            diagram_results[sample_idx] = 'success'
+                        job_logger.info(f"Generated diagram for {sdf_file_path.name}")
+                    else:
+                        # Save error file
+                        error_detail = error_msg or "Failed to generate interaction diagram. PoseView could not detect any interactions. This can happen if the ligand is too far from the protein binding site or the coordinate systems don't align."
+                        error_data = {
+                            "statusCode": 503,
+                            "message": error_detail.split('.')[0] if error_detail else "Failed",
+                            "detail": error_detail
+                        }
+                        with open(error_path, 'w') as f:
+                            json.dump(error_data, f)
+                        with diagram_lock:
+                            diagram_results[sample_idx] = 'failed'
+                        job_logger.warning(f"Failed to generate diagram for {sdf_file_path.name}: {error_detail}")
+                except Exception as e:
+                    # Save error file for unexpected exceptions
+                    error_path = outputs_dir / f"{sdf_file_path.name}_diagram_error.json"
+                    error_data = {
+                        "statusCode": 500,
+                        "message": "Failed",
+                        "detail": f"Failed to generate interaction diagram: {str(e)}"
+                    }
+                    with open(error_path, 'w') as f:
+                        json.dump(error_data, f)
+                    with diagram_lock:
+                        diagram_results[sample_idx] = 'error'
+                    job_logger.warning(f"Error generating diagram for {sdf_file_path.name}: {e}")
+            
             # Save individual sample files and compute metrics
             for i, mol in enumerate(molecules):
                 individual_file = outputs_dir / f"sample_{i:03d}.sdf"
@@ -1070,6 +1369,22 @@ def run_omtra_sampler(
                     metrics['Warning'] = invalid_reason
                 
                 all_molecule_metrics.append(metrics)
+                
+                # Start diagram generation in background thread
+                if sampling_mode in ['Protein-conditioned', 'Protein+Pharmacophore-conditioned'] and protein_file:
+                    thread = threading.Thread(
+                        target=generate_diagram_for_sample,
+                        args=(individual_file, protein_file, i),
+                        daemon=False
+                    )
+                    thread.start()
+                    diagram_threads.append(thread)
+            
+            # Wait for all diagram generation threads to complete
+            if diagram_threads:
+                job_logger.info(f"Waiting for {len(diagram_threads)} diagram generation threads to complete...")
+                for thread in diagram_threads:
+                    thread.join()
             
             # Save per-molecule metrics to JSON file
             if all_molecule_metrics:

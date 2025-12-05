@@ -285,8 +285,7 @@ def list_job_outputs(job_id: str) -> List[Path]:
     return list(outputs_dir.glob("*"))
 
 
-def create_zip_archive(job_id: str) -> Optional[Path]:
-    """Create ZIP archive of job outputs and input files"""
+def create_zip_archive(job_id: str, sampling_mode: Optional[str] = None) -> Optional[Path]:
     import zipfile
     
     job_dir = get_job_directory(job_id)
@@ -297,6 +296,8 @@ def create_zip_archive(job_id: str) -> Optional[Path]:
         logger.error(f"Outputs directory does not exist: {outputs_dir}")
         return None
     
+    is_protein_conditioned = sampling_mode in ["Protein-conditioned", "Protein+Pharmacophore-conditioned"]
+    
     zip_path = job_dir / f"{job_id}_outputs.zip"
     
     try:
@@ -304,13 +305,23 @@ def create_zip_archive(job_id: str) -> Optional[Path]:
             # Add output files
             for file_path in outputs_dir.glob("*"):
                 if file_path.is_file():
-                    # TODO
-                    if file_path.suffix.lower() == '.svg':
+                    filename = file_path.name
+                    
+                    if filename.startswith("sample_") and filename.endswith(".sdf"):
+                        zipf.write(file_path, f"molecules/{filename}")
                         continue
+                    
+                    # Diagrams and error files go to 2d_diagrams/ 
+                    if is_protein_conditioned:
+                        if (file_path.suffix.lower() == '.svg' and '_diagram.svg' in filename) or \
+                           (file_path.suffix.lower() == '.json' and '_diagram_error.json' in filename):
+                            zipf.write(file_path, f"2d_diagrams/{filename}")
+                            continue
 
-                    if "per_molecule_metrics" in file_path.name and file_path.name != "per_molecule_metrics.json":
+                    if "per_molecule_metrics" in filename and filename != "per_molecule_metrics.json":
                         continue
-                    zipf.write(file_path, file_path.name)
+                    
+                    zipf.write(file_path, filename)
             
             # Add input files to a subdirectory in the zip
             if inputs_dir.exists():

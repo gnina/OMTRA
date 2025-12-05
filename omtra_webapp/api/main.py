@@ -654,7 +654,16 @@ async def get_job_result(job_id: str):
 async def download_all_outputs(job_id: str, background_tasks: BackgroundTasks):
     """Download all outputs as ZIP"""
     
-    zip_path = create_zip_archive(job_id)
+    job_data = redis_conn.get(f"job:{job_id}")
+    sampling_mode = None
+    if job_data:
+        try:
+            job_metadata = json.loads(job_data)
+            sampling_mode = job_metadata.get('params', {}).get('sampling_mode')
+        except Exception:
+            pass
+    
+    zip_path = create_zip_archive(job_id, sampling_mode)
     if not zip_path or not zip_path.exists():
         raise HTTPException(status_code=404, detail="No outputs to download")
     

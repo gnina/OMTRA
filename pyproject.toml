@@ -44,7 +44,10 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["omtra*", "omtra_pipelines*", "pharmit_utils*"]
+include = ["omtra*", "omtra_pipelines*", "routines*", "pharmit_utils*"]
+
+[tool.setuptools]
+py-modules = ["cli"]
 
 [project.scripts]
 omtra = "cli:main"
