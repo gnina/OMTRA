@@ -4,6 +4,8 @@
 # Default image name
 OMTRA_CLI_IMAGE="${OMTRA_CLI_IMAGE:-omtra/cli:latest}"
 
+# Get script directory for reliable path resolution
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 omtra() {
     local IMAGE_NAME="${OMTRA_CLI_IMAGE}"
@@ -42,7 +44,7 @@ omtra() {
       -e HOME=/workspace \
       -v "$(pwd)":/workspace \
       -v "$(pwd)/data":/workspace/data:ro \
-      -v "$(pwd)/checkpoints":/workspace/checkpoints \
+      -v "${SCRIPT_DIR}/omtra/trained_models":/workspace/checkpoints \
       -v "$(pwd)/outputs":/workspace/outputs \
       -v "$(pwd)/local":/workspace/local \
       -w /workspace \

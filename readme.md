@@ -121,16 +121,23 @@ export OMTRA_NO_GPU=1
 
 # Model Weights
 
-Download the pre-trained model weights and place them in the `checkpoints/` directory:
+> **⚠️ Note:** Model checkpoints not uploaded yet, the instructions below contain placeholders for the remote storage location. Check back in a few hours :)
 
-```
-OMTRA/
-├── checkpoints/
-│   ├── <checkpoint_file>.ckpt
-│   └── ...
+Download the pre-trained model weights using `wget`:
+
+```bash
+cd OMTRA
+wget -r -np -nH --cut-dirs=2 -P omtra/trained_models https://example.com/path/to/trained_models/
 ```
 
-The CLI automatically selects the appropriate checkpoint based on the task. You can also specify a checkpoint explicitly with the `--checkpoint` flag.
+Or using `curl`:
+
+```bash
+cd OMTRA
+curl -L https://example.com/path/to/trained_models.tar.gz | tar -xz -C omtra/
+```
+
+This will create the `omtra/trained_models/` directory with the checkpoint files. The CLI automatically selects the appropriate checkpoint based on the task. You can also specify a checkpoint explicitly with the `--checkpoint` flag.
 
 -----------------------------------------------------------------------------------------------------
 

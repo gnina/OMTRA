@@ -2,6 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 import omtra.tasks
+from omtra.utils import omtra_root
 from omtra.tasks.register import TASK_REGISTER
 
 def create_parser():
@@ -205,6 +206,7 @@ def run_sample(args):
     
     if args.checkpoint is None:
         checkpoint_dir = Path("./checkpoints")
+        checkpoint_dir = Path(omtra_root()) / "omtra/trained_models/"
         checkpoint_path = get_checkpoint_path_for_task(
             args.task,
             checkpoint_dir=checkpoint_dir
