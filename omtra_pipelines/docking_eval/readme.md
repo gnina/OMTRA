@@ -24,41 +24,49 @@ This pipeline requires the GNINA pre-built binary under the OMTRA root directory
 |----------|-------------|-------------| 
 | `--ckpt_path` | `None` | Path to model checkpoint. |
 | `--samples_dir` | `None` | Path to samples. Use existing samples, do not sample a model. |
-| `--output_dir` | `./outputs/TASK_NAME/` |  Output directory. |
-| `--sys_info_file` | `output_dir/TASK_NAME_sys_info.csv` | Path to a system info file (optional). This is configured automatically if you sample using Plinder. Users can also use this argument to specify a file path to additional system info. It must have columns: `sys_id`, `protein_id`, `gen_ligand_id` to merge with the metrics dataframe. |
+| `--sample_only` | `store_true` | If set, only sample the model. Do not compute metrics. |
+| `--output_dir` | `ckpt_path.parent.parent` OR `samples_dir` |  Output directory. |
+| `--sys_info_file` | `samples_dir/sys_info.csv` | Path to a system info file (optional). Users can use this argument to specify a file path to system info data. It must have columns: `sys_id`, `protein_id`, `gen_ligand_id` to merge with the metrics dataframe. The script automatically looks for this file under `samples_dir/sys_info.csv`. |
+
 
 #### Sampling
 | Argument | Default | Description | 
 |----------|-------------|-------------| 
 | `--task` | Required | Task to sample for (e.g. rigid_docking_condensed). |
+| `--dataset` | `plinder` | Dataset. Options: Plinder or Crossdocked |
+| `--split` | `val` | Data split (i.e., train, val). |
+| `--dataset_start_idx` | `0` | Index in the dataset to start sampling from. |
+| `--sample_start_idx` | `None` | Index in the sample directory to start getting samples from. |
+| `--sys_idx_file` | `None` | Path to a file with pre-selected system indices. |
+| `--plinder_path` | `None` | Path to the Plinder dataset (optional). |
+| `--crossdocked_path` | `None` | Path to the Crossdocked dataset (optional). |
 | `--n_samples` | Required | Number of samples. |
 | `--n_replicates` | Required | Number of replicates per sample. |
 | `--n_timesteps` | `250` | Number of integration steps to take when sampling. |
+| `--n_lig_atom_margin` | `0.075` | Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms. |
 | `--stochastic_sampling` | `False` | If set, perform stochastic sampling. |
 | `--noise_scaler` | `1` | Noise scaling param for stochastic sampling. |
 | `--eps` | `0.01` | g(t) param for stochastic sampling. |
 | `--max_batch_size` | `500` | Maximum number of systems to sample per batch. |
-| `--dataset` | `plinder` | Dataset. Options: Plinder or Crossdocked |
-| `--split` | `val` | Data split (i.e., train, val). |
-| `--dataset_start_idx` | `0` | Index in the dataset to start sampling from. |
-| `--plinder_path` | `None` | Path to the Plinder dataset (optional). |
+| `--bs_per_gbmem` | `None` | Batch size per GB/EM on the GPU. |
+
 
 #### Metrics
 | Argument | Default | Description | 
 |----------|-------------|-------------| 
-| `--timeout` | `12000` | Maximum running time in seconds for any eval metric. |
+| `--timeout` | `2700` | Maximum running time in seconds for any eval metric. |
 | `--disable_pb_valid` | `False` | Disables PoseBusters validity check. |
 | `--disable_gnina` | `False` | Disables GNINA docking score calculation. |
 | `--disable_posecheck` | `False`| Disables strain, clashes, and pocket-ligand interaction computation. |
 | `--disable_rmsd` | `False` | Disables RMSD computation between generated ligand and ground truth ligand. |
 | `--disable_interaction_recovery` | `False` | Disables analysis of interaction recovery by generated ligands. |
 | `--disable_pharm_match` | `False` | Disables computations of matching pharmacophores by generated ligands. |
+| `--disable_strain` | `False` | Disables strain energy calculation. |
 | `--disable_ground_truth_metrics` | `False` | Disables all relevant metrics on the truth ligand. |
-
 
 ## Getting Samples
 ### 1. From Model Checkpoint
-The script will sample the model when passed the `--ckpt_path` and write sample files to `output_dir/samples/`. The format of the outputted files depends on the task. See below.
+The script will sample the model when passed the `--ckpt_path` and write sample files to `<OUTPUT_DIR>/samples_<TASK>_<DATASET>`. The format of the outputted files depends on the task. See below.
 
 #### Fixed protein (protein structure fixed)
 ```text
@@ -160,9 +168,7 @@ python docking_eval.py \
 ## Outputs
 | Name | Type | Description | 
 |----------|-------------|-------------| 
-| `OUTPUT_DIR/TASK_NAME_metrics.csv` | `csv` | All of the computed metrics. Metrics for the ground truth ligand are followed by a `_true` tag. Note: some metrics cannot be computed if the ligand fails to sanitize. These metrics are set to `NaN` values. |
-| `OUTPUT_DIR/samples/TASK_NAME_sys_info.csv` | `csv` | File with system information. This is automatically configured when sampling from the Plinder or Crossdocked dataset. No system info file is created if we  (not sampling from a checkpoint).  |
+| `<OUTPUT_DIR>/samples_<TASK>_<DATASET>/eval_metrics.csv` OR `<OUTPUT_DIR>/samples_<TASK>_<DATASET>/eval_metrics_<SAMPLE_START_IDX>.csv` | `csv` | All of the computed metrics. Metrics for the ground truth ligand are followed by a `_true` tag. Note: some metrics cannot be computed if the ligand fails to sanitize. These metrics are set to `NaN` values. Output file name convention depends on whether args.sample_start_idx was used. |
+| `<OUTPUT_DIR>/samples_<TASK>_<DATASET>/sys_info.csv` | `csv` | File with system information. This is automatically configured when sampling from the Plinder or Crossdocked dataset. No system info file is created if we  (not sampling from a checkpoint).  |
 
-
-Useful tip: The notebook `notebooks/docking_evaluation.ipynb` contains code for visualizing the computed metrics and comparing models/tasks.
 

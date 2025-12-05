@@ -1,88 +1,313 @@
-# One Model to Rule Them All
+# OMTRA: A Multi-Task Generative model for Structure-Based Drug Design
 
-A multi-task generative model for small-molecule structure-based drug design. 
+![OMTRA](assets/omtra_fig.png)
 
-# Building the Environment
+OMTRA is a flow-matching based generative model for small-molecule + protein systems. It supports a variety of tasks relevant to structure-based drug design, including:
+- Unconditional 3D de novo molecule generation
+- Unconditional ligand conformer generation
+- Protein Pocket-conditioned de novo molecule design
+- Protein-ligand docking (rigid and, flexible coming soon)
+- Pharmacophore-conditioned molecule generation
+- Pharmacophore-conditioned conformer generation
+- Protein AND pharmacophore-conditioned molecule design
+- Protein AND pharmacophore-conditioned docking
 
-We recommend building the envornment using pip inside of a virtual environment. Our recommended procedure is:
+OMTRA is described in our preprint: [https://arxiv.org/abs/2512.05080](https://arxiv.org/abs/2512.05080) and will be presented at MLSB 2025. 
 
-## Create conda/mamba environment
+-----------------------------------------------------------------------------------------------------
+
+## Table of Contents
+- [Installation](#installation)
+  - [Manual Installation (Recommended)](#manual-installation-recommended)
+  - [Docker Installation](#docker-installation)
+- [Model Weights](#model-weights)
+- [Sampling](#sampling)
+  - [CLI Reference](#cli-reference)
+  - [Available Tasks](#available-tasks)
+  - [CLI Examples](#cli-examples)
+  - [Web Application](#omtra-web-application)
+- [Training](#training)
+- [Additional Documentation](#additional-documentation)
+
+-----------------------------------------------------------------------------------------------------
+
+# Installation
+
+There are two ways to set up OMTRA:
+1. **Manual Installation** — Build the environment manually in a conda/mamba environment (recommended for most users)
+2. **Docker Installation** — Use a Docker container for isolated, reproducible environments
+
+### System Requirements
+
+- Linux System
+- NVIDIA GPU with CUDA support (CUDA 12.1 recommended)
+- Python 3.11
+
+## Manual Installation (Recommended)
+
+This approach gives you direct control over the environment and is recommended for development and most use cases.
 
 ```bash
-# Example using conda
-conda create -n omtra python=3.11
-conda activate omtra
-```
+# Create and activate conda/mamba environment
+mamba create -n omtra python=3.11
+mamba activate omtra
 
-## run the build script:
-
-```bash
+# Clone the repository
 git clone https://github.com/gnina/OMTRA.git
 cd OMTRA
+
+# Run the build script
 chmod +x build_env.sh
 ./build_env.sh
 ```
 
-This script installs the CUDA-enabled versions of PyTorch, DGL, and PyG, and then installs the OMTRA package and its dependencies.
+The build script installs:
+- CUDA-enabled versions of PyTorch, DGL, and PyG
+- OMTRA package and all dependencies
 
-### or just do manual installation (alternative to build script)
-
+After installation, the `omtra` command will be available:
 ```bash
-pip install uv
-
-# 1. Install CUDA dependencies
-uv pip install -r requirements-cuda.txt
-
-# 2. Install OMTRA
-uv pip install -e .
+omtra --task <task> [options]
 ```
 
-# Using Docker
+## Docker Installation
 
-## Requirements
+> **⚠️ Note:** Docker support is still a work in progress. The instructions below describe the intended workflow, but the pre-built image may not yet be available in the registry. You can build the image locally in the meantime.
+
+Docker provides an isolated environment and is particularly useful for deployment or if you want to use the web application interface.
+
+### Prerequisites
 
 - Docker and Docker Compose installed
-- NVIDIA GPU with CUDA support
-- NVIDIA Container Toolkit installed
-- Model weights downloaded to `OMTRA/checkpoints/` directory
+- NVIDIA Container Toolkit installed ([installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html))
+- Model weights downloaded to `OMTRA/checkpoints/` directory (see [Model Weights](#model-weights))
 
-## Start CLI with pre-built image
+### Option A: Build the Docker Image Locally
 
-1. **Setup:**
-   ```bash
-   source docker-cli-setup.sh
-   ```
+If the pre-built image is not available, you can build it yourself:
 
-   To make this permanent, add to your `~/.bashrc` or `~/.zshrc`:
-   ```bash
-   source /path/to/OMTRA/docker-cli-setup.sh
-   ```
+```bash
+cd OMTRA
+docker build -t omtra/cli:latest .
+```
 
-2. **Use the CLI:**
-   ```bash
-   omtra --task <task> [options]
-   ```
-   The docker image will be automatically pulled from registry on first use.
+Then set up the CLI wrapper:
 
-#### Examples
+```bash
+source docker-cli-setup.sh
+```
 
+### Option B: Use Pre-built Image (Coming Soon)
+
+Once the image is published, it will be automatically pulled when you first use the CLI:
+
+```bash
+source docker-cli-setup.sh
+omtra --task <task> [options]
+```
+
+### Making the CLI Available Permanently
+
+Add the following to your shell configuration (`~/.bashrc` or `~/.zshrc`):
+
+```bash
+source /path/to/OMTRA/docker-cli-setup.sh
+```
+
+### Customizing the Docker Image
+
+You can specify a custom image name by setting the `OMTRA_CLI_IMAGE` environment variable before sourcing the setup script:
+
+```bash
+export OMTRA_CLI_IMAGE="my-registry/omtra:v1.0"
+source docker-cli-setup.sh
+```
+
+To disable GPU support (for testing on CPU-only machines):
+```bash
+export OMTRA_NO_GPU=1
+```
+
+-----------------------------------------------------------------------------------------------------
+
+# Model Weights
+
+> **⚠️ Note:** Model checkpoints not uploaded yet, the instructions below contain placeholders for the remote storage location. Check back in a few hours :)
+
+Download the pre-trained model weights using `wget`:
+
+```bash
+cd OMTRA
+wget -r -np -nH --cut-dirs=2 -P omtra/trained_models https://example.com/path/to/trained_models/
+```
+
+Or using `curl`:
+
+```bash
+cd OMTRA
+curl -L https://example.com/path/to/trained_models.tar.gz | tar -xz -C omtra/
+```
+
+This will create the `omtra/trained_models/` directory with the checkpoint files. The CLI automatically selects the appropriate checkpoint based on the task. You can also specify a checkpoint explicitly with the `--checkpoint` flag.
+
+-----------------------------------------------------------------------------------------------------
+
+# Sampling
+
+There are two ways to sample from a trained OMTRA model:
+1. **Command-Line Interface (CLI)** — For scripting and batch processing
+2. **Web Application** — For interactive exploration
+
+## CLI Reference
+
+### Basic Usage
+
+```bash
+omtra --task <task> [options]
+```
+
+The `omtra` command is available after either installation method. With manual installation, it's installed via `pip install -e .`. With Docker, the `docker-cli-setup.sh` script creates a shell function that wraps the Docker container.
+
+### Core Arguments
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--task` | string | *required* | The sampling task to perform (see [Available Tasks](#available-tasks)) |
+| `--checkpoint` | path | auto | Path to model checkpoint (auto-detected from task if not provided) |
+| `--n_samples` | int | 100 | Number of samples to generate |
+| `--n_timesteps` | int | 250 | Number of integration steps during sampling |
+| `--output_dir` | path | None | Directory to save output files |
+| `--metrics` | flag | False | Compute evaluation metrics on generated samples |
+
+### Input File Arguments
+
+For conditional generation tasks, you can provide input structures directly:
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `--protein_file` | path | Protein structure file (PDB or CIF format) |
+| `--ligand_file` | path | Ligand structure file (SDF format) |
+| `--pharmacophore_file` | path | Pharmacophore constraints file (XYZ format) |
+
+When input files are provided, `--n_samples` specifies how many samples to generate for that single input system.
+
+### Advanced Sampling Options
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--stochastic_sampling` | flag | False | Enable stochastic (vs deterministic) sampling |
+| `--noise_scaler` | float | 1.0 | Scaling factor for noise in stochastic sampling |
+| `--eps` | float | 0.01 | Small epsilon value for numerical stability |
+| `--visualize` | flag | False | Generate visualization of sampling trajectory |
+
+### Ligand Size Control
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--use_gt_n_lig_atoms` | flag | False | Match ground truth ligand atom count |
+| `--n_lig_atom_margin` | float | 0.15 | Margin (±%) around ground truth atom count |
+| `--n_lig_atoms_mean` | float | None | Mean for normal distribution of atom counts |
+| `--n_lig_atoms_std` | float | None | Std dev for normal distribution of atom counts |
+
+## Available Tasks
+
+OMTRA supports multiple drug design tasks. Use the `--task` argument to select one:
+
+### Unconditional Generation
+| Task | Description |
+|------|-------------|
+| `denovo_ligand_condensed` | Generate novel drug-like molecules from scratch |
+
+### Protein-Conditioned Generation
+| Task | Description |
+|------|-------------|
+| `fixed_protein_ligand_denovo_condensed` | Design ligands for a fixed protein binding site |
+| `protein_ligand_denovo_condensed` | Joint generation of ligand with flexible protein |
+
+### Docking Tasks
+| Task | Description |
+|------|-------------|
+| `rigid_docking_condensed` | Dock a known ligand into a fixed protein structure |
+| `flexible_docking_condensed` | Dock with protein flexibility |
+| `expapo_conditioned_ligand_docking_condensed` | Docking starting from experimental apo structure |
+| `predapo_conditioned_ligand_docking_condensed` | Docking starting from predicted apo structure |
+
+### Conformer Generation
+| Task | Description |
+|------|-------------|
+| `ligand_conformer_condensed` | Generate 3D conformations for a given ligand |
+
+### Pharmacophore-Conditioned Tasks
+| Task | Description |
+|------|-------------|
+| `denovo_ligand_pharmacophore_condensed` | Generate ligand and pharmacophore jointly |
+| `denovo_ligand_from_pharmacophore_condensed` | Design ligand matching a given pharmacophore |
+| `ligand_conformer_from_pharmacophore_condensed` | Generate conformer satisfying pharmacophore |
+| `fixed_protein_pharmacophore_ligand_denovo_condensed` | Design ligand for protein with pharmacophore constraints |
+| `rigid_docking_pharmacophore_condensed` | Dock ligand with pharmacophore constraints |
+
+## CLI Examples
+
+### Generate Novel Molecules (Unconditional)
 ```bash
 omtra --task denovo_ligand_condensed \
   --n_samples 100 \
-  --output_dir outputs/samples \
+  --output_dir outputs/denovo_samples \
   --metrics
-
-omtra --task fixed_protein_ligand_denovo_condensed \
-  --protein_file protein.pdb \
-  --ligand_file ref_ligand.sdf \
-  --n_samples 50
-
 ```
 
+### Structure-Based Drug Design (Protein-Conditioned)
+```bash
+omtra --task fixed_protein_ligand_denovo_condensed \
+  --protein_file my_protein.pdb \
+  --ligand_file reference_ligand.sdf \
+  --n_samples 50 \
+  --output_dir outputs/sbdd_samples
+```
+The reference ligand is used to define the binding site center. If omitted, the protein center of mass is used.
 
-## Web Application
+### Molecular Docking
+```bash
+omtra --task rigid_docking_condensed \
+  --protein_file protein.pdb \
+  --ligand_file ligand.sdf \
+  --n_samples 10 \
+  --output_dir outputs/docking
+```
 
-### Quick Start
+### Conformer Generation
+```bash
+omtra --task ligand_conformer_condensed \
+  --ligand_file molecule.sdf \
+  --n_samples 20 \
+  --output_dir outputs/conformers
+```
+
+### Pharmacophore-Guided Design
+```bash
+omtra --task denovo_ligand_from_pharmacophore_condensed \
+  --pharmacophore_file constraints.xyz \
+  --n_samples 100 \
+  --output_dir outputs/pharm_guided
+```
+
+### Debug Mode
+Set the `OMTRA_DEBUG` environment variable for full stack traces:
+```bash
+OMTRA_DEBUG=1 omtra --task denovo_ligand_condensed --n_samples 10
+```
+
+-----------------------------------------------------------------------------------------------------
+
+## OMTRA Web Application
+
+The web application provides an interactive interface for exploring OMTRA's capabilities.
+
+### Prerequisites
+- Docker and Docker Compose installed
+- Pre-built webapp images (or build from source)
+
+### Starting the Web Application
 
 ```bash
 cd omtra_webapp
@@ -91,52 +316,24 @@ docker-compose up -d
 
 The webapp will be available at http://localhost:5900 (or the port specified in your `.env` file).
 
-See [`omtra_webapp/START.md`](omtra_webapp/START.md) for more details
+### Stopping the Web Application
 
-
-# Essetial things
-
-## Is there a pre-trained checkpoint you recommend I work with?
-
-Yes and you should remind me to write them down here.
-
-## Where is the data on the cluster? How do I tell omtra where the datasets are?
-
-### If using `routines/train.py`
-
-By default, the script will look in `data/pharmit` and `data/plinder` (paths relative to your omtra repository), for the pharmit and plinder datasets, respectively. Now these datasets are big and moving them around is difficult and we don't want to have too many duplciates floating around. You should point your script to an existing copy of the dataset. Currently, you can use these on the CSB cluster:
-
-
-```console
-plinder_path=/net/galaxy/home/koes/tjkatz/OMTRA/data/plinder
-pharmit_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit
+```bash
+cd omtra_webapp
+docker-compose down
 ```
 
-## How do I sample a trained model?
+See [`omtra_webapp/START.md`](omtra_webapp/START.md) for detailed configuration options and building from source.
 
-The sampling script is `routines/sample.py` takes a checkpoint and a task as input. There are a few other arguments to controls its behavior: `--visualize` will write out trajectories, `--output_dir` will specify where to write the output, `--n_samples` will specify how many samples to generate, `--metrics` is a true/false flag indicating whether to compute metrics on the samples. Look at the script or run `python routines/sample.py --help` for more details. Below is an example command:
+-----------------------------------------------------------------------------------------------------
 
-```console
-python routines/sample.py local/runs_from_cluster/denovo_multiupdate_2025-05-04_20-44-972429/checkpoints/batch_45000.ckpt --task=denovo_ligand --n_samples=100 --metrics --output_dir=local/dev_samples
-```
+# Training
 
-## How to train?
+Refer to [docs/training.md](docs/training.md) for details on training OMTRA models.
 
-The training script is `routines/train.py`. By default this script will use hydra to read the config starting at the top level `configs/config.yaml`. You can override any arguments using the standard hydra command line syntax. 
+-----------------------------------------------------------------------------------------------------
 
-## Specifying task_group
+# Additional Documentation
 
-What tasks your omtra model supports is specified by the `task_group` config. You can see an example in `configs/task_group/no_protein.yaml` which would create a version of omtra that does a variety of tasks that do not involve protein structures. The genreal structure of the task group is as follows:
-
-1. `task_phases` this is essentially a list. Each item of the list describes a "phase" of training omtra; the idea is that different phases can have different task mixtures. For example, maybe you want to focus heavily on unconditional ligand generation intitally and then start to incorporate pocket-conditioned ligand generation in a second phase. Each phase has a duration (measured in minibatches) and a list of tasks + the probability of training on each task. The probabilities need not sum to one; they will be normalized. In otherwords, this specicies for each phase of trainnig, what is p(task) for each training batch.
-
-
-2. `datset_task_coupling`; this is a dictionary where each key is a task and the value is a list specifying the dataset we will use for that task, along with the probability of using the dataset for that task. In other words, the dataset task coupling is directly specifying the probability distribution p(dataset|task).
-
-Now, what are the tasks and datasets supported? We have defined registers of supported tasks and datasets. The registers are located in `omtra.tasks` and `omtra.datasets` respectively. Every task and datset is associated with a unique string; if your config file specifies a task/dataset not in the register, the training script will tell you so. There are utility functions for printing out the tasks/dataset names supported. I don't know where they are off the top of my head but I'll add them here eventually. 
-
-## training modes
-
-So importantly, we pre-train encoder/decoder pairs to obtain latent representations of ligands and protein pockets. 
-
-You can use the same training script for both encoder/decoder pairs as the omtra generative model. When using `routines/train.py`, you just need to specify the `mode` argument to distinguish between these "training modes". Currently the available modes are `omtra` and `ligand_encoder`. The config for the ligand encoder is stored in `cfg.ligand_encoder`; the specific hydra config group is `configs/ligand_encoder`. Currently the default config has the ligand_encoder set to an empty yaml file; that is, there is no ligand encoder, and there is not latent ligand genearation. When training a omtra for latent ligand generation, you need to set `mode=omtra` and you need to set `cfg.model.ligand_encoder_checkpoint` to the checkpoint for a trained ligand encoder. 
+- [Pharmit Dataset](docs/pharmit_dataset.md) — Details on the Pharmit dataset and how to use it
+- [Reproducing Results](docs/reproducing_results.md) — Instructions for reproducing published results

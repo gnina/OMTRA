@@ -41,7 +41,7 @@ services:
       # - ./shared:/app/shared
       - job_storage:/srv/app/jobs
       - model_cache:/srv/app/models
-      - ../checkpoints:/srv/app/checkpoints
+      - ../omtra/trained_models:/srv/app/checkpoints
       # Optional
       # - ${OMTRA_PATH:-}:/omtra:ro
     depends_on:
@@ -80,7 +80,7 @@ services:
       - ../omtra_pipelines:/usr/local/lib/python3.11/dist-packages/omtra_pipelines
       - job_storage:/srv/app/jobs
       - model_cache:/srv/app/models
-      - ../checkpoints:/srv/app/checkpoints
+      - ../omtra/trained_models:/srv/app/checkpoints
       # Optional
       # - ${OMTRA_PATH:-}:/omtra
     depends_on:

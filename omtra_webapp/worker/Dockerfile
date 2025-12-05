@@ -69,7 +69,7 @@ RUN mkdir -p /usr/local/bin && \
     rm -f /tmp/gnina.1.3.2 /tmp/gnina.1.3.2.cuda12.8
 
 # remove dependencies not needed for webapp runtime
-RUN uv pip uninstall --system --yes \
+RUN uv pip uninstall --system \
     jupyterlab jupyter jupyter-client jupyter-core jupyter-server jupyter-events jupyter-lsp \
     matplotlib seaborn plotly \
     wandb \

@@ -44,7 +44,6 @@ def parse_args():
     p.add_argument(
         "--task",
         type=str,
-        # default="denovo_ligand",
         help="Task to sample for (e.g. denovo_ligand)",
         required=True
     )
@@ -74,7 +73,12 @@ def parse_args():
         default=0,
         help="Index in the dataset to start sampling from"
     )
-    p.add_argument("--sys_idx_file", type=str, default=None, help='Path to a file with pre-selected system indices.')
+    p.add_argument(
+        "--sys_idx_file", 
+        type=str, 
+        default=None, 
+        help='Path to a file with pre-selected system indices.'
+    )
     p.add_argument(
         "--n_timesteps",
         type=int,
@@ -125,18 +129,30 @@ def parse_args():
         "--eps",
         type=float,
         default=0.01,
-        help="Scaling factor for noise (stochasticity)"
+        help="Sg(t) param for stochastic sampling."
     )
-    p.add_argument("--use_gt_n_lig_atoms", action="store_true", help="When enabled, use the number of ground truth ligand atoms for de novo design.")
+    p.add_argument(
+        "--use_gt_n_lig_atoms", 
+        action="store_true", 
+        help="When enabled, use the number of ground truth ligand atoms for de novo design."
+    )
     p.add_argument(
         '--n_lig_atom_margin',
         type=float,
         default=0.075,
         help='number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand, only if --use_gt_n_lig_atoms is set (default: 0.075, i.e. +/- 7.5%)'
     )
-    p.add_argument('--split', type=str, default='val', help='Which data split to use')
-
-    p.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
+    p.add_argument(
+        '--split', 
+        type=str, 
+        default='val', 
+        help='Which data split to use'
+    )
+    p.add_argument(
+        "--metrics", 
+        action="store_true", 
+        help="If set, compute metrics for the samples"
+    )
 
     return p.parse_args()
 

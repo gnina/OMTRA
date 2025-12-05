@@ -2,7 +2,9 @@ import argparse
 import sys
 from pathlib import Path
 import omtra.tasks
+from omtra.utils import omtra_root
 from omtra.tasks.register import TASK_REGISTER
+from omtra.utils.checkpoints import TASK_TO_CHECKPOINT
 
 def create_parser():
     """Create the argument parser for sampling."""
@@ -11,7 +13,7 @@ def create_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
-    available_tasks = sorted([name for name in TASK_REGISTER.keys() if "_condensed" in name])
+    available_tasks = sorted(TASK_TO_CHECKPOINT.keys())
     
     # sampling args
     parser.add_argument(
@@ -204,11 +206,7 @@ def run_sample(args):
     task = task_name_to_class(args.task)
     
     if args.checkpoint is None:
-        # allows command to work from any directory
-        cli_file = Path(__file__).resolve()
-        omtra_root = cli_file.parent
-        checkpoint_dir = omtra_root / "checkpoints"
-        
+        checkpoint_dir = Path(omtra_root()) / "omtra/trained_models/"
         checkpoint_path = get_checkpoint_path_for_task(
             args.task,
             checkpoint_dir=checkpoint_dir
@@ -246,9 +244,6 @@ def run_sample(args):
         args.n_samples = 1
         
         args.g_list_from_files = g_list
-    
-    if hasattr(args, 'checkpoint') and args.checkpoint:
-        args.checkpoint = Path(args.checkpoint)
     
     sample_main(args)
 
