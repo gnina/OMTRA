@@ -78,12 +78,9 @@ class OMTRA(pl.LightningModule):
         t_alpha: float = 1.8,
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
-<<<<<<< HEAD
         pharm_pos_std: float = 0.0,
-=======
         pharm_var: float = 0.0,
         lr_warmup_steps: int = 0,
->>>>>>> main
 
     ):
         super().__init__()
@@ -105,12 +102,9 @@ class OMTRA(pl.LightningModule):
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
-<<<<<<< HEAD
         self.pharm_pos_std = pharm_pos_std
-=======
         self.pharm_var = pharm_var
         self.lr_warmup_steps = lr_warmup_steps
->>>>>>> main
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -644,12 +638,9 @@ class OMTRA(pl.LightningModule):
         eps: float = 0.01,
         # use_gt_n_lig_atoms: bool = False,
         n_lig_atom_margin: Union[float, None] = None,
-<<<<<<< HEAD
         pharm_pos_std: Optional[torch.Tensor] = None, #std deviation for noise to be added to pharm positions
-=======
         n_lig_atoms_mean: Union[float, None] = None,
         n_lig_atoms_std: Union[float, None] = None,
->>>>>>> main
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
