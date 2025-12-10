@@ -1,7 +1,5 @@
 version: '3.8'
 
-#TODO: pull from registry instead of local images
-
 services:
   redis:
     image: redis:7-alpine
@@ -14,9 +12,9 @@ services:
     restart: unless-stopped
 
   api:
-    # Use pre-built local image (default)
-    image: omtra_webapp-api:${OMTRA_IMAGE_TAG:-latest}
-    pull_policy: never
+    # Pull from Docker Hub (default)
+    image: gnina/omtra_webapp-api:${OMTRA_IMAGE_TAG:-latest}
+    pull_policy: always
     # Uncomment below to build from source instead
     # build: 
     #   context: ..
@@ -35,15 +33,9 @@ services:
       - CHECKPOINT_DIR=/srv/app/checkpoints
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
     volumes:
-      # Source code mounts
-      # Uncomment these if building from source or developing
-      # - ./api:/app
-      # - ./shared:/app/shared
+      - ../omtra/trained_models:/srv/app/checkpoints
       - job_storage:/srv/app/jobs
       - model_cache:/srv/app/models
-      - ../omtra/trained_models:/srv/app/checkpoints
-      # Optional
-      # - ${OMTRA_PATH:-}:/omtra:ro
     depends_on:
       - redis
     restart: unless-stopped
@@ -56,9 +48,9 @@ services:
               capabilities: [gpu]
 
   worker:
-    # Use pre-built local image (default)
-    image: omtra_webapp-worker:${OMTRA_IMAGE_TAG:-latest}
-    pull_policy: never
+    # Pull from Docker Hub (default)
+    image: gnina/omtra_webapp-worker:${OMTRA_IMAGE_TAG:-latest}
+    pull_policy: always
     # Uncomment below to build from source instead
     # build:
     #   context: ..
@@ -69,20 +61,11 @@ services:
       - WORKER_TIMEOUT=${WORKER_TIMEOUT:-600}
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
     volumes:
-      # Source code mounts
-      # Uncomment these if building from source or developing
-      # - ./worker:/app
-      # - ./shared:/app/shared
-      - ../cli.py:/app/cli.py
-      - ../routines:/app/routines
-      # - ../omtra_pipelines/pharmit_dataset/train_dists.npz:/usr/local/lib/python3.11/dist-packages/omtra_pipelines/pharmit_dataset/train_dists.npz
+      - ../omtra/trained_models:/srv/app/checkpoints
       - ../configs:/usr/local/lib/python3.11/dist-packages/configs
       - ../omtra_pipelines:/usr/local/lib/python3.11/dist-packages/omtra_pipelines
       - job_storage:/srv/app/jobs
       - model_cache:/srv/app/models
-      - ../omtra/trained_models:/srv/app/checkpoints
-      # Optional
-      # - ${OMTRA_PATH:-}:/omtra
     depends_on:
       - redis
       - api
@@ -96,9 +79,9 @@ services:
               capabilities: [gpu]
 
   frontend-react:
-    # Use pre-built local image (default)
-    image: omtra_webapp-frontend-react:${OMTRA_IMAGE_TAG:-latest}
-    pull_policy: never
+    # Pull from Docker Hub (default)
+    image: gnina/omtra_webapp-frontend-react:${OMTRA_IMAGE_TAG:-latest}
+    pull_policy: always
     # Uncomment below to build from source instead
     # build:
     #   context: ./frontend-react

@@ -41,18 +41,28 @@ export function Footer() {
             <h3 className="text-sm font-semibold uppercase tracking-wider mb-4">Resources</h3>
             <ul className="space-y-2">
               <li>
-                <a href="#" className="text-sm text-slate-400 hover:text-white transition-colors">
-                  API Documentation
+                <a 
+                  href="https://github.com/gnina/OMTRA" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="text-sm text-slate-400 hover:text-white transition-colors"
+                >
+                  GitHub Repository
+                </a>
+              </li>
+              <li>
+                <a 
+                  href="https://github.com/gnina/OMTRA/issues" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="text-sm text-slate-400 hover:text-white transition-colors"
+                >
+                  Report Issues
                 </a>
               </li>
               <li>
                 <a href="#" className="text-sm text-slate-400 hover:text-white transition-colors">
                   Examples
-                </a>
-              </li>
-              <li>
-                <a href="#" className="text-sm text-slate-400 hover:text-white transition-colors">
-                  Support
                 </a>
               </li>
             </ul>

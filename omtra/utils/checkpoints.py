@@ -3,8 +3,6 @@ from typing import Optional, Dict
 import os
 from omtra.utils import omtra_root
 
-# TODO: change file names before publishing docker images
-
 TASK_TO_CHECKPOINT: Dict[str, str] = {
     # Unconditional tasks -> uncond.ckpt
     "denovo_ligand_condensed": "uncond_r179_dbug_2025-11-03_21-19-252310/checkpoints/last.ckpt",  # Unconditional de novo ligand generation

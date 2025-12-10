@@ -4,6 +4,7 @@ from pathlib import Path
 import omtra.tasks
 from omtra.utils import omtra_root
 from omtra.tasks.register import TASK_REGISTER
+from omtra.utils.checkpoints import TASK_TO_CHECKPOINT
 
 def create_parser():
     """Create the argument parser for sampling."""
@@ -12,7 +13,7 @@ def create_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
-    available_tasks = sorted([name for name in TASK_REGISTER.keys() if "_condensed" in name])
+    available_tasks = sorted(TASK_TO_CHECKPOINT.keys())
     
     # sampling args
     parser.add_argument(
@@ -145,7 +146,7 @@ def create_parser():
         "--pharmacophore_file",
         type=Path, 
         default=None,
-        help="Path to pharmacophore file (XYZ format) for pharmacophore-conditioned tasks"
+        help="Path to pharmacophore file (XYZ format) for pharmacophore-conditioned tasks. If not provided, pharmacophores will be extracted from --ligand_file if available."
     )
     return parser
 
@@ -171,8 +172,8 @@ def _validate_task_inputs(args, task, has_protein, has_ligand, has_pharmacophore
         missing.append("ligand file (--ligand_file)")
     if 'ligand_identity_condensed' in required and not has_ligand:
         missing.append("ligand file (--ligand_file)")
-    if 'pharmacophore' in required and not has_pharmacophore:
-        missing.append("pharmacophore file (--pharmacophore_file)")
+    if 'pharmacophore' in required and not has_pharmacophore and not has_ligand:
+        missing.append("pharmacophore file (--pharmacophore_file) or ligand file (--ligand_file)")
     
     has_dataset_path = args.pharmit_path is not None or args.plinder_path is not None
     
@@ -205,7 +206,6 @@ def run_sample(args):
     task = task_name_to_class(args.task)
     
     if args.checkpoint is None:
-        checkpoint_dir = Path("./checkpoints")
         checkpoint_dir = Path(omtra_root()) / "omtra/trained_models/"
         checkpoint_path = get_checkpoint_path_for_task(
             args.task,
@@ -244,9 +244,6 @@ def run_sample(args):
         args.n_samples = 1
         
         args.g_list_from_files = g_list
-    
-    if hasattr(args, 'checkpoint') and args.checkpoint:
-        args.checkpoint = Path(args.checkpoint)
     
     sample_main(args)
 

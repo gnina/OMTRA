@@ -72,38 +72,39 @@ omtra --task <task> [options]
 
 ## Docker Installation
 
-> **⚠️ Note:** Docker support is still a work in progress. The instructions below describe the intended workflow, but the pre-built image may not yet be available in the registry. You can build the image locally in the meantime.
-
 Docker provides an isolated environment and is particularly useful for deployment or if you want to use the web application interface.
 
 ### Prerequisites
 
 - Docker and Docker Compose installed
 - NVIDIA Container Toolkit installed ([installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html))
-- Model weights downloaded to `OMTRA/checkpoints/` directory (see [Model Weights](#model-weights))
+- Model weights downloaded to `omtra/trained_models/` directory (see [Model Weights](#model-weights))
 
-### Option A: Build the Docker Image Locally
+### Using the Pre-built Image
 
-If the pre-built image is not available, you can build it yourself:
+The CLI image is available on Docker Hub and will be automatically pulled when you first use it:
 
 ```bash
 cd OMTRA
-docker build -t omtra/cli:latest .
+source docker-cli-setup.sh
+omtra --task <task> [options]
+```
+
+The setup script will automatically pull `gnina/omtra:latest` from Docker Hub if it's not already available locally.
+
+### Building the Docker Image Locally (Optional)
+
+If you prefer to build the image yourself:
+
+```bash
+cd OMTRA
+docker build -t gnina/omtra:latest .
 ```
 
 Then set up the CLI wrapper:
 
 ```bash
 source docker-cli-setup.sh
-```
-
-### Option B: Use Pre-built Image (Coming Soon)
-
-Once the image is published, it will be automatically pulled when you first use the CLI:
-
-```bash
-source docker-cli-setup.sh
-omtra --task <task> [options]
 ```
 
 ### Making the CLI Available Permanently
@@ -116,10 +117,10 @@ source /path/to/OMTRA/docker-cli-setup.sh
 
 ### Customizing the Docker Image
 
-You can specify a custom image name by setting the `OMTRA_CLI_IMAGE` environment variable before sourcing the setup script:
+You can specify a custom image name or version by setting the `OMTRA_CLI_IMAGE` environment variable before sourcing the setup script:
 
 ```bash
-export OMTRA_CLI_IMAGE="my-registry/omtra:v1.0"
+export OMTRA_CLI_IMAGE="gnina/omtra:v1.0.0"
 source docker-cli-setup.sh
 ```
 
@@ -281,6 +282,14 @@ omtra --task denovo_ligand_from_pharmacophore_condensed \
   --output_dir outputs/pharm_guided
 ```
 
+Alternatively, extract pharmacophores from a ligand SDF file:
+```bash
+omtra --task denovo_ligand_from_pharmacophore_condensed \
+  --ligand_file reference_ligand.sdf \
+  --n_samples 100 \
+  --output_dir outputs/pharm_guided
+```
+
 ### Debug Mode
 Set the `OMTRA_DEBUG` environment variable for full stack traces:
 ```bash
@@ -294,8 +303,8 @@ OMTRA_DEBUG=1 omtra --task denovo_ligand_condensed --n_samples 10
 The web application provides an interactive interface for exploring OMTRA's capabilities.
 
 ### Prerequisites
-- Docker and Docker Compose installed
-- Pre-built webapp images (or build from source)
+- Docker, Docker Compose, NVIDIA Container Toolkit installed
+- Model weights downloaded to `omtra/trained_models/` directory (see [Model Weights](#model-weights))
 
 ### Starting the Web Application
 
@@ -313,7 +322,7 @@ cd omtra_webapp
 docker-compose down
 ```
 
-See [`omtra_webapp/START.md`](omtra_webapp/START.md) for detailed configuration options and building from source.
+See [`omtra_webapp/START.md`](omtra_webapp/START.md) for detailed configuration options.
 
 -----------------------------------------------------------------------------------------------------
 

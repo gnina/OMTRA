@@ -83,8 +83,9 @@ def load_ligand_rdkit(ligand_file: Path, compute_condensed: bool = False) -> Lig
     valid_mols, failed, failures, _ = tensorizer.featurize_molecules([mol])
     if failed:
         raise ValueError(f"Ligand featurization failed: {failures}")
-    xace = valid_mols[0].sparse_to_dense()
+    xace = valid_mols[0]
     xace.to_torch()
+    xace = xace.sparse_to_dense()
 
     atom_cond_a = None
     if compute_condensed:
@@ -289,7 +290,30 @@ def create_conditional_graphs_from_files(
     
     needs_condensed = 'ligand_identity_condensed' in task.groups_present
     ligand = load_ligand_rdkit(ligand_file, compute_condensed=needs_condensed) if ligand_file is not None else None
-    pharm_coords, pharm_types = (load_pharmacophore_xyz(pharmacophore_file) if pharmacophore_file is not None else (None, None))
+    
+    # Load pharmacophore from file if provided, otherwise extract from ligand if available
+    if pharmacophore_file is not None:
+        pharm_coords, pharm_types = load_pharmacophore_xyz(pharmacophore_file)
+    elif 'pharmacophore' in task.groups_fixed and ligand_file is not None:
+        # Extract pharmacophores from ligand SDF file
+        from omtra.data.pharmacophores import get_pharmacophores
+        supplier = Chem.SDMolSupplier(str(ligand_file))
+        mol = next(supplier)
+        if mol is None:
+            raise ValueError(f"Failed to read ligand from {ligand_file} for pharmacophore extraction")
+        if mol.GetNumAtoms() == 0:
+            raise ValueError("Ligand has zero atoms, cannot extract pharmacophores")
+        if not mol.GetNumConformers():
+            raise ValueError("Ligand has no 3D conformer, cannot extract pharmacophores")
+        
+        P, X, V, I = get_pharmacophores(mol, rec=None)
+        if len(P) == 0:
+            raise ValueError(f"No pharmacophore features extracted from ligand file {ligand_file}")
+        
+        pharm_coords = P
+        pharm_types = X
+    else:
+        pharm_coords, pharm_types = (None, None)
     
     if use_pocket and receptor is not None and pocket_cutoff is not None:
         reference_coords = None

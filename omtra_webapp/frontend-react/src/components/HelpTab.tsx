@@ -30,7 +30,7 @@ export function HelpTab() {
               <strong>Number of Samples</strong>: Number of molecules to generate (1-100).
             </li>
             <li>
-              <strong>Sampling Steps</strong>: Recommended: 100-200
+              <strong>Sampling Steps</strong>: 200-250 for best results
             </li>
             <li>
               <strong>Atom Count Distribution (Optional)</strong>: Control the size of generated molecules:

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { apiClient } from '@/lib/api-client';
 import type { SamplingMode, SamplingParams } from '@/types';
 import { PharmacophoreViewer } from './PharmacophoreViewer';
@@ -36,6 +36,7 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
   const [ligandContent, setLigandContent] = useState<string | null>(null);
   const [proteinContent, setProteinContent] = useState<string | null>(null);
   const ATOM_STD_MARGIN = 0.15;
+  const prevSamplingModeRef = useRef<SamplingMode>(samplingMode);
 
   const resetForm = () => {
     setSamplingMode('Unconditional');
@@ -75,12 +76,19 @@ export function JobSubmissionForm({ onJobSubmitted }: JobSubmissionFormProps) {
   }, []);
 
   useEffect(() => {
-    // Reset pharmacophore state when switching modes
-    if (samplingMode === 'Unconditional' || samplingMode === 'Protein-conditioned') {
+    // Reset all form state when switching sampling modes
+    if (prevSamplingModeRef.current !== samplingMode) {
+      setUploadedFiles([]);
+      setUploadTokens([]);
       setExtractedPharmacophores([]);
       setSelectedPharmacophoreIndices(new Set());
       setLigandContent(null);
       setProteinContent(null);
+      setAutoAtomCount(null);
+      setNLigAtomsMeanInput('');
+      setNLigAtomsStdInput('');
+      setFormResetKey((key) => key + 1); // Force FileUpload component to reset
+      prevSamplingModeRef.current = samplingMode;
     }
   }, [samplingMode]);
 
