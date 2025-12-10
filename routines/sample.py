@@ -309,8 +309,17 @@ def main(args):
                 train_cfg.crossdocked_path = args.crossdocked_path
 
             # instantiate datamodule & model
-            dm  = quick_load.datamodule_from_config(train_cfg)
-            multitask_dataset = dm.load_dataset(args.split)
+            if args.dataset == 'plinder':
+                spoof_cfg = quick_load.load_cfg(overrides=[
+                    'task_group=prot_protpharm_cond',
+                    f'plinder_path={args.plinder_path}',
+                    f'pharmit_path={args.pharmit_path}',
+                ])
+                dm = quick_load.datamodule_from_config(spoof_cfg)
+                multitask_dataset = dm.load_dataset(args.split)
+            else:
+                dm  = quick_load.datamodule_from_config(train_cfg)
+                multitask_dataset = dm.load_dataset(args.split)
 
             # get raw dataset object
             if args.dataset == 'plinder':
