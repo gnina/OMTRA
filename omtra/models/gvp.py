@@ -418,8 +418,9 @@ class HeteroGVPConv(nn.Module):
             if i == 0:
                 dim_vectors_in += 1
                 dim_feats_in += rbf_dim
-                edge_feat_out_dim = self.edge_feat_projector.out_features
-                dim_feats_in += edge_feat_out_dim
+                dim_feats_in += list(self.edge_feat_size.values())[0]
+                #edge_feat_out_dim = self.edge_feat_projector.out_features
+                #dim_feats_in += edge_feat_out_dim
 
             else:
                 # if not first layer, input size is the output size of the previous layer
@@ -832,14 +833,15 @@ class HeteroGVPConv(nn.Module):
 
         # if self.edge_feat_size.get(etype, 0) > 0:
         #     scalar_feats = scalar_feats + self.edge_feat_projector(edges.data["ef"])
-
         # concatenate edge features
         if self.edge_feat_size.get(etype, 0) > 0:
-            edge_feat_proj = self.edge_feat_projector(edges.data["ef"])
-            scalar_feats = torch.cat([scalar_feats, edge_feat_proj], dim=1)
+            #edge_feat_proj = self.edge_feat_projector(edges.data["ef"])
+            edge_feats = edges.data["ef"]
+            scalar_feats = torch.cat([scalar_feats, edge_feats], dim=1)
         else:
             # zeros tensor of size (num_edges, edge_feat_projector.out_features)
-            no_edge_feats = torch.zeros((scalar_feats.size(0), self.edge_feat_projector.out_features), device=scalar_feats.device)
+            #no_edge_feats = torch.zeros((scalar_feats.size(0), self.edge_feat_projector.out_features), device=scalar_feats.device)
+            no_edge_feats = torch.zeros((scalar_feats.size(0), list(self.edge_feat_size.values())[0]), device=scalar_feats.device)
             scalar_feats = torch.cat([scalar_feats, no_edge_feats], dim=1)
 
         scalar_message, vector_message = self.edge_message_fns[etype](
