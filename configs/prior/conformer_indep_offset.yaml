@@ -5,7 +5,7 @@ ligand_conformer_condensed:
       std: 2.573
       ot: False
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
     
 rigid_docking_condensed:
   lig_x:
@@ -14,7 +14,7 @@ rigid_docking_condensed:
       std: 2.573
       ot: False
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
     
 flexible_docking_condensed:
   lig_x:
@@ -23,7 +23,7 @@ flexible_docking_condensed:
       std: 2.573
       ot: False
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
 
 ligand_conformer_from_pharmacophore_condensed:
   lig_x:
@@ -32,7 +32,7 @@ ligand_conformer_from_pharmacophore_condensed:
       std: 2.573
       ot: False
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
 
 rigid_docking_pharmacophore_condensed:
   lig_x:
@@ -41,4 +41,4 @@ rigid_docking_pharmacophore_condensed:
       std: 2.573
       ot: False
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
