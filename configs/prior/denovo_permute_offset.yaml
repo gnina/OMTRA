@@ -6,7 +6,7 @@ denovo_ligand_condensed:
       ot: True
       rigid_body: false
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
 fixed_protein_ligand_denovo_condensed:
   lig_x:
     type: gaussian
@@ -15,7 +15,7 @@ fixed_protein_ligand_denovo_condensed:
       ot: True
       rigid_body: false
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
 
 protein_ligand_denovo_condensed:
   lig_x:
@@ -25,7 +25,7 @@ protein_ligand_denovo_condensed:
       ot: True
       rigid_body: false
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
 
 denovo_ligand_from_pharmacophore_condensed:
   lig_x:
@@ -35,7 +35,7 @@ denovo_ligand_from_pharmacophore_condensed:
       ot: True
       rigid_body: false
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
 
 fixed_protein_pharmacophore_ligand_denovo_condensed:
   lig_x:
@@ -45,4 +45,4 @@ fixed_protein_pharmacophore_ligand_denovo_condensed:
       ot: True
       rigid_body: false
       translation: True
-      offset_std: 2.0
+      offset_std: ${offset_std}
