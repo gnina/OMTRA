@@ -1,0 +1,44 @@
+ligand_conformer_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.573
+      ot: False
+      translation: True
+      offset_std: 2.0
+    
+rigid_docking_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.573
+      ot: False
+      translation: True
+      offset_std: 2.0
+    
+flexible_docking_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.573
+      ot: False
+      translation: True
+      offset_std: 2.0
+
+ligand_conformer_from_pharmacophore_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.573
+      ot: False
+      translation: True
+      offset_std: 2.0
+
+rigid_docking_pharmacophore_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.573
+      ot: False
+      translation: True
+      offset_std: 2.0
