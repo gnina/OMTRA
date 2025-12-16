@@ -27,6 +27,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         max_steps: int = None, 
         pin_memory: bool = True,
         fake_atom_p: float = 0.0,
+        chiral_edges: bool = True,
     ):
         super().__init__()
         self.dataset_config = dataset_config
@@ -38,6 +39,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self.max_steps = max_steps
         self.pin_memory = pin_memory
         self.fake_atom_p = fake_atom_p
+        self.chiral_edges = chiral_edges
 
 
         self.td_coupling: TaskDatasetCoupling = build_td_coupling(task_phases, dataset_task_coupling)
@@ -88,6 +90,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
                              graph_config=self.graph_config,
                              prior_config=self.prior_config,
                              fake_atom_p=self.fake_atom_p,
+                             chiral_edges=self.chiral_edges,
                              **self.dataset_config)
     
     def train_dataloader(self):

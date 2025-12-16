@@ -66,6 +66,7 @@ class LigandData:
     atom_cond_a: Optional[np.ndarray] = None
     # fragments
     fragments: Optional[np.ndarray] = None
+    chiral_bond_types: Optional[np.ndarray] = None
 
     
     def to_atom_array(self, atom_type_map) -> struc.AtomArray:
@@ -108,6 +109,10 @@ class LigandData:
             xace_dict['e'] = torch.zeros((0,), dtype=torch.long)
             xace_dict['edge_idxs'] = torch.zeros((2, 0), dtype=torch.long)
 
+        # TODO: add chiral bond types
+        if self.chiral_bond_types is not None:
+            xace_dict['chiral_e'] = self.chiral_bond_types
+        
         for k in xace_dict:
             if isinstance(xace_dict[k], np.ndarray):
                 xace_dict[k] = torch.from_numpy(xace_dict[k])

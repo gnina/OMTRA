@@ -11,7 +11,8 @@ def parse_args():
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
     p.add_argument('--n_feats', type=int, default=6, help='Number of additional features per molecule.')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
-    p.add_argument('--feat_names', type=list, default=['impl_H', 'aro', 'hyb', 'ring', 'chiral', 'frag'], help='Name of the new Zarr array.')
+    p.add_argument("--entity_type", type=str, default='atom', help="Entity type of the feature: node or edge")
+    p.add_argument("--feat_names", type=str, nargs="+", default=['impl_H', 'aro', 'hyb', 'ring', 'chiral', 'frag'], help="Feature names.")
     
     args = p.parse_args()
 
@@ -30,11 +31,25 @@ if __name__ == '__main__':
     n_atoms = lig_node_group['x'].shape[0]
     nodes_per_chunk = lig_node_group['x'].chunks[0]
 
-    # Create array if it doesn't exist
-    if array_name not in lig_node_group:
-        array = lig_node_group.create_array(array_name, shape=(n_atoms, n_feats), chunks=(nodes_per_chunk, n_feats), dtype=np.int8, overwrite=False)
-        array.attrs['features'] = args.feat_names    # add attribute
+    lig_edge_group = root['lig/edge']
+    n_edges = lig_edge_group['edge_index'].shape[0]
+    edges_per_chunk = lig_edge_group['edge_index'].chunks[0]
 
-    print(f"Finished creating Zarr array {args.array_name}.")
+    # Create array if it doesn't exist
+    
+    if (args.entity_type == 'atom') and (array_name not in lig_node_group):
+        array = lig_node_group.create_array(array_name, shape=(n_atoms, n_feats), chunks=(nodes_per_chunk, n_feats), dtype=np.int8, overwrite=False)
+    
+    elif (args.entity_type == 'edge') and (array_name not in lig_edge_group):
+        array = lig_edge_group.create_array(array_name, shape=(n_edges, n_feats), chunks=(edges_per_chunk, n_feats), dtype=np.int8, overwrite=False)
+    
+    else:
+        if args.entity_type not in ['atom', 'edge']:
+            raise NotImplementedError(f'{args.entity_type} is not a valid entity. Select from atom or edges.')
+        else:
+            print(f'{array_name} array already exists for {args.entity_type}')
+        
+    array.attrs['features'] = args.feat_names    # add attribute
+    print(f"Finished creating Zarr array {array_name}.")
     
         

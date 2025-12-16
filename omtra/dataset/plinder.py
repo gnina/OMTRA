@@ -65,6 +65,7 @@ class PlinderDataset(ZarrDataset):
         res_id_embed_dim: int = 64,
         max_pharms_sampled: int = 8,
         pharm_idxs: Optional[List] = None,
+        chiral_edges: bool = True,
     ):
         super().__init__(
             split,
@@ -80,6 +81,7 @@ class PlinderDataset(ZarrDataset):
         self.use_fake_atoms = self.fake_atom_p > 0
         self.pskip_factor = pskip_factor
         self.weighted_sampling = pskip_factor > 0.0 and split == 'train'
+        self.chiral_edges = chiral_edges
 
         self.res_id_embed_dim = res_id_embed_dim
 
@@ -176,6 +178,7 @@ class PlinderDataset(ZarrDataset):
                    include_pharmacophore: bool, 
                    include_protein: bool, 
                    include_extra_feats: bool, 
+                   include_chiral_bonds: bool,
                    condensed_atom_typing: bool
     ) -> SystemData:
         system_info = self.system_lookup[
@@ -389,6 +392,9 @@ class PlinderDataset(ZarrDataset):
             ligand.atom_hyb=lig_extra_feats_dict['hyb']
             ligand.atom_ring=lig_extra_feats_dict['ring']
             ligand.atom_chiral_binary=lig_extra_feats_dict['chiral']
+        
+        if include_chiral_bonds:
+            ligand.chiral_bond_types = self.slice_array('ligand/bond_chirality', lig_bond_start, lig_bond_end)
 
         if include_pharmacophore:
             pharm_start, pharm_end = (
@@ -681,6 +687,7 @@ class PlinderDataset(ZarrDataset):
         ligand_id: str,
         task: Task,
         include_extra_feats: bool,
+        include_chiral_bonds: bool,
         condensed_atom_typing: bool,
         pocket: Optional[StructureData] = None,
     ) -> Tuple[
@@ -691,7 +698,7 @@ class PlinderDataset(ZarrDataset):
 
         lig_xace = ligand.to_xace_mol(dense=True)
 
-        denovo_ligand = any(group in task.groups_generated for group in ['ligand_identity',  'ligand_identity_condensed'])
+        denovo_ligand = any(group in task.groups_generated for group in ['ligand_identity', 'ligand_identity_condensed'])
 
         if self.fake_atom_p > 0 and denovo_ligand:
             if condensed_atom_typing:
@@ -727,6 +734,9 @@ class PlinderDataset(ZarrDataset):
                 "e_1_true": lig_xace.e,
             }
         }
+
+        if include_chiral_bonds:
+            edge_data["lig_to_lig"]["chiral_1_true"] = lig_xace.chiral_e
 
         edge_idxs = {
             "lig_to_lig": lig_xace.edge_idxs,
@@ -918,6 +928,7 @@ class PlinderDataset(ZarrDataset):
         include_pharmacophore: bool, 
         include_protein: bool,
         include_extra_feats: bool,
+        include_chiral_bonds: bool,
         condensed_atom_typing: bool
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
@@ -960,6 +971,7 @@ class PlinderDataset(ZarrDataset):
             system.ligand_id, 
             task=task,
             include_extra_feats=include_extra_feats,
+            include_chiral_bonds=include_chiral_bonds,
             condensed_atom_typing=condensed_atom_typing,
             pocket=system.pocket
         )
@@ -983,6 +995,7 @@ class PlinderDataset(ZarrDataset):
 
         include_pharmacophore = "pharmacophore" in task_class.groups_present
         include_extra_feats = "ligand_identity_extra" in task_class.groups_present
+        include_chiral_bonds = self.chiral_edges and ('ligand_identity' not in task_class.groups_generated) and ('ligand_identity_condensed' not in task_class.groups_generated)
         condensed_atom_typing = "ligand_identity_condensed" in task_class.groups_present
 
         include_protein = (
@@ -995,7 +1008,8 @@ class PlinderDataset(ZarrDataset):
             include_pharmacophore=include_pharmacophore,
             include_protein=include_protein,
             include_extra_feats=include_extra_feats,
-            condensed_atom_typing=condensed_atom_typing,
+            include_chiral_bonds=include_chiral_bonds,
+            condensed_atom_typing=condensed_atom_typing, 
         )
 
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
@@ -1005,6 +1019,7 @@ class PlinderDataset(ZarrDataset):
                 include_pharmacophore=include_pharmacophore,
                 include_protein=include_protein,
                 include_extra_feats=include_extra_feats,
+                include_chiral_bonds=include_chiral_bonds,
                 condensed_atom_typing=condensed_atom_typing
             )
         )
@@ -1178,6 +1193,20 @@ class PlinderDataset(ZarrDataset):
             int(system_info["lig_atom_end"]),
         )
         return lig_atom_start, lig_atom_end
+
+    def retrieve_edge_idxs(self, index: int) -> Tuple:
+        """ 
+        Returns the starting and ending edge indices for the ligand 
+        """
+        system_info = self.system_lookup[
+            self.system_lookup["system_idx"] == index
+        ].iloc[0]
+
+        lig_edge_start, lig_edge_end = (
+            int(system_info["lig_bond_start"]),
+            int(system_info["lig_bond_end"]),
+        )
+        return lig_edge_start, lig_edge_end
     
     def standardize_residue_ids(self, res_ids: torch.Tensor, chain_ids: torch.Tensor):
         """

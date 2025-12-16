@@ -160,24 +160,36 @@ def dgl_to_rdkit(g):
 
         
 class BlockWriter:
-    def __init__(self, store_path: str, array_name: str):
+    def __init__(self, store_path: str, atom_array_name: str, edge_array_name: str):
 
         # Open Pharmit Zarr store
         self.root = zarr.open(store_path, mode='r+')
+        
         self.lig_node_group = self.root['lig/node']
+        self.lig_edge_group = self.root['lig/edge']
 
         # Check that Zarr array was correctly made
-        if array_name not in self.lig_node_group:
-            raise KeyError(f"Zarr array '{array_name}' not found in 'lig/node' group.")
+        if atom_array_name not in self.lig_node_group:
+            raise KeyError(f"Zarr array '{atom_array_name}' not found in 'lig/node' group.")
+        if edge_array_name not in self.lig_edge_group:
+            raise KeyError(f"Zarr array '{edge_array_name}' not found in 'lig/edge' group.")
 
-        self.new_feats_array = self.lig_node_group[array_name]
+        self.new_atom_feats_array = self.lig_node_group[atom_array_name]
+        self.new_edge_feats_array = self.lig_edge_group[edge_array_name]
 
 
-    def save_chunk(self, contig_idxs: np.ndarray, new_feats: np.ndarray):
-        for i, atom_props in enumerate(new_feats):
-            start_idx = contig_idxs[i][0]
-            end_idx = contig_idxs[i][1]
+    def save_chunk(self, atom_contig_idxs: np.ndarray, new_atom_feats: np.ndarray, edge_contig_idxs: np.ndarray, new_edge_feats: np.ndarray):
+        for i, atom_feats in enumerate(new_atom_feats):
+            atom_start_idx = atom_contig_idxs[i][0]
+            atom_end_idx = atom_contig_idxs[i][1]
 
             # write features to zarr store
-            self.new_feats_array[start_idx:end_idx] = atom_props
+            self.new_atom_feats_array[atom_start_idx:atom_end_idx] = atom_feats
+        
+        for i, edge_feats in enumerate(new_edge_feats):
+            edge_start_idx = edge_contig_idxs[i][0]
+            edge_end_idx = edge_contig_idxs[i][1]
+
+            # write features to zarr store
+            self.new_edge_feats_array[edge_start_idx:edge_end_idx] = edge_feats
             

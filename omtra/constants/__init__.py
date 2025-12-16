@@ -14,6 +14,8 @@ ph_idx_to_elem = ['P', 'S', 'F', 'N', 'O', 'C', 'Cl']
 charge_map = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6]
 
 lig_atom_chirality_map = ['nonchiral', 'R', 'S', 'E', 'Z']
+chiral_cov_bond_type_map = ['nonchiral', 'RS_1', 'RS_2', 'RS_3', 'RS_4', 'EZ_1', 'EZ_2']
+chiral_bond_type_map = ['nonchiral', 'RS_1', 'RS_2', 'E', 'Z']
 
 hybridization_map = ['unspecified', 's', 'sp', 'sp2', 'sp3', 'sp3d', 'sp3d2', 'other']
 max_impl_H = 4
@@ -54,6 +56,11 @@ protein_element_map = [
 
 # note we do NOT model aromatic bonds, are data processing pipeline kekulizes everything
 bond_type_map = [None, Chem.rdchem.BondType.SINGLE, Chem.rdchem.BondType.DOUBLE, Chem.rdchem.BondType.TRIPLE,]
+
+chiral_bond_type_map = [
+    None, 
+    "(RS,1)", "(RS,2)", "(RS,3)", "(RS,4)",
+    "(E,E)", "(Z,Z)", "(EZ,1)", "(EZ,2)"]
  
 lig_atom_type_map = ["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"]
 npnde_atom_type_map = [

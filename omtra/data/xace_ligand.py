@@ -11,6 +11,7 @@ from collections import defaultdict
 import math
 from omtra.constants import lig_atom_type_map, extra_feats_map, lig_atom_chirality_map
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
+from omtra_pipelines.chirality.chirality_utils import chirality_adj
 
 from omtra.utils.misc import combine_tcv_counts, bad_mol_reporter
 
@@ -27,6 +28,7 @@ class MolXACE:
     e: Optional[Union[np.ndarray, torch.Tensor]] = None  # corresponds to edge attributes (bond orders)
 
     chiral: Optional[Union[np.ndarray, torch.Tensor]] = None
+    chiral_e: Optional[Union[np.ndarray, torch.Tensor]] = None
 
     impl_H: Optional[Union[np.ndarray, torch.Tensor]] = None
     aro: Optional[Union[np.ndarray, torch.Tensor]] = None
@@ -68,13 +70,23 @@ class MolXACE:
         edge_idxs = torch.cat((upper_edge_idxs, lower_edge_idxs), dim=1)
         bond_types = torch.cat((upper_edge_labels, upper_edge_labels))
 
+        # TODO: dense representation of chiral bonds respecting directionality
+        if (self.chiral is not None) and (self.chiral_e is not None):
+            chiral_adj = chirality_adj(self.chiral, self.chiral_e, self.edge_idxs)
+            chiral_bond_types = torch.from_numpy(chiral_adj[~np.eye(n_atoms, dtype=bool)].flatten())
+        
+        else:
+            chiral_bond_types = None
+
+        
         if self.cond_a is not None:     # condensed atom typing
             dense_xace = MolXACE(
                 x=self.x,
                 cond_a=self.cond_a,
                 chiral=self.chiral,
                 e=bond_types,
-                edge_idxs=edge_idxs
+                edge_idxs=edge_idxs,
+                chiral_e=chiral_bond_types
             )
 
         elif self.impl_H is not None:   # Extra features
@@ -89,7 +101,8 @@ class MolXACE:
                 ring=self.ring,
                 chiral_binary=self.chiral_binary,
                 e=bond_types,
-                edge_idxs=edge_idxs
+                edge_idxs=edge_idxs,
+                chiral_e=chiral_bond_types
             )
 
         else:                       # regular 
@@ -99,7 +112,8 @@ class MolXACE:
                 c=self.c,
                 chiral=self.chiral,
                 e=bond_types,
-                edge_idxs=edge_idxs
+                edge_idxs=edge_idxs,
+                chiral_e=chiral_bond_types
             )
             
         return dense_xace
@@ -154,6 +168,7 @@ class MoleculeTensorizer():
 
 def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=False) -> MolXACE:
     """Converts an RDKit molecule to a MolXACE data class containing the positions, atom types, atom charges, bond types, bond indexes, and unique valencies."""
+    # TODO: add chiral info?
     try:
         Chem.SanitizeMol(molecule)
         Chem.Kekulize(molecule, clearAromaticFlags=True)

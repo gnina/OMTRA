@@ -12,6 +12,7 @@ from omtra.load.quick import datamodule_from_config
 import omtra.load.quick as quick_load
 
 from omtra_pipelines.plinder_ligand_properties.phase2 import *
+from omtra_pipelines.chirality.chirality_utils import *
 
 import multiprocessing
 multiprocessing.set_start_method('spawn', force=True)
@@ -22,7 +23,8 @@ def parse_args():
 
     p.add_argument('--plinder_path', type=str, help='Path to the Plinder Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/plinder')
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
-    p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
+    p.add_argument('--atom_array_name', type=str, default='extra_feats', help='Name of the new Zarr array for atom features.')
+    p.add_argument('--edge_array_name', type=str, default='extra_feats', help='Name of the new Zarr array for edge features.')
     p.add_argument('--block_size', type=int, default=5000, help='Number of ligands to process in a block.')
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--output_dir', type=Path, help='Output directory for processed data.', default=Path('./outputs/phase2'))
@@ -50,58 +52,85 @@ def process_block(block_start_idx: int, block_size: int):
     n_mols = len(plinder_dataset)
     block_end_idx = min(block_start_idx + block_size, n_mols)
 
-    contig_idxs = []
-    new_feats = []
+    atom_contig_idxs = []
+    edge_contig_idxs = []
+    new_atom_feats = []
+    new_edge_feats = []
     failed_idxs = []
 
-    cur_contig_feats = []
-    contig_start_idx = None
-    contig_end_idx = None
+    cur_atom_contig_feats = []
+    atom_contig_start_idx = None
+    atom_contig_end_idx = None
+
+    cur_edge_contig_feats = []
+    edge_contig_start_idx = None
+    edge_contig_end_idx = None
 
     for idx in range(block_start_idx, block_end_idx):
         
-        start_idx, end_idx = plinder_dataset.retrieve_atom_idxs(idx)
+        atom_start_idx, atom_end_idx = plinder_dataset.retrieve_atom_idxs(idx)
+        edge_start_idx, edge_end_idx = plinder_dataset.retrieve_edge_idxs(idx)
+
+        edge_index = plinder_dataset.root['ligand/bond_indices'][edge_start_idx: edge_end_idx]
 
         try:
             g = plinder_dataset[('denovo_ligand', idx)]
             mol = dgl_to_rdkit(g)
             Chem.SanitizeMol(mol)
 
-            atom_props = get_chirality(mol)
-            #atom_props = ligand_properties(mol)                         # (n_atoms, 1)
-            #fragments = fragment_molecule(mol)                          # (n_atoms, 1)
-            #atom_props = np.concatenate((atom_props, fragments), axis=1)# (n_atoms, 6)
+            chiral_e_types, atom_props = get_chiral_feats(mol, edge_index)
+            # atom_props = get_chiral_centers_lite(mol)                  # (n_atoms, 1)
+            # atom_props = ligand_properties(mol)                         # (n_atoms, 1)
+            # fragments = fragment_molecule(mol)                          # (n_atoms, 1)
+            # atom_props = np.concatenate((atom_props, fragments), axis=1)# (n_atoms, 6)
 
-            assert atom_props.shape[0] == (end_idx - start_idx), f"Mismatch in atom counts: computed properties for {atom_props.shape[0]} atoms but expected {(end_idx - start_idx)}"
+            assert atom_props.shape[0] == (atom_end_idx - atom_start_idx), f"Mismatch in atom counts: computed properties for {atom_props.shape[0]} atoms but expected {(atom_end_idx- atom_start_idx)}"
+            assert chiral_e_types.shape[0] == (edge_end_idx - edge_start_idx), f"Mismatch in edge feature counts: computed properties for {chiral_e_types.shape[0]} edges but expected {(edge_end_idx - edge_start_idx )}"
 
-            if contig_start_idx is None:
-                contig_start_idx = start_idx
+            if atom_contig_start_idx is None:
+                atom_contig_start_idx = atom_start_idx
+                edge_contig_start_idx = edge_start_idx
 
-            cur_contig_feats.append(atom_props)
-            contig_end_idx = end_idx  # always update with latest good molecule
+            cur_atom_contig_feats.append(atom_props)
+            cur_edge_contig_feats.append(chiral_e_types)
+
+            atom_contig_end_idx = atom_end_idx  # always update with latest good molecule
+            edge_contig_end_idx = edge_end_idx
 
         except Exception as e:
-            print(f"Failed to compute features for molecule {idx}: {e}. Creating new contig from {contig_start_idx}-{contig_end_idx}")
+            print(f"Failed to compute features for molecule {idx}: {e}. Creating new contig from atoms {atom_contig_start_idx}-{atom_contig_end_idx} and edges {edge_contig_start_idx}–{edge_contig_end_idx}")
             failed_idxs.append(idx)
 
             # Close current contiguous chunk (if any)
-            if cur_contig_feats:
-                feat_array = np.vstack(cur_contig_feats)
-                contig_idxs.append((contig_start_idx, contig_end_idx))
-                new_feats.append(feat_array)
+            if cur_atom_contig_feats:
+                atom_contig_idxs.append((atom_contig_start_idx, atom_contig_end_idx))
+                atom_feat_array = np.vstack(cur_atom_contig_feats)
+                new_atom_feats.append(atom_feat_array)
 
+                edge_contig_idxs.append((edge_contig_start_idx, edge_contig_end_idx))
+                edge_feat_array = np.vstack(cur_edge_contig_feats)
+                new_edge_feats.append(edge_feat_array)
+                
                 # Reset
-                cur_contig_feats = []
-                contig_start_idx = None
-                contig_end_idx = None
+                cur_atom_contig_feats = []
+                atom_contig_start_idx = None
+                atom_contig_end_idx = None
+
+                cur_edge_contig_feats = []
+                edge_contig_start_idx = None
+                edge_contig_end_idx = None
 
     # After final molecule, flush last chunk if present
-    if cur_contig_feats:
-        atom_props = np.vstack(cur_contig_feats)
-        contig_idxs.append((contig_start_idx, contig_end_idx))
-        new_feats.append(atom_props)
+    if cur_atom_contig_feats:
+        atom_contig_idxs.append((atom_contig_start_idx, atom_contig_end_idx))
+        atom_props = np.vstack(cur_atom_contig_feats)
+        new_atom_feats.append(atom_props)
 
-    return new_feats, contig_idxs, failed_idxs
+        edge_contig_idxs.append((edge_contig_start_idx, edge_contig_end_idx))
+        edge_props = np.vstack(cur_edge_contig_feats)
+        new_edge_feats.append(edge_props)
+
+    return new_atom_feats, new_edge_feats, atom_contig_idxs, edge_contig_idxs, failed_idxs
 
 
 
@@ -119,10 +148,10 @@ def worker_initializer(plinder_path, version, store_name):
 def save_and_update(result, block_writer, pbar, output_dir):
     """ Callback to new features for a block and update progress """
 
-    new_feats, contig_idxs, failed_idxs = result
+    new_atom_feats, new_edge_feats, atom_contig_idxs, edge_contig_idxs, failed_idxs = result
 
     try:
-        block_writer.save_chunk(contig_idxs, new_feats)
+        block_writer.save_chunk(atom_contig_idxs, new_atom_feats, edge_contig_idxs, new_edge_feats)
     except Exception as e:
         print(f"Error during save_chunk: {e}")
         raise
@@ -247,11 +276,11 @@ def run_single(plinder_path: Path,
         block_start_idx = block_idx * block_size        
         try:
             start_time = time.time()
-            new_feats, contig_idxs, failed_idxs = process_block(block_start_idx, block_size)
+            new_atom_feats, new_edge_feats, atom_contig_idxs, edge_contig_idxs, failed_idxs = process_block(block_start_idx, block_size)
             processing_time = time.time() - start_time
             
             write_start = time.time()
-            block_writer.save_chunk(contig_idxs, new_feats)
+            block_writer.save_chunk(atom_contig_idxs, new_atom_feats, edge_contig_idxs, new_edge_feats)
             write_time = time.time() - write_start
 
             print(f"[Block {block_idx}] "
@@ -288,7 +317,7 @@ if __name__ == '__main__':
         print("–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––\n")
 
         store_path = args.plinder_path+'/'+version+'/'+args.store_name+'.zarr'
-        block_writer = BlockWriter(store_path, args.array_name)
+        block_writer = BlockWriter(store_path, args.atom_array_name, args.edge_array_name)
 
         start_time = time.time()
 

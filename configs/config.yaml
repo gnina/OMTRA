@@ -28,6 +28,7 @@ plinder_pskip_factor: 0.0 # 0 -> no weighted sampling, 1 -> uniform sampling ove
 res_id_embed_dim: 64 # dimension of residue id embedding
 max_pharms_sampled: 8
 pharm_idxs: None
+chiral_edges: True
 
 pharmit_path: ${omtra_root:}/data/pharmit
 plinder_path: ${omtra_root:}/data/plinder

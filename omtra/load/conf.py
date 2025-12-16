@@ -86,8 +86,6 @@ class TaskDatasetCoupling:
 
 def build_td_coupling(task_phases, dataset_task_coupling) -> TaskDatasetCoupling:
     """
-    
-
     task_phases is a list of dictionaries. 
         the purpose of this argument is to specify what tasks the model will be trained on, and the margial probability of the model being trained on each task, p(task)
         this dictionary also defines time-dependent task mixtures; each element of the tasks list is a dictionary that tells us 

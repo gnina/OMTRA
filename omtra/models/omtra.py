@@ -79,6 +79,7 @@ class OMTRA(pl.LightningModule):
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
         pharm_var: float = 0.0,
+        chiral_edges: bool = True,
 
     ):
         super().__init__()
@@ -101,6 +102,7 @@ class OMTRA(pl.LightningModule):
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
         self.pharm_var = pharm_var
+        self.chiral_edges = chiral_edges 
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -152,6 +154,7 @@ class OMTRA(pl.LightningModule):
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
             fake_atoms=self.fake_atom_p>0.0,
+            chiral_edges=self.chiral_edges,
         )
 
         if not ligand_encoder.is_empty():

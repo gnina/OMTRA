@@ -29,6 +29,7 @@ from omtra.constants import (
     residue_map,
     protein_element_map,
     protein_atom_map,
+    chiral_bond_type_map
 )
 
 
@@ -72,7 +73,8 @@ class VectorField(nn.Module):
         dst_feat_msg_reduction_factor: float = 4,
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
-        res_id_embed_dim: int = 64
+        res_id_embed_dim: int = 64,
+        chiral_edges: bool = True,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -91,6 +93,7 @@ class VectorField(nn.Module):
         self.has_mask = has_mask
         self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
+        self.chiral_edges = chiral_edges
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -212,6 +215,15 @@ class VectorField(nn.Module):
             if self.edge_feat_sizes[etype] == 0:
                 continue
             self.edge_embedding[etype] = nn.Sequential(
+                nn.Linear(token_dim, n_hidden_edge_feats),
+                nn.SiLU(),
+                nn.LayerNorm(n_hidden_edge_feats),
+            )
+        
+        # emebedding for chiral edge types
+        if self.chiral_edges:
+            self.token_embeddings['chiral_e'] = nn.Embedding(len(chiral_bond_type_map), token_dim)
+            self.edge_embedding['chiral_to_chiral'] = nn.Sequential(
                 nn.Linear(token_dim, n_hidden_edge_feats),
                 nn.SiLU(),
                 nn.LayerNorm(n_hidden_edge_feats),
@@ -450,6 +462,12 @@ class VectorField(nn.Module):
                 )
                 edge_feats = self.edge_embedding[etype](edge_feats)
                 edge_features[etype] = edge_feats
+
+        # Add chiral edge embedding to lig_to_lig edge feature embeddings
+        if self.chiral_edges and (edge_features['lig_to_lig'] is not None) and ('ligand_identity' not in task_class.groups_generated) and ('ligand_identity_condensed' not in task_class.groups_generated):
+            chiral_edge_feats = self.token_embeddings['chiral_e'](g.edges['lig_to_lig'].data['chiral_1_true'])
+            chiral_edge_feats = self.edge_embedding['chiral_to_chiral'](chiral_edge_feats)
+            edge_features['lig_to_lig'] = edge_features['lig_to_lig'] + chiral_edge_feats
 
         # get task embedding
         task_idx = self.td_coupling.task_space.index(
@@ -715,6 +733,8 @@ class VectorField(nn.Module):
             if m.data_key == "x":
                 dst_dict[m.name] = node_positions[m.entity_name]
             elif m.is_categorical:
+                if m.data_key == 'chiral_e':
+                    continue
                 dst_dict[m.name] = logits[m.name]
                 if apply_softmax:
                     dst_dict[m.name] = torch.softmax(

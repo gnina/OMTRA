@@ -29,6 +29,7 @@ class PharmitDataset(ZarrDataset):
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
                  max_pharms_sampled: int = 8,
+                 chiral_edges: bool = True
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
@@ -36,6 +37,7 @@ class PharmitDataset(ZarrDataset):
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = fake_atom_p > 0
         self.max_pharms_sampled = max_pharms_sampled
+        self.chiral_edges = chiral_edges
 
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
@@ -129,6 +131,9 @@ class PharmitDataset(ZarrDataset):
         xace_dict['e'] = self.slice_array('lig/edge/e', start_idx, end_idx)
         xace_dict['edge_idxs'] = self.slice_array('lig/edge/edge_index', start_idx, end_idx)
 
+        if self.chiral_edges and ('ligand_identity' not in task_class.groups_generated) and ('ligand_identity_condensed' not in task_class.groups_generated):
+            xace_dict['chiral_e'] = self.slice_array('lig/edge/chirality', start_idx, end_idx)
+
 
         # convert to torch tensors and set data types
         for k in xace_dict:
@@ -196,6 +201,10 @@ class PharmitDataset(ZarrDataset):
                 'e_1_true': xace_ligand.e,
             },
         }
+
+        if self.chiral_edges and ('ligand_identity' not in task_class.groups_generated) and ('ligand_identity_condensed' not in task_class.groups_generated):
+            g_edge_data['lig_to_lig']['chiral_1_true'] =  xace_ligand.chiral_e
+
         g_edge_idxs = {
             'lig_to_lig': xace_ligand.edge_idxs,
         }
@@ -241,6 +250,10 @@ class PharmitDataset(ZarrDataset):
     
     def retrieve_atom_idxs(self, idx) -> tuple:
         start_idx, end_idx = self.slice_array('lig/node/graph_lookup', idx)
+        return start_idx, end_idx
+    
+    def retrieve_edge_idxs(self, idx) -> tuple:
+        start_idx, end_idx = self.slice_array('lig/edge/graph_lookup', idx)
         return start_idx, end_idx
 
     def retrieve_graph_chunks(self, frac_start: float, frac_end: float):

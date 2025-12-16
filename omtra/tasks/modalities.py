@@ -131,23 +131,23 @@ Modality.register(MODALITY_REGISTER,
     n_categories=num_condensed_atom_types, 
 )
 
-Modality.register(MODALITY_REGISTER,
-    name='lig_chiral',
-    group='ligand_identity',
-    graph_entity='node',
-    entity_name='lig',
-    data_key='chiral',
-    n_categories= len(lig_atom_chirality_map), 
-)
+# Modality.register(MODALITY_REGISTER,
+#     name='lig_chiral',
+#     group='ligand_identity',
+#     graph_entity='node',
+#     entity_name='lig',
+#     data_key='chiral',
+#     n_categories= len(lig_atom_chirality_map), 
+# )
 
-Modality.register(MODALITY_REGISTER,
-    name='lig_chiral_condensed',
-    group='ligand_identity_condensed',
-    graph_entity='node',
-    entity_name='lig',
-    data_key='chiral',
-    n_categories= len(lig_atom_chirality_map), 
-)
+# Modality.register(MODALITY_REGISTER,
+#     name='lig_chiral_condensed',
+#     group='ligand_identity_condensed',
+#     graph_entity='node',
+#     entity_name='lig',
+#     data_key='chiral',
+#     n_categories= len(lig_atom_chirality_map), 
+# )
 
 Modality.register(MODALITY_REGISTER,
     name='lig_e',

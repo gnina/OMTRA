@@ -10,6 +10,7 @@ def parse_args():
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
     p.add_argument('--n_feats', type=int, default=6, help='Number of additional features per molecule.')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
+    p.add_argument("--entity_type", type=str, default='atom', help="Entity type of the feature: node or edge")
     p.add_argument("--feat_names", type=str, nargs="+", default=['impl_H', 'aro', 'hyb', 'ring', 'chiral', 'frag'], help="Feature names.")
     
     args = p.parse_args()
@@ -28,13 +29,22 @@ if __name__ == '__main__':
         store_path = args.plinder_path+'/'+version+'/'+args.store_name+'.zarr'
         root = zarr.open(store_path, mode='r+')
 
-        lig_node_group = root['ligand']
-        n_atoms = lig_node_group['coords'].shape[0]
-        nodes_per_chunk = lig_node_group['coords'].chunks[0]
+        lig_group = root['ligand']
+        n_atoms = lig_group['coords'].shape[0]
+        nodes_per_chunk = lig_group['coords'].chunks[0]
+
+        n_edges = lig_group['bond_types'].shape[0]
+        edges_per_chunk = lig_group['bond_types'].chunks[0]
 
         # Create array if it doesn't exist
-        if array_name not in lig_node_group:
-            array = lig_node_group.create_array(array_name, shape=(n_atoms, n_feats), chunks=(nodes_per_chunk, n_feats), dtype=np.int8, overwrite=False)
+        if array_name not in lig_group:
+            if args.entity_type == 'atom':
+                array = lig_group.create_array(array_name, shape=(n_atoms, n_feats), chunks=(nodes_per_chunk, n_feats), dtype=np.int8, overwrite=False)
+            elif args.entity_type == 'edge':
+                array = lig_group.create_array(array_name, shape=(n_edges, n_feats), chunks=(edges_per_chunk, n_feats), dtype=np.int8, overwrite=False)
+            else:
+                raise NotImplementedError(f'{args.entity_type} is not a valid entity. Select from atom or edges.')
+            
             array.attrs['features'] = args.feat_names    # add attribute
 
     print(f"Finished creating Zarr array '{args.array_name}'.")

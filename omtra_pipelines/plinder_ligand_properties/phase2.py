@@ -48,49 +48,6 @@ def ligand_properties(mol: Chem.Mol) -> np.ndarray:
 
     return new_feats
 
-def get_chirality(mol, conf_id: int = -1):
-    """
-    Return an (n_atoms,) int array with:
-      0 = not chiral, 1 = R, 2 = S, 3 = E, 4 = Z
-    Uses 3D coordinates (AssignStereochemistryFrom3D) to set stereo,
-    then assigns CIP labels.
-    """
-
-    n_atoms = mol.GetNumAtoms()
-    mol_h = Chem.AddHs(mol)
-
-    if mol_h.GetNumConformers() == 0:
-        raise ValueError("Molecule has no conformers.")
-    if conf_id >= mol_h.GetNumConformers():
-        raise ValueError(f"conf_id {conf_id} out of range.")
-
-    out = np.zeros(mol_h.GetNumAtoms(), dtype=int)
-
-    # Perceive stereo from 3D, then assign CIP labels
-    Chem.AssignStereochemistryFrom3D(mol_h, confId=conf_id, replaceExistingTags=True)
-    Chem.AssignCIPLabels(mol_h)
-
-    # Atom R/S
-    for atom in mol_h.GetAtoms():
-        if atom.HasProp('_CIPCode'):
-            code = atom.GetProp('_CIPCode')
-            if code == 'R':
-                out[atom.GetIdx()] = 1
-            elif code == 'S':
-                out[atom.GetIdx()] = 2
-
-    # Bond E/Z → mark both atoms on each double bond
-    for bond in mol_h.GetBonds():
-        st = bond.GetStereo()
-        if st == Chem.BondStereo.STEREOE:
-            out[bond.GetBeginAtomIdx()] = max(out[bond.GetBeginAtomIdx()], 3)
-            out[bond.GetEndAtomIdx()]   = max(out[bond.GetEndAtomIdx()],   3)
-        elif st == Chem.BondStereo.STEREOZ:
-            out[bond.GetBeginAtomIdx()] = max(out[bond.GetBeginAtomIdx()], 4)
-            out[bond.GetEndAtomIdx()]   = max(out[bond.GetEndAtomIdx()],   4)
-
-    return out[:n_atoms, None]
-
 
 def fragment_molecule(mol: Chem.Mol) -> np.ndarray:
     """ 
@@ -155,23 +112,33 @@ def dgl_to_rdkit(g, task_name='denovo_ligand'):
 
         
 class BlockWriter:
-    def __init__(self, store_path: str, array_name: str):
+    def __init__(self, store_path: str, atom_array_name: str, edge_array_name: str):
 
         # Open Pharmit Zarr store
         self.root = zarr.open(store_path, mode='r+')
-        self.lig_node_group = self.root['ligand']
+        self.lig_group = self.root['ligand']
 
         # Check that Zarr array was correctly made
-        if array_name not in self.lig_node_group:
-            raise KeyError(f"Zarr array '{array_name}' not found in 'ligand' group.")
+        if atom_array_name not in self.lig_group:
+            raise KeyError(f"Zarr array '{atom_array_name}' not found in 'ligand' group.")
+        if edge_array_name not in self.lig_group:
+            raise KeyError(f"Zarr array '{edge_array_name}' not found in 'ligand' group.")
 
-        self.new_feats_array = self.lig_node_group[array_name]
+        self.new_atom_feats_array = self.lig_group[atom_array_name]
+        self.new_edge_feats_array = self.lig_group[edge_array_name]
 
 
-    def save_chunk(self, contig_idxs: np.ndarray, new_feats: np.ndarray):
-        for i, atom_props in enumerate(new_feats):
-            start_idx = contig_idxs[i][0]
-            end_idx = contig_idxs[i][1]
+    def save_chunk(self, atom_contig_idxs: np.ndarray, new_atom_feats: np.ndarray, edge_contig_idxs: np.ndarray, new_edge_feats: np.ndarray):
+        for i, atom_feats in enumerate(new_atom_feats):
+            atom_start_idx = atom_contig_idxs[i][0]
+            atom_end_idx = atom_contig_idxs[i][1]
 
             # write features to zarr store
-            self.new_feats_array[start_idx:end_idx] = atom_props
+            self.new_atom_feats_array[atom_start_idx:atom_end_idx] = atom_feats
+        
+        for i, edge_feats in enumerate(new_edge_feats):
+            edge_start_idx = edge_contig_idxs[i][0]
+            edge_end_idx = edge_contig_idxs[i][1]
+
+            # write features to zarr store
+            self.new_edge_feats_array[edge_start_idx:edge_end_idx] = edge_feats
