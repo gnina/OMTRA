@@ -23,6 +23,7 @@ import numpy as np
 from omtra.utils import omtra_root
 import yaml
 from rdkit import Chem
+from pathlib import Path
 
 from rdkit import RDLogger
 
@@ -205,7 +206,7 @@ def pb_valid_unconditional(
     
     metrics = {}
     
-    pb_cfg_path = omtra_root()+'/configs/pb_config/default.yaml'
+    pb_cfg_path = Path(omtra_root()) / 'omtra/eval/pb_config/default.yaml'
 
     with open(pb_cfg_path, 'r') as f:
         pb_cfg = yaml.safe_load(f)
@@ -274,6 +275,49 @@ def pb_valid_pocket(
         df_pb = buster.bust(valid_rdmols, valid_receptors, None)
         n_pb_valid = df_pb[df_pb['sanitization'] == True].values.astype(bool).all(axis=1).sum()
         metrics['pb_valid_pocket'] = n_pb_valid / len(sampled_systems) 
+    
+    return metrics
+
+
+@register_eval("pb_valid_conformer")
+def pb_valid_conformer(
+    sampled_systems: List[SampledSystem], params: Dict[str, Any]
+) -> Dict[str, Any]:
+    
+    metrics = {}
+    metric_values = defaultdict(list)
+    
+    pb_cfg_path = Path(omtra_root()) / 'omtra/eval/pb_config/uncond_conf.yaml'
+    with open(pb_cfg_path, 'r') as f:
+        pb_cfg = yaml.safe_load(f)
+    
+    buster = pb.PoseBusters(config=pb_cfg, **params)
+    for i, sys in enumerate(sampled_systems):
+        mol_pred = sys.get_rdkit_ligand()
+        mol_true = sys.get_rdkit_ref_ligand()
+
+        try:
+            Chem.SanitizeMol(mol_pred)
+            Chem.SanitizeMol(mol_true)
+            
+            if mol_pred.GetNumAtoms() == 0:
+                print("PoseBusters conformer check: Found molecule with no atoms.")
+                continue
+                
+            res = buster.bust([mol_pred], mol_true, None, full_report=True)
+            for col in res.columns:
+                if res[col].dtype != 'object':
+                    metric_values[f'pb_conformer_{col}'].append(float(res[col].iloc[0]))
+                        
+        except Exception as e:
+            print(f"PoseBusters error for molecule {i}: {e}")
+            continue
+    
+    for metric, values in metric_values.items():
+        if values:
+            metrics[metric] = np.nanmean(values)
+        else:
+            metrics[metric] = 0.0
     
     return metrics
 
