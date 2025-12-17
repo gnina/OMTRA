@@ -80,7 +80,8 @@ class OMTRA(pl.LightningModule):
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
         pharm_var: float = 0.0,
-
+        scheduler_config: Optional[DictConfig] = None,
+        lr_warmup_steps: int = 0,
     ):
         super().__init__()
 
@@ -102,6 +103,8 @@ class OMTRA(pl.LightningModule):
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
         self.pharm_var = pharm_var
+        self.lr_warmup_steps = lr_warmup_steps
+        self.scheduler_config = scheduler_config
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
