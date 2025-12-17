@@ -104,6 +104,8 @@ def random_rotations(
 def center_on_ligand_gt(g: dgl.DGLHeteroGraph):
     lig_com = g.nodes['lig'].data['x_1_true'].mean(dim=0, keepdim=True)
     for ntype in g.ntypes:
+        if g.num_nodes(ntype) == 0:
+            continue
         if 'x_1_true' not in g.nodes[ntype].data:
             continue
         g.nodes[ntype].data['x_1_true'] -= lig_com
@@ -122,6 +124,8 @@ def rotate_ground_truth(g: dgl.DGLHeteroGraph):
     for ntype in g.ntypes:
         if 'x_1_true' not in g.nodes[ntype].data:
             continue
+        if g.num_nodes(ntype) == 0:
+            continue
 
         # Apply rotation
         x_rotated = g.nodes[ntype].data['x_1_true'] @ R.T
@@ -138,6 +142,8 @@ def system_offset(g: dgl.DGLHeteroGraph, offset_std: float = 0.0):
     offset = torch.randn(1,3, device=g.device)*offset_std
     for ntype in g.ntypes:
         if 'x_1_true' not in g.nodes[ntype].data:
+            continue
+        if g.num_nodes(ntype) == 0:
             continue
         g.nodes[ntype].data['x_1_true'] += offset
     return g
