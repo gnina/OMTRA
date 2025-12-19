@@ -261,6 +261,109 @@ class LigandPairBiasEmbedder(nn.Module):
         return single_feats, pair_bias
 
 
+class AllNodePairBiasEmbedder(nn.Module):
+    """Computes pair features for all node types using node features + RBF distance embeddings.
+    
+    This layer constructs pair features from:
+    1. Projected single (node) features: s_i + s_j
+    2. RBF embeddings of pairwise distances
+    3. Optionally splices in pre-computed ligand pair features
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        pair_dim: int,
+        num_heads: int,
+        rbf_count: int = 24,
+        rbf_d_min: float = 0.0,
+        rbf_d_max: float = 10.0,
+    ) -> None:
+        super().__init__()
+        self.pair_dim = pair_dim
+        self.rbf_count = rbf_count
+        self.rbf_d_min = rbf_d_min
+        self.rbf_d_max = rbf_d_max
+
+        # Project single features to pair space
+        self.s_i_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
+        self.s_j_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
+
+        # Project concatenated pair features (single contributions + RBF) to pair_dim
+        self.pair_proj = nn.Sequential(
+            nn.Linear(pair_dim + rbf_count, pair_dim, bias=False),
+            nn.LayerNorm(pair_dim),
+        )
+
+        self.layer = PairTransformerLayer(
+            hidden_dim=hidden_dim,
+            pair_dim=pair_dim,
+            num_heads=num_heads,
+        )
+
+    def forward(
+        self,
+        node_feats: torch.Tensor,
+        node_pos: torch.Tensor,
+        node_mask: torch.Tensor,
+        lig_pair_feats: Optional[torch.Tensor] = None,
+        lig_size: int = 0,
+    ) -> torch.Tensor:
+        """Forward pass.
+
+        Parameters
+        ----------
+        node_feats : torch.Tensor
+            All node features concatenated (B, N_all, hidden_dim)
+        node_pos : torch.Tensor
+            All node positions concatenated (B, N_all, 3)
+        node_mask : torch.Tensor
+            Attention mask for all nodes (B, N_all), 1 for valid, 0 for padding
+        lig_pair_feats : torch.Tensor, optional
+            Pre-computed ligand pair features (B, N_lig, N_lig, pair_dim)
+        lig_size : int
+            Number of ligand nodes (used to splice in lig_pair_feats)
+
+        Returns
+        -------
+        torch.Tensor
+            Updated node features (B, N_all, hidden_dim)
+        """
+        if node_feats.size(1) == 0:
+            return node_feats
+
+        device = node_feats.device
+        B, N_all, _ = node_feats.shape
+
+        # Compute pair features from single node features
+        s_i = self.s_i_proj(node_feats).unsqueeze(2)  # (B, N, 1, pair_dim)
+        s_j = self.s_j_proj(node_feats).unsqueeze(1)  # (B, 1, N, pair_dim)
+        pair_from_single = s_i + s_j  # (B, N, N, pair_dim)
+
+        # Compute pairwise distances and RBF embeddings
+        pair_dists = torch.cdist(node_pos, node_pos, p=2.0)  # (B, N, N)
+        dist_rbf = _rbf(
+            pair_dists,
+            D_min=self.rbf_d_min,
+            D_max=self.rbf_d_max,
+            D_count=self.rbf_count,
+        )  # (B, N, N, rbf_count)
+
+        # Concatenate and project to get pair features
+        pair_input = torch.cat([pair_from_single, dist_rbf], dim=-1)
+        pair_feats = self.pair_proj(pair_input)  # (B, N, N, pair_dim)
+
+        # Add pre-computed ligand pair features if provided (additive to preserve gradients)
+        if lig_pair_feats is not None and lig_size > 0:
+            # pair_feats = pair_feats.clone()
+            pair_feats[:, :lig_size, :lig_size, :] = pair_feats[:, :lig_size, :lig_size, :] + lig_pair_feats
+
+        # Apply pair-biased attention
+        out_feats = self.layer(node_feats, pair_feats, node_mask)
+
+        return out_feats
+
+
 class TransformerWrapper(nn.Module):
     """
     - Concatenate scalar + flattened vector features per node
@@ -302,6 +405,14 @@ class TransformerWrapper(nn.Module):
             pair_dim=pair_dim,
             num_heads=n_heads,
         )
+        
+        # All-node pair bias embedder (applied after ligand embedder, before DiT layers)
+        self.all_node_embedder = AllNodePairBiasEmbedder(
+            hidden_dim=self.d_model,
+            pair_dim=pair_dim,
+            num_heads=n_heads,
+        )
+        
         self.layers = nn.ModuleList()
 
         # Add standard TransformerEncoderLayers
@@ -409,7 +520,35 @@ class TransformerWrapper(nn.Module):
         X_all = torch.cat(X_list, dim=1) # (B, n_all, d_model)
         M_all = torch.cat(M_list, dim=1)
 
-        Y_all = X_all
+        # Concatenate positions for all node types
+        pos_list = []
+        assert self.ntype_order[0] == 'lig', "First node type must be 'lig' or else all pair embedding injects pair features incorrectly"
+        for ntype in self.ntype_order:
+            bucket = padded_node_feats.get(ntype)
+            if bucket is None or 'x_t' not in bucket:
+                continue
+            pos_list.append(bucket['x_t'])  # (B, n_max, 3)
+        all_pos = torch.cat(pos_list, dim=1)  # (B, n_all, 3)
+
+        # Get ligand pair features and size for splicing
+        lig_pair_feats = padded_edge_feats.get('lig_to_lig', {}).get(self.trfmr_pair_feat_key, None)
+        lig_size = sizes[self.ntype_order.index('lig')] if 'lig' in self.ntype_order else 0
+
+        # Apply all-node pair bias attention (reuses ligand pair features)
+        # Note: all_node_embedder expects mask where 1=valid, but we may have inverted mask
+        # depending on use_qk_norm. PairTransformerLayer expects 1=valid.
+        if self.use_qk_norm:
+            all_node_mask = M_all  # already 1=valid for qk_norm path
+        else:
+            all_node_mask = ~M_all  # invert back: True (invalid) -> 0, False (valid) -> 1
+        
+        Y_all = self.all_node_embedder(
+            node_feats=X_all,
+            node_pos=all_pos,
+            node_mask=all_node_mask.float(),
+            lig_pair_feats=lig_pair_feats,
+            lig_size=lig_size,
+        )
 
         for layer in self.layers:
             # TODO: remove this once we prove that the qknorm + adaln works better than vanilla transformer
