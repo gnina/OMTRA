@@ -68,6 +68,7 @@ class VectorField(nn.Module):
         res_id_embed_dim: int = 64,
         pos_emb: bool = False,
         n_pre_gvp_convs: int = 1,
+        n_post_gvp_convs: int = 1,
         transformer_cfg: Optional[DictConfig] = _default_transformer_cfg,
     ):
         super().__init__()
@@ -258,6 +259,38 @@ class VectorField(nn.Module):
             pair_dim=self.n_hidden_edge_feats,
         )
 
+        # post-transformer GVP convolutions
+        self.post_convs = nn.ModuleList([])
+        for _ in range(n_post_gvp_convs):
+            self.post_convs.append(
+                HeteroGVPConv(
+                    node_types=self.node_types,
+                    edge_types=self.edge_types,
+                    scalar_size=n_hidden_scalars,
+                    vector_size=n_vec_channels,
+                    n_cp_feats=n_cp_feats,
+                    edge_feat_size=self.edge_feat_sizes,
+                    n_message_gvps=3,
+                    n_update_gvps=3,
+                    message_norm=1,
+                    rbf_dmax=rbf_dmax,
+                    rbf_dim=rbf_dim,
+                    dropout=0.0,
+                )
+            )
+
+        # edge embedding following post-convs
+        self.post_edge_embedders = nn.ModuleDict()
+        for etype in self.edge_types:
+            if self.edge_feat_sizes[etype] == 0:
+                continue
+            self.post_edge_embedders[etype] = EdgeUpdate(
+                n_hidden_scalars,
+                self.n_vec_channels,
+                n_hidden_edge_feats,
+                rbf_dim=rbf_dim,
+            )
+
         # for every modality being generated that is a node position, create NodePositionUpdate layers
         self.node_position_updaters = nn.ModuleDict()
         for m in modalities_generated_cls:
@@ -268,6 +301,22 @@ class VectorField(nn.Module):
                 continue
             ntype = m.entity_name
             self.node_position_updaters[ntype] = NodePositionUpdate(
+                        n_hidden_scalars,
+                        n_vec_channels,
+                        n_gvps=3,
+                        n_cp_feats=n_cp_feats,
+                    )
+
+        # post-conv node position updaters (separate from pre-transformer updaters)
+        self.post_node_position_updaters = nn.ModuleDict()
+        for m in modalities_generated_cls:
+            is_node_position = (
+                m.graph_entity == "node" and m.data_key == "x"
+            )
+            if not is_node_position:
+                continue
+            ntype = m.entity_name
+            self.post_node_position_updaters[ntype] = NodePositionUpdate(
                         n_hidden_scalars,
                         n_vec_channels,
                         n_gvps=3,
@@ -681,6 +730,75 @@ class VectorField(nn.Module):
 
         # iterate over edge features being modeled and update them
         # implicit assumption here that edges with modalities defined on them are not being rebuilt
+        for m in task_class.modalities_present:
+            if m.is_node:
+                continue
+            etype = m.entity_name
+            if g.num_edges(etype) == 0:
+                continue
+            edge_features[etype] = self.edge_updaters[etype](
+                g,
+                node_scalar_features,
+                node_vec_features,
+                edge_features[etype],
+                d=d[etype],
+                etype=etype,
+            )
+
+        # post-transformer GVP convolutions for equivariant refinement
+        for conv in self.post_convs:
+            node_scalar_features, node_vec_features = conv(
+                g,
+                node_scalar_features,
+                node_positions,
+                node_vec_features,
+                edge_features,
+                d=d,
+                x_diff=x_diff,
+            )
+
+        # update edge features after post-convs
+        for etype in edge_features:
+            edge_features[etype] = self.post_edge_embedders[etype](
+                g,
+                node_scalar_features,
+                node_vec_features,
+                edge_features[etype],
+                d=d[etype],
+                etype=etype,
+            )
+
+        # second position update using post-conv features
+        ntypes_updated = set()
+        for m in modalities_generated:
+            is_position = m.graph_entity == "node" and m.data_key == "x"
+            if not is_position:
+                continue
+            ntype = m.entity_name
+            if g.num_nodes(ntype) == 0:
+                continue
+            node_positions[ntype] = self.post_node_position_updaters[ntype](
+                node_scalar_features[ntype],
+                node_positions[ntype],
+                node_vec_features[ntype],
+            )
+            ntypes_updated.add(ntype)
+
+        # recompute x_diff and d for the updated node positions (after second position update)
+        for canonical_etype in g.canonical_etypes:
+            if g.num_edges(canonical_etype) == 0:
+                continue
+            src_ntype, etype, dst_ntype = canonical_etype
+            edges_need_update = src_ntype in ntypes_updated or dst_ntype in ntypes_updated
+            if not edges_need_update:
+                continue
+            x_diff_etype, d_etype = self.precompute_distances(
+                g, node_positions, etype=etype
+            )
+            x_diff.update(x_diff_etype)
+            d.update(d_etype)
+
+        # final edge feature update for accurate bond order readout
         for m in task_class.modalities_present:
             if m.is_node:
                 continue
@@ -1231,11 +1349,14 @@ class NodePositionUpdate(nn.Module):
 
         # self.update_pos = nn.Linear(n_scalars, 3, bias=False)
         # nn.init.zeros_(self.update_pos.weight)
+        input_dim = n_scalars + n_vec_channels*3
 
         self.update_pos = nn.Sequential(
-            nn.Linear(n_scalars, n_scalars),
+            nn.Linear(input_dim, input_dim),
             nn.SiLU(),
-            nn.Linear(n_scalars, 3, bias=False),
+            nn.Linear(input_dim, input_dim//2),
+            nn.SiLU(),
+            nn.Linear(input_dim//2, 3, bias=False),
         )
         nn.init.zeros_(self.update_pos[-1].weight)
 
@@ -1248,14 +1369,11 @@ class NodePositionUpdate(nn.Module):
     def forward(
         self, scalars: torch.Tensor, positions: torch.Tensor, vectors: torch.Tensor
     ):
+        vec_flat = vectors.view(vectors.shape[0], -1)
+        mlp_input = torch.cat([scalars, vec_flat], dim=-1)
 
-        # adaln_params = self.adaln_param_generator(scalars)
-        # scalars =  self.norm(scalars) * (1 + adaln_params['scale']) + adaln_params['shift']
-
-        vector_updates = self.update_pos(scalars)
+        vector_updates = self.update_pos(mlp_input)
         return positions + vector_updates
-        # _, vector_updates = self.gvps((scalars, vectors))
-        # return positions + vector_updates.squeeze(1)
 
 
 class EdgeUpdate(nn.Module):
