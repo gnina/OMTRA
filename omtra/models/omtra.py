@@ -338,7 +338,9 @@ class OMTRA(pl.LightningModule):
             g_list = dgl.unbatch(g)
             n_replicates = 2
 
-        if (any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"])) and 'protein_identity' in task.groups_present:
+        ligand_present = any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"])
+        if ligand_present:
+            # TODO: this makes an optimistic eval, should be setting COM to something offcenter
             coms = dgl.readout_nodes(g, feat='x_1_true', op='mean', ntype='lig')
             coms = [ coms[i] for i in range(g.batch_size) ]
         else:
@@ -686,9 +688,13 @@ class OMTRA(pl.LightningModule):
                 f"Task {task_name} requires a user-provided graphs with conditional information, but none was provided."
             )
 
+        if g_list is not None and coms is None:
+            print('WARNING: no COM was explicitly set when sampling. Will try to infer a COM but this is likely to impair results.')
+
         # if this is purely unconditional sampling
         # we create initial graphs with no data
         protein_present = "protein_structure" in groups_present
+        pharm_present = 'pharmacophore' in groups_present
         g_flat: List[dgl.DGLHeteroGraph] = []
         if g_list is None:
             g_flat = []
@@ -710,6 +716,8 @@ class OMTRA(pl.LightningModule):
 
                 if coms is None and protein_present:
                     com_i = g_i.nodes["prot_atom"].data["x_1_true"].mean(dim=0)
+                elif coms is None and pharm_present:
+                    com_i = g_i.nodes["pharm"].data["x_1_true"].mean(dim=0)
                 elif coms is None and not protein_present:
                     com_i = torch.zeros(3, dtype=float)
                 else:
