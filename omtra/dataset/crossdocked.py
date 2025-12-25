@@ -379,6 +379,10 @@ class CrossdockedDataset(ZarrDataset):
                 system_info["pharm_start"],
                 system_info["pharm_end"],
             )
+            # cast to int
+            pharm_start = int(system_info["pharm_start"])
+            pharm_end = int(system_info["pharm_end"])
+
             pharmacophore = PharmacophoreData(
                 coords=self.slice_array("pharmacophore/coords", pharm_start, pharm_end),
                 types=self.slice_array("pharmacophore/types", pharm_start, pharm_end),
