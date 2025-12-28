@@ -61,6 +61,7 @@ class CrossdockedDataset(ZarrDataset):
         prior_config: Optional[DictConfig] = None,
         fake_atom_p: float = 0.0,
         res_id_embed_dim: int = 64,
+        max_pharms_sampled: int = 8,
     ):
         #zarr files are read by the init function of the parent class, ZarrDataset
         super().__init__(
@@ -73,6 +74,7 @@ class CrossdockedDataset(ZarrDataset):
         self.fake_atom_p = fake_atom_p
 
         self.res_id_embed_dim = res_id_embed_dim
+        self.max_pharms_sampled = max_pharms_sampled
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
@@ -962,7 +964,7 @@ class CrossdockedDataset(ZarrDataset):
         edge_idxs.update(lig_edge_idxs)
         edge_data.update(lig_edge_data)
 
-        if include_pharmacophore:
+        if include_pharmacophore and system.pharmacophore is not None:
             pharm_node_data, pharm_edge_idxs, pharm_edge_data = (
                 self.convert_pharmacophore(system.pharmacophore)
             )
