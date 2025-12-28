@@ -383,16 +383,27 @@ class CrossdockedDataset(ZarrDataset):
             pharm_start = int(system_info["pharm_start"])
             pharm_end = int(system_info["pharm_end"])
 
-            pharmacophore = PharmacophoreData(
-                coords=self.slice_array("pharmacophore/coords", pharm_start, pharm_end),
-                types=self.slice_array("pharmacophore/types", pharm_start, pharm_end),
-                vectors=self.slice_array(
-                    "pharmacophore/vectors", pharm_start, pharm_end
-                ),
-                interactions=self.slice_array(
-                    "pharmacophore/interactions", pharm_start, pharm_end
-                ),
-            )
+            pharm_idxs = np.arange(pharm_start, pharm_end)
+            interacting_pharms = pharm_idxs[self.slice_array("pharmacophore/interactions", pharm_start, pharm_end)]
+
+            if len(interacting_pharms) == 0:
+                print(f"Warning: No interacting pharmacophores in system {index}.")
+                pharmacophore = None
+            else:
+                pharm_sample_size = np.random.randint(1, min(self.max_pharms_sampled, len(interacting_pharms)) + 1)
+                pharm_sample = np.random.choice(interacting_pharms, size=pharm_sample_size, replace=False)
+
+                coords = np.array([self.slice_array("pharmacophore/coords", i, i+1) for i in pharm_sample]).squeeze(1)
+                types = np.array([self.slice_array("pharmacophore/types", i, i+1) for i in pharm_sample]).squeeze(1)
+                vectors = np.array([self.slice_array("pharmacophore/vectors", i, i+1) for i in pharm_sample]).squeeze(1)
+                interactions = np.ones(len(pharm_sample), dtype=bool)
+                
+                pharmacophore = PharmacophoreData(
+                    coords=coords,
+                    types=types,
+                    vectors=vectors,
+                    interactions=interactions
+        )
 
         system = SystemData(
             system_id=system_info["system_idx"],
