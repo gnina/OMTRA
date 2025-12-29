@@ -377,35 +377,36 @@ class CrossdockedDataset(ZarrDataset):
             ligand.atom_chiral=lig_extra_feats_dict['chiral']
 
         if include_pharmacophore:
-            pharm_start, pharm_end = (
-                system_info["pharm_start"],
-                system_info["pharm_end"],
-            )
-            # cast to int
-            pharm_start = int(system_info["pharm_start"])
-            pharm_end = int(system_info["pharm_end"])
+            # Check if pharmacophore start and end exist and are not NaN
+            if pd.notna(system_info.get("pharm_start", np.nan)) and pd.notna(system_info.get("pharm_end", np.nan)):
+                pharm_start = int(system_info["pharm_start"])
+                pharm_end = int(system_info["pharm_end"])
 
-            pharm_idxs = np.arange(pharm_start, pharm_end)
-            interacting_pharms = pharm_idxs[self.slice_array("pharmacophore/interactions", pharm_start, pharm_end)]
+                pharm_idxs = np.arange(pharm_start, pharm_end)
+                interacting_pharms = pharm_idxs[self.slice_array("pharmacophore/interactions", pharm_start, pharm_end)]
 
-            if len(interacting_pharms) == 0:
-                print(f"Warning: No interacting pharmacophores in system {index}.")
-                pharmacophore = None
+                if len(interacting_pharms) == 0:
+                    print(f"Warning: No interacting pharmacophores in system {index}.")
+                    pharmacophore = None
+                else:
+                    pharm_sample_size = np.random.randint(1, min(self.max_pharms_sampled, len(interacting_pharms)) + 1)
+                    pharm_sample = np.random.choice(interacting_pharms, size=pharm_sample_size, replace=False)
+
+                    coords = np.array([self.slice_array("pharmacophore/coords", i, i+1) for i in pharm_sample]).squeeze(1)
+                    types = np.array([self.slice_array("pharmacophore/types", i, i+1) for i in pharm_sample]).squeeze(1)
+                    vectors = np.array([self.slice_array("pharmacophore/vectors", i, i+1) for i in pharm_sample]).squeeze(1)
+                    interactions = np.ones(len(pharm_sample), dtype=bool)
+                    
+                    pharmacophore = PharmacophoreData(
+                        coords=coords,
+                        types=types,
+                        vectors=vectors,
+                        interactions=interactions
+                    )
             else:
-                pharm_sample_size = np.random.randint(1, min(self.max_pharms_sampled, len(interacting_pharms)) + 1)
-                pharm_sample = np.random.choice(interacting_pharms, size=pharm_sample_size, replace=False)
-
-                coords = np.array([self.slice_array("pharmacophore/coords", i, i+1) for i in pharm_sample]).squeeze(1)
-                types = np.array([self.slice_array("pharmacophore/types", i, i+1) for i in pharm_sample]).squeeze(1)
-                vectors = np.array([self.slice_array("pharmacophore/vectors", i, i+1) for i in pharm_sample]).squeeze(1)
-                interactions = np.ones(len(pharm_sample), dtype=bool)
-                
-                pharmacophore = PharmacophoreData(
-                    coords=coords,
-                    types=types,
-                    vectors=vectors,
-                    interactions=interactions
-        )
+                # No valid pharmacophore data
+                print(f"Warning: No pharmacophore data in system {index}.")
+                pharmacophore = None
 
         system = SystemData(
             system_id=system_info["system_idx"],
