@@ -410,7 +410,7 @@ class OMTRA(pl.LightningModule):
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
         
         # add noise to pharmacophore coordinates
-        has_pharmacophores = "pharmacophore" in task_class.groups_present
+        has_pharmacophores = "pharmacophore" in task_class.groups_present #groups_present instead of groups_fixed
         has_non_zero_pharms = g.num_nodes("pharm") > 0
         if has_pharmacophores and has_non_zero_pharms and self.pharm_pos_std > 0.0:
             x = g.nodes["pharm"].data['x_1_true'] #ground truth positions
@@ -425,7 +425,7 @@ class OMTRA(pl.LightningModule):
             #add this noise to the true pharmacophore positions
             g.nodes["pharm"].data['x_1_true'] = x + eps
 
-            #store the variance used for each pharmacophore
+            #store the standard deviation used for each pharmacophore
             g.nodes["pharm"].data['pharm_pos_std'] = sigma_scalar #(num_nodes,1)
 
         # forward pass for the vector field
