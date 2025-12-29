@@ -80,6 +80,7 @@ class OMTRA(pl.LightningModule):
         time_scaled_loss: bool = False,
         pharm_var: float = 0.0,
         lr_warmup_steps: int = 0,
+        prot_pos_std: float = 0.0, #standard deviation for adding noise to protein atom positions
 
     ):
         super().__init__()
@@ -103,6 +104,7 @@ class OMTRA(pl.LightningModule):
         self.cat_loss_weight = cat_loss_weight
         self.pharm_var = pharm_var
         self.lr_warmup_steps = lr_warmup_steps
+        self.prot_pos_std = prot_pos_std
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -411,6 +413,25 @@ class OMTRA(pl.LightningModule):
         if self.pharm_var > 0.0:
             g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**0.5
 
+        # add noise to the protein atom positions
+        has_protein = "protein_structure" in task_class.groups_present
+        if has_protein and self.prot_pos_std > 0.0:
+            # get ground truth positions
+            x = g.nodes["prot_atom"].data['x_1_true']
+
+            # sample sigma (st dev) from uniform(0, prot_pos_std)
+            sigma_scalar = torch.rand(x.shape[0], 1, device=x.device) * self.prot_pos_std
+            sigma = sigma_scalar.expand_as(x) # expand to all dim of x (3 coords)
+
+            #sample episilon from normal(0, sigma)
+            eps = torch.randn_like(x) * sigma #noise at each position
+
+            #add this noise to the true protein atom positions
+            g.nodes["prot_atom"].data['x_1_true'] = x + eps
+
+            #store the standard deviation used for each protein atom
+            g.nodes["prot_atom"].data['prot_pos_std'] = sigma_scalar #(num_nodes,1)
+        
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
             g,
@@ -623,6 +644,7 @@ class OMTRA(pl.LightningModule):
         n_lig_atom_margin: Union[float, None] = None,
         n_lig_atoms_mean: Union[float, None] = None,
         n_lig_atoms_std: Union[float, None] = None,
+        prot_pos_std: Optional[torch.Tensor] = None,
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
@@ -903,6 +925,17 @@ class OMTRA(pl.LightningModule):
         itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing, stochastic_sampling=stochastic_sampling, noise_scaler=noise_scaler, eps=eps)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
+        
+        # Set protein std for sampling
+        if 'prot_atom' in g.ntypes and g.num_nodes('prot_atom') > 0:
+            if prot_pos_std is None:
+                #Default to zeros
+                g.nodes['prot_atom'].data['prot_pos_std'] = torch.zeros(
+                    g.num_nodes('prot_atom'), 1, device=device
+                )
+            else:
+                #Use the provided standard deviation
+                g.nodes['prot_atom'].data['prot_pos_std'] = prot_pos_std
 
         # pass graph to vector field..
         itg_result = self.vector_field.integrate(
