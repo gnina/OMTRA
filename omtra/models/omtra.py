@@ -610,9 +610,16 @@ class OMTRA(pl.LightningModule):
         for modality in task_class.modalities_fixed:
             data_src = g.nodes if modality.is_node else g.edges
             dk = modality.data_key
-            data_src[modality.entity_name].data[f"{dk}_t"] = data_src[
-                modality.entity_name
-            ].data[f"{dk}_1_true"]
+            
+            try:
+                data_src[modality.entity_name].data[f"{dk}_t"] = data_src[
+                    modality.entity_name
+                ].data[f"{dk}_1_true"]
+            except Exception as e:
+                print(f"Error in conditional path for modality {modality.entity_name}")
+                print(f"Current task: {task_class.name}")
+                print(f"Specific error: {type(e).__name__}: {e}")
+                continue
 
         return g
 
