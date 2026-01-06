@@ -713,9 +713,29 @@ class VectorField(nn.Module):
             if m.is_node and g.num_nodes(m.entity_name) == 0:
                 continue
             if m.data_key == "x":
-                dst_dict[m.name] = node_positions[m.entity_name]
+                node_pos = node_positions[m.entity_name]
+                # masking for fixed partial modalities of fixed fragments
+                if m.name in task_class.partial_modalities_fixed:
+                    mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
+                    gt_pos = g.nodes[m.entity_name].data['x_1_true']
+                    node_pos[mask] = gt_pos[mask]
+                dst_dict[m.name] = node_pos
+
             elif m.is_categorical:
                 dst_dict[m.name] = logits[m.name]
+
+                # masking for fixed partial modalities of fixed fragments
+                if m.name in task_class.partial_modalities_fixed:
+                    if m.is_node:
+                        mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
+                        gt_labels = g.nodes[m.entity_name].data[f'{m.data_key}_1_true']
+                    else:
+                        # Take upper triangle for edge modalities
+                        mask = g.edges[m.entity_name].data['edge_mask_1_true'][upper_edge_mask[m.entity_name]].bool()
+                        gt_labels = g.edges[m.entity_name].data[f'{m.data_key}_1_true'][upper_edge_mask[m.entity_name]]
+                    one_hot = torch.zeros_like(dst_dict[m.name])
+                    one_hot[torch.arange(dst_dict[m.name].size(0), device=dst_dict[m.name].device), gt_labels] = 1.0
+                    dst_dict[m.name][mask] = one_hot[mask]
                 if apply_softmax:
                     dst_dict[m.name] = torch.softmax(
                         dst_dict[m.name], dim=-1

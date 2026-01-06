@@ -14,6 +14,7 @@ from omtra.tasks.base_task import Task
 class DeNovoLigand(Task):
     groups_fixed = []
     groups_generated = ['ligand_identity', 'ligand_structure']
+    partial_modalities_fixed = []
 
     priors = pc.denovo_ligand
     conditional_paths = cpc.denovo_ligand
@@ -22,6 +23,7 @@ class DeNovoLigand(Task):
 class LigandConformer(Task):
     groups_fixed = ['ligand_identity']
     groups_generated = ['ligand_structure']
+    partial_modalities_fixed = []
 
     priors = pc.ligand_conformer
     conditional_paths = cpc.ligand_conformer  
@@ -36,6 +38,7 @@ class RigidDocking(Task):
 
     groups_fixed = ["ligand_identity", "protein_identity", "protein_structure"]
     groups_generated = ["ligand_structure"]
+    partial_modalities_fixed = []
 
     priors = deepcopy(pc.ligand_conformer)
     priors["npnde_x"] = {
@@ -48,6 +51,7 @@ class FlexibleDocking(Task):
     """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
     groups_fixed = ['ligand_identity','protein_identity']
     groups_generated = ['ligand_structure', 'protein_structure']
+    partial_modalities_fixed = []
 
     priors = deepcopy(pc.ligand_conformer)
     priors['prot_atom_x'] = {
@@ -63,6 +67,7 @@ class FlexibleDocking(Task):
 class FixedProteinLigandDeNovo(Task):
     groups_fixed = ['protein_identity', 'protein_structure']
     groups_generated = ['ligand_identity', 'ligand_structure']
+    partial_modalities_fixed = []
 
     priors = deepcopy(pc.denovo_ligand)
 
@@ -72,6 +77,7 @@ class FixedProteinLigandDeNovo(Task):
 class ProteinLigandDeNovo(Task):
     groups_fixed = ['protein_identity']
     groups_generated = ['protein_structure', 'ligand_identity', 'ligand_structure']
+    partial_modalities_fixed = []
 
     priors = deepcopy(pc.denovo_ligand)
     priors['prot_atom_x'] = {
@@ -87,6 +93,7 @@ class ProteinLigandDeNovo(Task):
 class ExpApoDeNovoLigand(Task):
     groups_fixed = ['protein_identity']
     groups_generated = ['ligand_identity', 'ligand_structure', 'protein_structure']
+    partial_modalities_fixed = []
 
     priors = deepcopy(pc.denovo_ligand)
     priors['prot_atom_x'] = {
@@ -115,6 +122,7 @@ class ExpApoConditionedLigandDocking(Task):
     """Docking a ligand into the protein structure, protein structure is an experimentally determined apo structure at t=0."""
     groups_fixed = ['ligand_identity','protein_identity']
     groups_generated = ['ligand_structure', 'protein_structure']
+    partial_modalities_fixed = []
 
     priors = deepcopy(pc.ligand_conformer)
     priors['prot_atom_x'] = {
@@ -131,6 +139,7 @@ class PredApoConditionedLigandDocking(Task):
     """Docking a ligand into the protein structure, protein structure is a predicted apo structure at t=0."""
     groups_fixed = ['ligand_identity','protein_identity']
     groups_generated = ['ligand_structure', 'protein_structure']
+    partial_modalities_fixed = []
 
     priors = deepcopy(pc.ligand_conformer)
     priors['prot_atom_x'] = {
@@ -149,6 +158,7 @@ class PredApoConditionedLigandDocking(Task):
 class DeNovoLigandPharmacophore(Task):
     groups_fixed = []
     groups_generated = ['ligand_identity', 'ligand_structure', 'pharmacophore']
+    partial_modalities_fixed = []
 
     priors = dict(**pc.denovo_ligand, **pc.denovo_pharmacophore)
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.denovo_pharmacophore)
@@ -157,17 +167,54 @@ class DeNovoLigandPharmacophore(Task):
 class DeNovoLigandFromPharmacophore(Task):
     groups_fixed = ['pharmacophore']
     groups_generated = ['ligand_identity', 'ligand_structure']
+    partial_modalities_fixed = []
 
     priors = pc.denovo_ligand
     conditional_paths = cpc.denovo_ligand
 
+@register_task("ligand_conformer_from_pharmacophore")
+class LigandConformerFromPharmacophore(Task):
+    groups_fixed = ['ligand_identity', 'pharmacophore']
+    groups_generated = ['ligand_structure']
+    partial_modalities_fixed = []
+
+    priors = pc.ligand_conformer
+    conditional_paths = cpc.ligand_conformer
+
+
 ##
 # Tasks with ligand+protein+pharmacophore
 ##
+@register_task("rigid_docking_pharmacophore")
+class RigidDockingPharmacophore(Task):
+    groups_fixed = ['protein_identity', 'protein_structure', 'ligand_identity', 'pharmacophore']
+    groups_generated = ['ligand_structure']
+    partial_modalities_fixed = []
+
+    priors = dict(**pc.ligand_conformer)
+    priors['npnde_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
+
+
+@register_task("fixed_protein_pharmacophore_ligand_denovo")
+class FixedProteinLigandPharmacophoreDeNovo(Task):
+    groups_fixed = ['protein_identity', 'protein_structure', 'pharmacophore']
+    groups_generated = ['ligand_identity', 'ligand_structure']
+    partial_modalities_fixed = []
+
+    priors = dict(**pc.denovo_ligand)
+
+    conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
+
+
 @register_task("protein_ligand_pharmacophore_denovo")
 class ProteinLigandPharmacophoreDeNovo(Task):
     groups_fixed = ['protein_identity']
     groups_generated = ['protein_structure', 'ligand_identity', 'ligand_structure', 'pharmacophore']
+    partial_modalities_fixed = []
 
     priors = dict(**pc.denovo_ligand, **pc.denovo_pharmacophore)
     priors['prot_atom_x'] = {
@@ -189,6 +236,7 @@ class ProteinLigandPharmacophoreDeNovo(Task):
 class ProteinPharmacophore(Task):
     groups_fixed = ['protein_identity']
     groups_generated = ['protein_structure', 'pharmacophore']
+    partial_modalities_fixed = []
 
     priors = deepcopy(pc.denovo_pharmacophore)
     priors['prot_atom_x'] = {
@@ -200,6 +248,7 @@ class ExpApoConditionedProteinPharmacophore(Task):
     """Generate a pharmacophore from an experimentally determined apo protein structure at t=0"""
     groups_fixed = ['protein_identity']
     groups_generated = ['protein_structure', 'pharmacophore']
+    partial_modalities_fixed = []
 
     priors = deepcopy(pc.denovo_pharmacophore)
     priors['prot_atom_x'] = {

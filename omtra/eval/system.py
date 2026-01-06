@@ -88,7 +88,10 @@ class SampledSystem:
 
         if self.has_condensed_typing:
             # decode condensed atom type representation to explicit form 
-            self.cond_a_typer = cond_a_typer
+            if cond_a_typer is None:
+                self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atoms)
+            else:
+                self.cond_a_typer = cond_a_typer
             self.g = self.decode_conda(g)
         else:
             self.g = g

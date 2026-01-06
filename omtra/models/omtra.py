@@ -404,7 +404,10 @@ class OMTRA(pl.LightningModule):
         if self.distort_p > 0.0:
             t_mask = (t > 0.5)[node_batch_idxs["lig"]]
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
-            distort_mask = distort_mask & t_mask.unsqueeze(-1)
+            if "lig_x" in task_class.partial_modalities_fixed:
+                distort_mask = distort_mask & t_mask.unsqueeze(-1) & (~g.nodes["lig"].data['atom_mask_1_true'].unsqueeze(-1)) # don't apply geometry distortion to fixed atoms if ligand coordinate modality is partially fixed
+            else: 
+                distort_mask = distort_mask & t_mask.unsqueeze(-1)
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
         
         # add noise to pharmacophore coordinates
@@ -475,7 +478,6 @@ class OMTRA(pl.LightningModule):
             else:
                 mod_weight = 1.0
 
-
             inp = vf_output[modality.name]
             target = targets[modality.name]
 
@@ -511,6 +513,7 @@ class OMTRA(pl.LightningModule):
                 )
             if self.time_scaled_loss:
                 aux_loss = aux_loss.mean()
+            
             losses[aux_loss_name] = aux_loss
 
         return losses
@@ -685,19 +688,24 @@ class OMTRA(pl.LightningModule):
                 coms_flat.extend([com_i] * n_replicates)
 
         # TODO: sample number of ligand atoms
-        add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"])
+        add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"]) and (len(task.partial_modalities_fixed) == 0)
 
         # find number of fake atoms added to each system by the dataset class
         
         if add_ligand and use_gt_n_lig_atoms and self.fake_atom_p > 0.0:
             n_fake_atoms_gt = []
             for g in g_flat:
-                if 'cond_a_1_true' not in g.nodes['lig'].data:
-                    raise NotImplementedError('expected there to be a ground-truth ligand, and expected condensed atom types to be used')
-
-                n_fake_atoms_gt.append(
-                    (g.nodes['lig'].data['cond_a_1_true'] == self.cond_a_typer.fake_atom_idx).sum().item()
-                )
+                if 'cond_a_1_true' in g.nodes['lig'].data:
+                    # raise NotImplementedError('expected there to be a ground-truth ligand, and expected condensed atom types to be used')
+                    n_fake_atoms_gt.append(
+                        (g.nodes['lig'].data['cond_a_1_true'] == self.cond_a_typer.fake_atom_idx).sum().item()
+                    )
+                elif 'a_1_true' in g.nodes['lig'].data:
+                    n_fake_atoms_gt.append(
+                        (g.nodes['lig'].data['a_1_true'] == len(lig_atom_type_map)).sum().item()
+                    )
+                else:
+                    raise NotImplementedError('expected there to be a ground-truth ligand')
             n_fake_atoms_gt = torch.tensor(n_fake_atoms_gt)
         else:
             n_fake_atoms_gt = torch.zeros(len(g_flat), dtype=torch.long)
@@ -880,6 +888,16 @@ class OMTRA(pl.LightningModule):
             data_src = g.nodes[m.entity_name] if m.is_node else g.edges[m.entity_name]
             dk = m.data_key
             data_src.data[f"{dk}_t"] = data_src.data[f"{dk}_0"]
+
+            if m.name in task.partial_modalities_fixed:
+                if m.is_node:
+                    mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
+                    gt_labels = g.nodes[m.entity_name].data[f'{m.data_key}_1_true']
+                else:
+                    # Take upper triangle for edge modalities
+                    mask = g.edges[m.entity_name].data['edge_mask_1_true'].bool()
+                    gt_labels = g.edges[m.entity_name].data[f'{m.data_key}_1_true']
+                data_src.data[f"{dk}_t"][mask] = gt_labels[mask]
 
         # set x_1_true to x_t for modalities fixed
         for m in task.modalities_fixed:
