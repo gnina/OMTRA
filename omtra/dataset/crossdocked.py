@@ -378,6 +378,7 @@ class CrossdockedDataset(ZarrDataset):
 
         if include_pharmacophore:
             # Check if pharmacophore start and end exist and are not NaN
+            # doing this because there are some situations where pharm_start and pharm_end are None
             if pd.notna(system_info.get("pharm_start", np.nan)) and pd.notna(system_info.get("pharm_end", np.nan)):
                 pharm_start = int(system_info["pharm_start"])
                 pharm_end = int(system_info["pharm_end"])
