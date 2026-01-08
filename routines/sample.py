@@ -310,11 +310,19 @@ def main(args):
 
             # instantiate datamodule & model
             if args.dataset == 'plinder':
-                spoof_cfg = quick_load.load_cfg(overrides=[
-                    'task_group=prot_protpharm_cond',
-                    f'plinder_path={args.plinder_path}',
-                    f'pharmit_path={args.pharmit_path}',
-                ])
+                overrides = ['task_group=prot_protpharm_cond']
+                if args.plinder_path is not None:
+                    overrides.append(f'plinder_path={args.plinder_path}')
+                if args.pharmit_path is not None:
+                    overrides.append(f'pharmit_path={args.pharmit_path}')
+                spoof_cfg = quick_load.load_cfg(overrides=overrides)
+                dm = quick_load.datamodule_from_config(spoof_cfg)
+                multitask_dataset = dm.load_dataset(args.split)
+            elif args.dataset == 'pharmit':
+                overrides = ['task_group=pharmit5050_cond_a']
+                if args.pharmit_path is not None:
+                    overrides.append(f'pharmit_path={args.pharmit_path}')
+                spoof_cfg = quick_load.load_cfg(overrides=overrides)
                 dm = quick_load.datamodule_from_config(spoof_cfg)
                 multitask_dataset = dm.load_dataset(args.split)
             else:
