@@ -16,6 +16,9 @@ pytest tests/
 
 # Run tests with verbose output
 pytest -v tests/
+
+# Run tests with custom data paths
+pytest tests/ --plinder-path=/path/to/plinder --pharmit-path=/path/to/pharmit
 ```
 
 ## Test Structure
@@ -25,13 +28,18 @@ tests/
 ├── conftest.py           # Shared fixtures and configuration
 ├── unit/                 # Fast, isolated unit tests
 │   ├── __init__.py
-│   └── test_crop_utils.py
+│   ├── test_crop_utils.py
+│   ├── test_interpolant.py
+│   └── test_tasks.py
 └── integration/          # Tests requiring real data or external dependencies
     ├── __init__.py
     ├── test_cli.py
     ├── test_data_module.py
+    ├── test_graph_construction.py
+    ├── test_omtra_forward.py
     ├── test_pharmacophores.py
     ├── test_plinder_dataset.py
+    ├── test_vector_field.py
     ├── test_lig.sdf        # Test ligand structure
     ├── test_rec.pdb        # Test protein structure
     └── test_pharmacophore.xyz  # Test pharmacophore file
@@ -48,6 +56,18 @@ Unit tests are fast and don't require any external data. They use mock objects a
 - `TestComputeCloseResidues` — Tests for finding protein residues close to reference coordinates
 - `TestCropStructureData` — Tests for cropping protein structure data based on distance
 - `TestFilterNpndesByDistance` — Tests for filtering non-protein non-DNA entities by distance
+
+**`test_interpolant.py`** — Tests for the interpolant scheduler and conditional paths:
+- `TestInterpolantScheduler` — Tests for linear interpolant weights (alpha, beta) at various time points
+- `TestContinuousInterpolant` — Tests for continuous feature interpolation (positions)
+- `TestCTMCMask` — Tests for categorical feature masking/unmasking (atom types)
+
+**`test_tasks.py`** — Tests for the task system:
+- `TestTaskRegistry` — Tests for task registration and retrieval
+- `TestTaskModalities` — Tests for task modality properties (fixed vs generated)
+- `TestTaskProperties` — Tests for computed task properties (unconditional, has_protein, etc.)
+- `TestModalityRegistry` — Tests for modality registration and retrieval
+- `TestModalityProperties` — Tests for modality dataclass properties
 
 ### Integration Tests (`tests/integration/`)
 
@@ -66,6 +86,24 @@ Integration tests verify that different components work correctly together. Some
 - Tests the multi-task indexing format `(task_idx, dataset_idx, local_idx)`
 - **Requires**: Plinder data to be available
 
+**`test_graph_construction.py`** — Tests for graph structure and features:
+- `TestGraphNodeTypes` — Tests that graphs have correct node types for each task
+- `TestGraphEdgeTypes` — Tests that graphs have correct edge types
+- `TestGraphLigandFeatures` — Tests for prior/target ligand features (positions, atom types)
+- `TestGraphProteinFeatures` — Tests for protein node features
+- `TestGraphPriorSampling` — Tests that priors are correctly sampled
+- `TestGraphBatching` — Tests for correct graph batching behavior
+- **Requires**: Plinder and Pharmit data
+
+**`test_omtra_forward.py`** — Tests for OMTRA model forward pass:
+- `TestOMTRAInstantiation` — Tests model instantiation from config
+- `TestOMTRAForwardFixedProtein` — Tests forward pass for `fixed_protein_ligand_denovo_condensed`
+- `TestOMTRAForwardRigidDocking` — Tests forward pass for `rigid_docking_condensed`
+- `TestOMTRAForwardDeNovoLigand` — Tests forward pass for `denovo_ligand_condensed`
+- `TestOMTRAConditionalPath` — Tests conditional path sampling
+- `TestOMTRATrainingStep` — Tests training step returns valid loss with gradients
+- **Requires**: Plinder and Pharmit data
+
 **`test_pharmacophores.py`** — Tests for pharmacophore extraction:
 - Compares OMTRA's pharmacophore extraction against the reference Pharmit implementation
 - Tests both ligand-only and protein-ligand pharmacophore extraction
@@ -77,6 +115,16 @@ Integration tests verify that different components work correctly together. Some
 - Validates graph structure and node types
 - **Requires**: Plinder data to be available (see [Data Requirements](#data-requirements))
 
+**`test_vector_field.py`** — Tests for VectorField forward pass and integration:
+- `TestVectorFieldInstantiation` — Tests VectorField exists with expected components
+- `TestVectorFieldForwardFixedProtein` — Tests forward pass output shapes and values
+- `TestVectorFieldForwardRigidDocking` — Tests forward for rigid docking task
+- `TestVectorFieldDenoiseGraph` — Tests the denoising graph method
+- `TestVectorFieldIntegrate` — Tests ODE integration (sampling)
+- `TestVectorFieldStep` — Tests single integration step
+- `TestVectorFieldVectorFieldMethod` — Tests ODE velocity computation
+- **Requires**: Plinder data
+
 ## Data Requirements
 
 Some integration tests require real data to be available:
@@ -87,12 +135,17 @@ Tests marked with `@pytest.mark.requires_data` require Plinder data. You can:
 
 1. **Use the default location**: Place data at `{OMTRA_ROOT}/data/plinder/`
 
-2. **Specify a custom location**: Set the `OMTRA_PLINDER_PATH` environment variable:
+2. **Use a command-line option**:
+   ```bash
+   pytest tests/ --plinder-path=/path/to/plinder/data
+   ```
+
+3. **Set an environment variable**:
    ```bash
    OMTRA_PLINDER_PATH=/path/to/plinder/data pytest tests/
    ```
 
-3. **Skip data-dependent tests**:
+4. **Skip data-dependent tests**:
    ```bash
    pytest -m "not requires_data" tests/
    ```
@@ -101,20 +154,78 @@ Tests marked with `@pytest.mark.requires_data` require Plinder data. You can:
 
 The `test_pharmacophores.py` tests require the `pharmit` command-line tool to be installed and available in your PATH. See [http://pharmit.csb.pitt.edu/](http://pharmit.csb.pitt.edu/) for installation instructions.
 
+### Pharmit Data
+
+Tests for unconditional tasks like `denovo_ligand_condensed` require the Pharmit dataset. You can:
+
+1. **Use the default location**: Place data at `{OMTRA_ROOT}/data/pharmit/`
+
+2. **Use a command-line option**:
+   ```bash
+   pytest tests/ --pharmit-path=/path/to/pharmit/data
+   ```
+
+3. **Set an environment variable**:
+   ```bash
+   OMTRA_PHARMIT_PATH=/path/to/pharmit/data pytest tests/
+   ```
+
 ## Test Fixtures
 
 Common fixtures are defined in `tests/conftest.py`:
 
+### Data Path Fixtures
+
 | Fixture | Scope | Description |
 |---------|-------|-------------|
 | `plinder_path` | session | Path to Plinder data (skips if unavailable) |
-| `hydra_cfg` | session | Loaded Hydra configuration with Plinder path override |
+| `pharmit_path` | session | Path to Pharmit data (skips if unavailable) |
+
+### Configuration Fixtures
+
+| Fixture | Scope | Description |
+|---------|-------|-------------|
+| `hydra_cfg` | session | Hydra config for `fixed_protein` task group |
+| `hydra_cfg_pharmit` | session | Hydra config for `pharmit5050_cond_a` task group |
 | `graph_config` | session | Graph configuration extracted from Hydra config |
 | `prior_config` | session | Prior configuration extracted from Hydra config |
+
+### Dataset Fixtures
+
+| Fixture | Scope | Description |
+|---------|-------|-------------|
 | `plinder_dataset_factory` | function | Factory for creating `PlinderDataset` instances |
 | `plinder_dataset` | function | Default `PlinderDataset` instance (train split, no cropping) |
 | `plinder_dataset_with_cropping` | function | `PlinderDataset` with dynamic cropping enabled |
-| `test_task_name` | function | The task name used for testing `__getitem__` |
+| `datamodule_plinder` | session | `MultiTaskDataModule` for plinder-based tasks |
+| `datamodule_pharmit` | session | `MultiTaskDataModule` for pharmit-based tasks |
+| `train_dataset_plinder` | session | Train `MultitaskDataSet` for plinder |
+| `train_dataset_pharmit` | session | Train `MultitaskDataSet` for pharmit |
+
+### Model Fixtures
+
+| Fixture | Scope | Description |
+|---------|-------|-------------|
+| `omtra_model_plinder` | session | OMTRA model for plinder tasks (CPU) |
+| `omtra_model_pharmit` | session | OMTRA model for pharmit tasks (CPU) |
+
+### Sample Batch Fixtures
+
+| Fixture | Description |
+|---------|-------------|
+| `sample_batch_fixed_protein` | Single graph for `fixed_protein_ligand_denovo_condensed` |
+| `sample_batch_rigid_docking` | Single graph for `rigid_docking_condensed` |
+| `sample_batch_denovo_ligand` | Single graph for `denovo_ligand_condensed` |
+| `sample_batch_multi_fixed_protein` | Batch of 4 graphs for `fixed_protein_ligand_denovo_condensed` |
+| `sample_batch_multi_rigid_docking` | Batch of 4 graphs for `rigid_docking_condensed` |
+
+### Task Name Fixtures
+
+| Fixture | Description |
+|---------|-------------|
+| `test_task_name` | Default task name: `fixed_protein_ligand_denovo_condensed` |
+| `plinder_task_name` | Parameterized: `fixed_protein_ligand_denovo_condensed`, `rigid_docking_condensed` |
+| `pharmit_task_name` | Task name: `denovo_ligand_condensed` |
 
 ## Configuration
 
