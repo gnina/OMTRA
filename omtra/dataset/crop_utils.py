@@ -8,7 +8,7 @@ and use scipy.spatial.cKDTree for efficient O(n log n) radius queries.
 import numpy as np
 from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
-from typing import Dict, Optional, Set, Tuple
+from typing import Dict, Optional, Set, Tuple, List
 
 from omtra.data.plinder import StructureData, BackboneData, LigandData
 
@@ -138,6 +138,87 @@ def crop_structure_data(
         cif=structure.cif,
     )
 
+def crop_structure_data_multiple_distances(
+    structure: StructureData,
+    reference_coords_groups: List[np.ndarray],
+    crop_distances: List[float],
+) -> Optional[StructureData]:
+    """
+    Crop a StructureData to only include residues within specified crop distances 
+    for different groups of reference coordinates.
+    
+    Parameters
+    ----------
+    structure : StructureData
+        The protein structure to crop (e.g., pocket)
+    reference_coords_groups : List[np.ndarray]
+        List of reference coordinate groups, each of shape (M, 3)
+        (typically groups of ligand atoms)
+    crop_distances : List[float]
+        List of distance cutoffs corresponding to each reference coordinate group
+        
+    Returns
+    -------
+    Optional[StructureData]
+        Cropped structure, or None if no residues remain
+    """
+    # Find residues within crop distances for all coordinate groups
+    close_residues = set()
+    
+    for ref_coords, crop_dist in zip(reference_coords_groups, crop_distances):
+        # Compute close residues for this specific group and distance
+        group_close_residues = compute_close_residues(
+            structure.coords,
+            structure.res_ids,
+            structure.chain_ids,
+            ref_coords,
+            crop_dist,
+        )
+        
+        # Union the close residues from all groups
+        close_residues.update(group_close_residues)
+    
+    if not close_residues:
+        return None
+    
+    # Build atom-level mask: include all atoms from close residues
+    atom_mask = np.array([
+        (structure.chain_ids[i], structure.res_ids[i]) in close_residues
+        for i in range(len(structure.coords))
+    ], dtype=bool)
+    
+    if not atom_mask.any():
+        return None
+    
+    # Crop backbone data if present
+    cropped_backbone = None
+    if structure.backbone is not None and structure.backbone.res_ids is not None:
+        bb = structure.backbone
+        bb_mask = np.array([
+            (bb.chain_ids[i], bb.res_ids[i]) in close_residues
+            for i in range(len(bb.coords))
+        ], dtype=bool)
+        
+        if bb_mask.any():
+            cropped_backbone = BackboneData(
+                coords=bb.coords[bb_mask],
+                res_ids=bb.res_ids[bb_mask],
+                res_names=bb.res_names[bb_mask],
+                chain_ids=bb.chain_ids[bb_mask],
+            )
+    
+    return StructureData(
+        coords=structure.coords[atom_mask],
+        atom_names=structure.atom_names[atom_mask] if structure.atom_names is not None else None,
+        elements=structure.elements[atom_mask] if structure.elements is not None else None,
+        res_ids=structure.res_ids[atom_mask],
+        res_names=structure.res_names[atom_mask] if structure.res_names is not None else None,
+        chain_ids=structure.chain_ids[atom_mask],
+        backbone_mask=structure.backbone_mask[atom_mask] if structure.backbone_mask is not None else None,
+        backbone=cropped_backbone,
+        pocket_embedding=None,  # embeddings would need special handling if present
+        cif=structure.cif,
+    )
 
 def compute_structure_crop_mask(
     structure: StructureData,
