@@ -235,6 +235,10 @@ ligand_conformer_from_pharmacophore_condensed:
       train: true
       params:
         threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 ligand_conformer_from_pharmacophore:
   - stability:
       train: true
@@ -258,6 +262,10 @@ ligand_conformer_from_pharmacophore:
       train: true
       params:
         threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 ligand_conformer_from_pharmacophore_extra_feats:
   - stability:
       train: true
@@ -281,6 +289,10 @@ ligand_conformer_from_pharmacophore_extra_feats:
       train: true
       params:
         threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 rigid_docking:
   - stability:
       train: true

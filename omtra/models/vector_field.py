@@ -910,9 +910,22 @@ class VectorField(nn.Module):
                 **kwargs,
             )
 
+            if len(task.partial_modalities_fixed) > 0:
+                for m_name in task.partial_modalities_fixed:
+                    m = name_to_modality(m_name)
+                    if m.is_node:
+                        data_src = g.nodes['lig']
+                        mask = data_src.data['atom_mask_1_true'].bool()
+                    else:
+                        data_src = g.edges['lig_to_lig']
+                        mask = data_src.data['edge_mask_1_true'].bool()
+                
+                    data_src.data[f"{m.data_key}_t"][mask] = data_src.data[f"{m.data_key}_1_true"][mask]
+                    data_src.data[f"{m.data_key}_1_pred"][mask] = data_src.data[f"{m.data_key}_1_true"][mask]
+
             if visualize:
                 add_frame(g)
-
+                
         # set x_1 = x_t
         for modality in task.node_modalities_present:
             ntype = modality.entity_name

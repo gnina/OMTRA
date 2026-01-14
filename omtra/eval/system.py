@@ -726,13 +726,43 @@ class SampledSystem:
         pharm_types_elems = [ constants.ph_idx_to_elem[idx] for idx in pharm_types_idx ] 
 
         if xyz:
-            return pharm_to_xyz(coords, pharm_types_elems)
+            return fixed_atoms_to_xyz(coords, pharm_types_elems)
         else:
             return {
                 'coords': coords,
                 'types': pharm_types,
                 'types_idx': pharm_types_idx,
                 'types_elems': pharm_types_elems,
+            }
+    
+    def get_fixed_atoms_from_graph(self, g=None, kind="predicted", xyz=False):
+        if g is None:
+            g = self.g
+
+        if kind == "predicted":
+            suffix = "1"
+        elif kind == 'gt':
+            suffix = "1_true"
+        else:
+            raise ValueError("kind must be either 'predicted' or 'gt'.")
+
+        fixed_atoms = g.nodes['lig'].data[f'atom_mask_{suffix}'].bool()
+        coords = g.nodes['lig'].data[f'x_{suffix}'][fixed_atoms]
+
+        if f'cond_a_{suffix}' in g.nodes['lig'].data:
+            g_copy = g.clone()
+            g_copy = self.decode_conda(g)
+            atom_types = g_copy.nodes['lig'].data[f'a_{suffix}'][fixed_atoms]
+            atom_types = np.array([lig_atom_type_map[a] for a in atom_types])
+        else:
+            atom_types = g.nodes['lig'].data[f'a_{suffix}'][fixed_atoms]
+        
+        if xyz:
+            return fixed_atoms_to_xyz(coords, atom_types)
+        else:
+            return {
+                'coords': coords,
+                'types': atom_types,
             }
     
     def write_ligand(self, output_file: str, 
@@ -804,6 +834,28 @@ class SampledSystem:
         xyz_content =''.join(pharms)
         with open(output_file, 'w') as f:
             f.write(xyz_content)
+    
+    def write_fixed_atoms(self, 
+        output_file, 
+        trajectory: bool = False, 
+        endpoint: bool = False,
+        ground_truth: bool = False,
+        g=None):
+
+        output_file = Path(output_file)
+        if not output_file.suffix == ".xyz":
+            raise ValueError("Output file must have .xyz extension.")
+        
+        # TODO: might need to be modified if we are doing 
+        if trajectory:
+            raise NotImplementedError("Cannot draw trajectories for fixed atoms")
+        else:
+            kind = 'gt' if ground_truth else 'predicted'
+            fixed_atoms = [self.get_fixed_atoms_from_graph(g=g, kind=kind, xyz=True)]
+
+        xyz_content =''.join(fixed_atoms)
+        with open(output_file, 'w') as f:
+            f.write(xyz_content)
 
     def compute_valencies(self):
         """Compute the valencies of every atom in the molecule. Returns a tensor of shape (num_atoms,)."""
@@ -840,6 +892,12 @@ def pharm_to_xyz(pos: torch.Tensor, pharm_elements: List[str]):
         out += f"{elem} {pos[i, 0]:.3f} {pos[i, 1]:.3f} {pos[i, 2]:.3f}\n"
     return out
 
+def fixed_atoms_to_xyz(pos: torch.Tensor, atom_types: List[str]):
+    out = f'{len(pos)}\n'
+    for i in range(len(pos)):
+        a = atom_types[i]
+        out += f"{a} {pos[i, 0]:.3f} {pos[i, 1]:.3f} {pos[i, 2]:.3f}\n"
+    return out
 
 def write_mols_to_sdf(mols: List[Chem.Mol], filename: Union[str, Path]):
     """Write a list of rdkit molecules to an sdf file."""

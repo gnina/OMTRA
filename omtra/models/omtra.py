@@ -27,7 +27,7 @@ from omtra.eval.system import SampledSystem
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
-from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
+from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map, num_condensed_atom_types
 from omtra.models.conditional_paths.path_factory import get_conditional_path_fns
 from omtra.models.vector_field import VectorField
 from omtra.models.interpolant_scheduler import InterpolantScheduler
@@ -141,7 +141,7 @@ class OMTRA(pl.LightningModule):
         self.n_categories_dict = {
             "lig_a": len(lig_atom_type_map),
             "lig_c": len(charge_map),
-            "lig_cond_a": 1,
+            "lig_cond_a": num_condensed_atom_types,
             "lig_e": 4,  # hard-coded assumption of 4 bond types (none, single, double, triple)
             "lig_e_condensed": 4,
             "pharm_a": len(ph_idx_to_type),
@@ -632,6 +632,7 @@ class OMTRA(pl.LightningModule):
         groups_generated = task.groups_generated
         groups_present = task.groups_present
         groups_fixed = task.groups_fixed
+        partial_modality_conditioning = len(task.partial_modalities_fixed) > 0
 
         # TODO: user-supplied n_atoms dict?
 
@@ -688,7 +689,7 @@ class OMTRA(pl.LightningModule):
                 coms_flat.extend([com_i] * n_replicates)
 
         # TODO: sample number of ligand atoms
-        add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"]) and (len(task.partial_modalities_fixed) == 0)
+        add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"])
 
         # find number of fake atoms added to each system by the dataset class
         
@@ -726,10 +727,14 @@ class OMTRA(pl.LightningModule):
                     std=torch.tensor(n_lig_atoms_std).expand(n_samples)
                 )
                 n_lig_atoms = torch.clamp(n_lig_atoms.round().long(), min=4)
-            
+
+                # sampling from truncated normal distribution ensures number of lig atoms >= number of fixed lig atoms
+                if partial_modality_conditioning:
+                    n_fixed_atoms = torch.tensor([g.nodes['lig'].data['atom_mask_1_true'].bool().sum().item() for g in g_flat])
+                    n_lig_atoms = torch.maximum(n_lig_atoms, n_fixed_atoms)
+
             # use ground truth number of lig atoms
             elif use_gt_n_lig_atoms:
-
                 base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
                 base_n_atoms = base_n_atoms - n_fake_atoms_gt
                 max_margins = torch.clamp(base_n_atoms * n_lig_atom_margin, min=0).int()
@@ -741,8 +746,14 @@ class OMTRA(pl.LightningModule):
                 random_offsets = margins * offset_sign
                 n_lig_atoms = base_n_atoms + random_offsets
                 n_lig_atoms = torch.clamp(n_lig_atoms, min=4)
+
+                if partial_modality_conditioning:
+                    n_fixed_atoms = torch.tensor([g.nodes['lig'].data['atom_mask_1_true'].bool().sum().item() for g in g_flat])
+                    n_lig_atoms = torch.maximum(n_lig_atoms, n_fixed_atoms)
             
             else:
+                if partial_modality_conditioning:
+                    raise NotImplementedError('cannot sample from marginal plinder distribution for partial modality conditioning')
                 n_lig_atoms = sample_n_lig_atoms_plinder(
                     n_prot_atoms=n_prot_atoms, n_pharms=n_pharms
                 )
@@ -766,6 +777,11 @@ class OMTRA(pl.LightningModule):
                 )
                 n_lig_atoms = torch.clamp(n_lig_atoms.round().long(), min=4)
 
+                # sampling from truncated normal distribution ensures number of lig atoms >= number of fixed atoms
+                if partial_modality_conditioning:
+                    n_fixed_atoms = torch.tensor([g.nodes['lig'].data['atom_mask_1_true'].bool().sum().item() for g in g_flat])
+                    n_lig_atoms = torch.maximum(n_lig_atoms, n_fixed_atoms)
+
             # use ground truth number of lig atoms
             elif use_gt_n_lig_atoms:
                 base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
@@ -777,11 +793,19 @@ class OMTRA(pl.LightningModule):
                 n_lig_atoms = base_n_atoms + random_offsets
                 n_lig_atoms = torch.clamp(n_lig_atoms, min=4)
 
+                if partial_modality_conditioning:
+                    n_fixed_atoms = torch.tensor([g.nodes['lig'].data['atom_mask_1_true'].bool().sum().item() for g in g_flat])
+                    n_lig_atoms = torch.maximum(n_lig_atoms, n_fixed_atoms)
+
             elif unconditional_n_atoms_dist == "plinder":
+                if partial_modality_conditioning:
+                    raise NotImplementedError('cannot sample from marginal plinder distribution for partial modality conditioning')
                 n_lig_atoms = sample_n_lig_atoms_plinder(
                     n_pharms=n_pharms, n_samples=n_samples
                 )
             elif unconditional_n_atoms_dist == "pharmit":
+                if partial_modality_conditioning:
+                    raise NotImplementedError('cannot sample from marginal pharmit distribution for partial modality conditioning')
                 n_lig_atoms = sample_n_lig_atoms_pharmit(
                     n_pharms=n_pharms, n_samples=n_samples
                 )
@@ -800,6 +824,8 @@ class OMTRA(pl.LightningModule):
                 n_real_atoms = n_real_atoms + num_fake_atoms
 
             for g_idx, g_i in enumerate(g_flat):
+                g_i_copy = g_i.clone()
+
                 # clear ligand nodes (and edges) if they exist
                 if g_i.num_nodes("lig") > 0:
                     lig_node_ids = torch.arange(g_i.num_nodes("lig"), device=g_i.device)
@@ -817,6 +843,40 @@ class OMTRA(pl.LightningModule):
                 )
                 assert edge_idxs.shape[0] == 2
                 g_i.add_edges(u=edge_idxs[0], v=edge_idxs[1], etype="lig_to_lig")
+
+                if partial_modality_conditioning:
+                    atom_mask_old = g_i_copy.nodes['lig'].data['atom_mask_1_true'].bool()
+
+                    n_fixed_atoms = atom_mask_old.sum().item()
+                    atom_mask_new = torch.zeros(n_lig_atoms[g_idx], dtype=torch.bool, device=g_i.device) 
+                    atom_mask_new[:n_fixed_atoms] = True
+
+                    # if n_lig_atoms[g_idx].item() > atom_mask_old.shape[0]:
+                    #     atom_pad = torch.zeros(n_lig_atoms[g_idx].item() - atom_mask_old.shape[0], dtype=torch.bool, device=atom_mask_old.device)
+                    #     atom_mask_new = torch.cat([atom_mask_old, atom_pad])
+                    # else:
+                    #     atom_mask_new = atom_mask_old[:n_lig_atoms[g_idx].item()]
+                    g_i.nodes['lig'].data['atom_mask_1_true'] = atom_mask_new.long()
+
+                    src, dst = edge_idxs
+                    edge_mask_new = atom_mask_new[src] & atom_mask_new[dst]
+
+                    n_gt_lig_atoms =  atom_mask_old.shape[0] - n_fake_atoms_gt[g_idx]
+                    src_old, dst_old = build_lig_edge_idxs(n_gt_lig_atoms)
+                    edge_mask_old = atom_mask_old[src_old] & atom_mask_old[dst_old]
+                    g_i.edges['lig_to_lig'].data['edge_mask_1_true'] = edge_mask_new.long()
+
+                    for m_name in task.partial_modalities_fixed:
+                        m = name_to_modality(m_name)
+                        if m.is_node:
+                            dks = [dk for dk in g.nodes['lig'].data.keys() if m.data_key in dk]
+                            for dk in dks:
+                                g_i.nodes['lig'].data[dk][atom_mask_new] = g_i_copy.nodes['lig'].data[dk][atom_mask_old]
+                        else:
+                            dks = [dk for dk in g.edges['lig_to_lig'].data.keys() if m.data_key in dk]
+                            for dk in dks:
+                                g_i.edges['lig_to_lig'].data[dk][edge_mask_new] = g_i_copy.edges['lig_to_lig'].data[dk][edge_mask_old]
+
         
         add_pharm = "pharmacophore" in groups_generated
         if protein_present and add_pharm:

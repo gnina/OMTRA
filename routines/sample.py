@@ -269,6 +269,15 @@ def write_ground_truth(
                 ground_truth=True, 
                 g=g_list[cond_idx].to('cpu')
                 )
+        
+        # write xyz file with fixed fragments if we are doing partial modality conditioning
+        if len(task.partial_modalities_fixed) > 0:
+            gt_fixed_atoms_file = sys_gt_dir / "fixed_atoms.xyz"
+            sys.write_fixed_atoms(
+                gt_fixed_atoms_file,
+                ground_truth=True,
+                g=g_list[cond_idx].to('cpu')
+            )
 
 def main(args):
     # 1) resolve checkpoint path
@@ -487,7 +496,7 @@ def main(args):
         for k, v in metrics.items():
             print(f"{k}: {v:.3f}")
         
-        
+
 
 if __name__ == "__main__":
     args = parse_args()
