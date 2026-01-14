@@ -163,12 +163,13 @@ class TestCropStructureDataMultipleDistances:
             backbone_mask=np.array([True, False]), #which atoms are part of protein backbone
             backbone=BackboneData(
                 coords=np.array([[0.0, 0.0, 0.0]], dtype=np.float32),
-                res_ids=np.array([1, 2]),
-                res_names=np.array(["ALA","GLY"]),
-                chain_ids=np.array(["A", "A"]),
+                res_ids=np.array([1]),
+                res_names=np.array(["ALA"]),
+                chain_ids=np.array(["A"]),
             ),
             cif=None,
         )
+    @pytest.fixture
     def mock_structure(self):
         """Create a mock StructureData for testing."""
         return StructureData(
@@ -181,11 +182,11 @@ class TestCropStructureDataMultipleDistances:
             elements=np.array(["C", "C", "C", "C", "C", "C", "C"]), #all carbon
             res_ids=np.array([1, 1, 1, 2, 2, 3, 3]), #residue number to which atoms belong
             res_names=np.array(["ALA", "ALA", "ALA", "MET", "MET", "GLY", "GLY"]), #residue names
-            chain_ids=np.array(["A", "A", "A","A", "A", "A", "A", "A"]), #which protein chain atoms belong to (all same chain)
+            chain_ids=np.array(["A","A","A","A","A","A","A"]), #which protein chain atoms belong to (all same chain)
             backbone_mask=np.array([True, False, False, True, False, True, False]), #which atoms are part of protein backbone
             backbone=BackboneData(
                 coords=np.array([[0.75, 0.75, 0.75], [2.0, 2.0, 2.0], [7.5, 9.5, 9.5]], dtype=np.float32),
-                res_ids=np.array([1, 2]),
+                res_ids=np.array([1, 2, 3]),
                 res_names=np.array(["ALA", "MET","GLY"]),
                 chain_ids=np.array(["A", "A", "A"]),
             ),
@@ -255,7 +256,7 @@ class TestCropStructureDataMultipleDistances:
             np.array([[0.5, 0.5, 0.5]]),   # First group of ligand atoms
             np.array([[1.0, 1.0, 1.0]])    # Second group of ligand atoms
         ]
-        crop_distances = [0.75, 0.25]
+        crop_distances = [1.0, 0.25]
 
         cropped = crop_structure_data_multiple_distances(
             simple_mock_structure, 
@@ -270,14 +271,14 @@ class TestCropStructureDataMultipleDistances:
     
     def test_returns_none_for_no_close_residues(self, mock_structure):
         """Should return None if no residues are within distance."""
-        ref_coords = np.array([[100, 100, 100]])
-        cropped = crop_structure_data(mock_structure, ref_coords, 3.0)
+        ref_coords = [np.array([[100, 100, 100]])]
+        cropped = crop_structure_data_multiple_distances(mock_structure, ref_coords, [3.0])
         assert cropped is None
     
     def test_preserves_all_fields(self, mock_structure):
         """Cropped structure should have all expected fields."""
-        ref_coords = np.array([[0.5, 0.5, 0.5]])
-        cropped = crop_structure_data(mock_structure, ref_coords, 3.0)
+        ref_coords = [np.array([[0.5, 0.5, 0.5]])]
+        cropped = crop_structure_data_multiple_distances(mock_structure, ref_coords, [3.0])
         
         assert cropped.coords is not None
         assert cropped.atom_names is not None
@@ -291,12 +292,13 @@ class TestCropStructureDataMultipleDistances:
     def test_keeps_all_atoms_from_close_residue(self, mock_structure):
         """Should keep ALL atoms from a residue if ANY atom is close."""
         # Reference is close to only one atom of residue 1
-        ref_coords = np.array([[0, 0, 0]])
-        cropped = crop_structure_data(mock_structure, ref_coords, 0.5)
+        ref_coords = [np.array([[3.0, 3.0, 3.0]])]
+        cropped = crop_structure_data_multiple_distances(mock_structure, ref_coords, [2.75])
         
-        # Should still get both atoms from residue 1
-        assert len(cropped.coords) == 2
-        assert np.all(cropped.res_ids == 1)
+        # Should still get both atoms from residue 1 and 2 but not 3
+        assert len(cropped.coords) == 5
+        assert np.all(np.isin(cropped.res_ids, [1, 2]))
+        
     
 class TestFilterNpndesByDistance:
     def test_filters_distant_npndes(self):
