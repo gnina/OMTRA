@@ -18,6 +18,7 @@ from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
 from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map, num_condensed_atom_types
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
+from omtra.utils.rotation import center_on_ligand_gt, rotate_ground_truth, system_offset
 
 # from line_profiler import LineProfiler
 
@@ -29,6 +30,7 @@ class PharmitDataset(ZarrDataset):
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
                  max_pharms_sampled: int = 8,
+                 sys_offset_std: float = 0.0
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
@@ -36,6 +38,7 @@ class PharmitDataset(ZarrDataset):
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = fake_atom_p > 0
         self.max_pharms_sampled = max_pharms_sampled
+        self.sys_offset_std = sys_offset_std
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
         # dists_dict = np.load(dists_file)
@@ -222,6 +225,8 @@ class PharmitDataset(ZarrDataset):
                 print(f"Warning: No pharmacophores in system {index}.")
 
             else:
+                # TODO: refactor so we read the entire pharmacophore in at once and then slice what we need from
+                # the numpy array, rather than repeated calls to self.slice_array
                 pharm_sample_size = np.random.randint(1, min(self.max_pharms_sampled, len(pharm_idxs)) + 1)
                 pharm_sample = np.random.choice(pharm_idxs, size=pharm_sample_size, replace=False)
 
@@ -243,6 +248,16 @@ class PharmitDataset(ZarrDataset):
             task=task_class,
             graph_config=self.graph_config,
             )
+        
+        # center ground truth coordinates on ligand
+        g = center_on_ligand_gt(g)
+        # apply random rotation to ground truth coordinates
+        g = rotate_ground_truth(g)
+
+        # apply system offset
+        # TODO: expose as a config parameter
+        if self.sys_offset_std > 0:
+            g = system_offset(g, offset_std=self.sys_offset_std)
 
         # sample priors
         priors_fns = get_prior(task_class, self.prior_config, training=True)

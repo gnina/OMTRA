@@ -3,6 +3,7 @@ import torch
 import math
 from omegaconf import DictConfig
 
+from omtra.utils.rotation import rotate_ground_truth, center_on_ligand_gt, system_offset
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.constants import (
     lig_atom_type_map,
@@ -61,6 +62,7 @@ class CrossdockedDataset(ZarrDataset):
         prior_config: Optional[DictConfig] = None,
         fake_atom_p: float = 0.0,
         res_id_embed_dim: int = 64,
+        sys_offset_std: float = 0.0
     ):
         #zarr files are read by the init function of the parent class, ZarrDataset
         super().__init__(
@@ -71,6 +73,7 @@ class CrossdockedDataset(ZarrDataset):
         self.graph_config = graph_config
         self.prior_config = prior_config
         self.fake_atom_p = fake_atom_p
+        self.sys_offset_std = sys_offset_std
 
         self.res_id_embed_dim = res_id_embed_dim
 
@@ -1008,6 +1011,18 @@ class CrossdockedDataset(ZarrDataset):
         # Add the position embeddings to the graph's protein atom nodes
         g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
 
+
+        # center ground truth coordinates on ligand
+        g = center_on_ligand_gt(g)
+        # apply random rotation to ground truth coordinates
+        g = rotate_ground_truth(g)
+
+        # apply system offset
+        # TODO: expose as a config parameter
+        if self.sys_offset_std > 0:
+            g = system_offset(g, offset_std=self.sys_offset_std)
+
+
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)
 
@@ -1024,7 +1039,6 @@ class CrossdockedDataset(ZarrDataset):
                 system.link, pocket_mask, bb_pocket_mask, "prot_atom_x"
             )
 
-        # sample priors
         g = sample_priors(g, task_class=task_class, prior_fns=prior_fns, training=True)
 
         return g

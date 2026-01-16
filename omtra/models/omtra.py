@@ -14,6 +14,7 @@ from pathlib import Path
 import hydra
 import os
 import functools
+import math
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
@@ -72,6 +73,7 @@ class OMTRA(pl.LightningModule):
         og_run_dir: Optional[str] = None,
         fake_atom_p: float = 0.0,
         distort_p: float = 0.0,
+        distort_t: float = 0.5,
         eval_config: Optional[DictConfig] = None,
         zero_bo_loss_weight: float = 1.0,
         train_t_dist: str = 'uniform',
@@ -79,8 +81,8 @@ class OMTRA(pl.LightningModule):
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
         pharm_var: float = 0.0,
+        scheduler_config: Optional[DictConfig] = None,
         lr_warmup_steps: int = 0,
-
     ):
         super().__init__()
 
@@ -98,11 +100,13 @@ class OMTRA(pl.LightningModule):
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = self.fake_atom_p > 0
         self.distort_p = distort_p
+        self.distort_t = distort_t
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
         self.pharm_var = pharm_var
         self.lr_warmup_steps = lr_warmup_steps
+        self.scheduler_config = scheduler_config
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -154,6 +158,7 @@ class OMTRA(pl.LightningModule):
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
             fake_atoms=self.fake_atom_p>0.0,
+            _recursive_=False,
         )
 
         if not ligand_encoder.is_empty():
@@ -335,7 +340,9 @@ class OMTRA(pl.LightningModule):
             g_list = dgl.unbatch(g)
             n_replicates = 2
 
-        if (any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"])) and 'protein_identity' in task.groups_present:
+        ligand_present = any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"])
+        if ligand_present:
+            # TODO: this makes an optimistic eval, should be setting COM to something offcenter
             coms = dgl.readout_nodes(g, feat='x_1_true', op='mean', ntype='lig')
             coms = [ coms[i] for i in range(g.batch_size) ]
         else:
@@ -402,7 +409,7 @@ class OMTRA(pl.LightningModule):
         )
 
         if self.distort_p > 0.0:
-            t_mask = (t > 0.5)[node_batch_idxs["lig"]]
+            t_mask = (t > self.distort_t)[node_batch_idxs["lig"]]
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
             if "lig_x" in task_class.partial_modalities_fixed:
                 distort_mask = distort_mask & t_mask.unsqueeze(-1) & (~g.nodes["lig"].data['atom_mask_1_true'].unsqueeze(-1)) # don't apply geometry distortion to fixed atoms if ligand coordinate modality is partially fixed
@@ -523,8 +530,39 @@ class OMTRA(pl.LightningModule):
             self.optimizer_cfg, params=self.parameters()
         )
 
+        if self.scheduler_config is not None and self.scheduler_config.get("type") == "cosine_decay":
+            warmup_steps = self.lr_warmup_steps
+            min_lr_factor = self.scheduler_config.get("min_lr_factor", 0.1)
+            total_steps = self.trainer.estimated_stepping_batches
+
+            def lr_lambda(current_step: int):
+                if current_step < warmup_steps:
+                    return float(current_step + 1) / float(warmup_steps)
+                
+                if total_steps is None or total_steps <= warmup_steps:
+                    return 1.0
+                
+                step_since_warmup = current_step - warmup_steps
+                steps_after_warmup = total_steps - warmup_steps
+                
+                progress = float(step_since_warmup) / float(steps_after_warmup)
+                progress = min(1.0, max(0.0, progress))
+                
+                return min_lr_factor + (1.0 - min_lr_factor) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "step",
+                    "frequency": 1,
+                    "name": "cosine_decay_warmup",
+                },
+            }
+
         # Linear LR warmup
-        if self.lr_warmup_steps > 0:
+        if self.lr_warmup_steps and self.lr_warmup_steps > 0:
             def lr_lambda(current_step: int):
                 if current_step < self.lr_warmup_steps:
                     return float(current_step + 1) / float(self.lr_warmup_steps)
@@ -539,7 +577,6 @@ class OMTRA(pl.LightningModule):
                     "name": "lr_warmup",
                 },
             }
-
         return optimizer
 
     def sample_conditional_path(
@@ -657,9 +694,13 @@ class OMTRA(pl.LightningModule):
                 f"Task {task_name} requires a user-provided graphs with conditional information, but none was provided."
             )
 
+        if g_list is not None and coms is None:
+            print('WARNING: no COM was explicitly set when sampling. Will try to infer a COM but this is likely to impair results.')
+
         # if this is purely unconditional sampling
         # we create initial graphs with no data
         protein_present = "protein_structure" in groups_present
+        pharm_present = 'pharmacophore' in groups_present
         g_flat: List[dgl.DGLHeteroGraph] = []
         if g_list is None:
             g_flat = []
@@ -681,6 +722,8 @@ class OMTRA(pl.LightningModule):
 
                 if coms is None and protein_present:
                     com_i = g_i.nodes["prot_atom"].data["x_1_true"].mean(dim=0)
+                elif coms is None and pharm_present:
+                    com_i = g_i.nodes["pharm"].data["x_1_true"].mean(dim=0)
                 elif coms is None and not protein_present:
                     com_i = torch.zeros(3, dtype=float)
                 else:

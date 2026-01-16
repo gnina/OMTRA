@@ -319,11 +319,19 @@ def main(args):
 
             # instantiate datamodule & model
             if args.dataset == 'plinder':
-                spoof_cfg = quick_load.load_cfg(overrides=[
-                    'task_group=prot_protpharm_cond',
-                    f'plinder_path={args.plinder_path}',
-                    f'pharmit_path={args.pharmit_path}',
-                ])
+                overrides = ['task_group=prot_protpharm_cond']
+                if args.plinder_path is not None:
+                    overrides.append(f'plinder_path={args.plinder_path}')
+                if args.pharmit_path is not None:
+                    overrides.append(f'pharmit_path={args.pharmit_path}')
+                spoof_cfg = quick_load.load_cfg(overrides=overrides)
+                dm = quick_load.datamodule_from_config(spoof_cfg)
+                multitask_dataset = dm.load_dataset(args.split)
+            elif args.dataset == 'pharmit':
+                overrides = ['task_group=pharmit5050_cond_a']
+                if args.pharmit_path is not None:
+                    overrides.append(f'pharmit_path={args.pharmit_path}')
+                spoof_cfg = quick_load.load_cfg(overrides=overrides)
                 dm = quick_load.datamodule_from_config(spoof_cfg)
                 multitask_dataset = dm.load_dataset(args.split)
             else:
@@ -355,12 +363,17 @@ def main(args):
 
     # set coms if protein is present, prefer ligand com
     coms = None
-    if g_list is not None and 'protein_identity' in task.groups_present:
-        if g_list[0].num_nodes('lig') > 0 and 'x_1_true' in g_list[0].nodes['lig'].data:
-            coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
-        # fallback protein atom com if present
-        elif g_list[0].num_nodes('prot_atom') > 0 and 'x_1_true' in g_list[0].nodes['prot_atom'].data:
-            coms = [ g.nodes['prot_atom'].data['x_1_true'].mean(dim=0) for g in g_list ]
+    protein_present = 'protein_identity' in task.groups_present
+    g_list_provided = g_list is not None 
+    task_requires_ligand = any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"])
+    if g_list_provided and task_requires_ligand:
+        reference_ligand_present = 'x_1_true' in g_list[0].nodes['lig'].data
+    else:
+        reference_ligand_present = False
+    if reference_ligand_present:
+        coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
+    else:
+        coms = None
 
     sampled_systems = model.sample(
         g_list=g_list,

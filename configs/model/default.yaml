@@ -3,7 +3,7 @@ _target_: omtra.models.omtra.OMTRA
 defaults:
   - _self_
   - conditional_paths: default
-  - vector_field: default
+  - vector_field: transformer
   - optimizer: default
   - aux_losses: default
 
@@ -11,9 +11,16 @@ k_checkpoints: 15
 checkpoint_interval: 5000
 fake_atom_p: ${fake_atom_p}
 distort_p: ${distort_p}
+distort_t: ${distort_t}
 zero_bo_loss_weight: 1.0
-train_t_dist: uniform
+train_t_dist: beta
 t_alpha: 1.8
-cat_loss_weight: 1.0
+cat_loss_weight: 0.8
 time_scaled_loss: False
 pharm_var: 0.0
+lr_warmup_steps: 5000
+
+
+scheduler_config:
+  type: cosine_decay
+  min_lr_factor: 0.1  # Optional, defaults to 0.1 (1

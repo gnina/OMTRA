@@ -14,6 +14,7 @@ from omtra.constants import (
     protein_element_map,
     protein_atom_map,
 )
+from omtra.utils.rotation import rotate_ground_truth, center_on_ligand_gt, system_offset
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.data.xace_ligand import add_k_hop_edges, MolXACE, add_fake_atoms
@@ -64,6 +65,7 @@ class PlinderDataset(ZarrDataset):
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
         res_id_embed_dim: int = 64,
         max_pharms_sampled: int = 8,
+        sys_offset_std: float = 0.0
     ):
         super().__init__(
             split,
@@ -79,6 +81,7 @@ class PlinderDataset(ZarrDataset):
         self.use_fake_atoms = self.fake_atom_p > 0
         self.pskip_factor = pskip_factor
         self.weighted_sampling = pskip_factor > 0.0 and split == 'train'
+        self.sys_offset_std = sys_offset_std
 
         self.res_id_embed_dim = res_id_embed_dim
 
@@ -1045,6 +1048,16 @@ class PlinderDataset(ZarrDataset):
             
             # Add the position embeddings to the graph's protein atom nodes
             g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
+
+        # center ground truth coordinates on ligand
+        g = center_on_ligand_gt(g)
+        # apply random rotation to ground truth coordinates
+        g = rotate_ground_truth(g)
+
+        # apply system offset
+        # TODO: expose as a config parameter
+        if self.sys_offset_std > 0:
+            g = system_offset(g, offset_std=self.sys_offset_std)
 
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)

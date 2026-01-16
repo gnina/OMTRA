@@ -20,6 +20,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                  graph_config: DictConfig,
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
+                 sys_offset_std: float = 0.0
         ):
         """
         Describing the nature of the inputs, for now:
@@ -36,6 +37,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         self.single_dataset_configs = single_dataset_configs
         self.td_coupling = td_coupling
         self.fake_atom_p = fake_atom_p
+        self.sys_offset_std = sys_offset_std
 
         self.task_space = td_coupling.task_space
         self.dataset_space = td_coupling.dataset_space
@@ -73,6 +75,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                             graph_config=self.graph_config,
                             prior_config=self.prior_config,
                             fake_atom_p=fake_atom_p,
+                            sys_offset_std=self.sys_offset_std,
                             **single_dataset_config)
                 self.datasets[dataset_name] = plinder_dataset_objects
             else:
@@ -81,6 +84,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                     graph_config=self.graph_config,
                     prior_config=self.prior_config,
                     fake_atom_p=fake_atom_p,
+                    sys_offset_std=self.sys_offset_std,
                     **single_dataset_config)
 
 

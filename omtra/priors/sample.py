@@ -118,6 +118,7 @@ def sample_priors(
         g.nodes['lig'].data['x_0'] += (com - current_lig_com)[node_batch_idxs]
 
     if not training and pharm_gen:
+        raise NotImplementedError('i think this behavior is problematic but we dont support pharmacophore generation anyways at the moment')
         if g.num_nodes('pharm') > 0:
             node_batch_idxs = get_node_batch_idxs_ntype(g, 'pharm')
             current_pharm_com = dgl.readout_nodes(g, feat='x_0', op='mean', ntype='pharm')
