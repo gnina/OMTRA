@@ -76,7 +76,6 @@ RUN uv pip uninstall --system \
     umap-learn pynndescent \
     duckdb \
     plinder \
-    pyarrow \
     ipython ipykernel ipywidgets \
     notebook \
     || true
