@@ -73,6 +73,7 @@ class PlinderDataset(ZarrDataset):
         crop_min_distance: Optional[float] = None,
         crop_max_distance: Optional[float] = None,
         crop_atom_groups: Optional[float] = None, #number of groups of atoms to use for dynamic cropping
+        crop_drop: Optional[float] = None, #percent of ligand groups to drop when cropping
     ):
         super().__init__(
             split,
@@ -97,10 +98,12 @@ class PlinderDataset(ZarrDataset):
         self.crop_min_distance = crop_min_distance
         self.crop_max_distance = crop_max_distance
         self.crop_atom_groups = crop_atom_groups
+        self.crop_drop = crop_drop
         self.dynamic_crop = (
             crop_min_distance is not None 
             and crop_max_distance is not None
             and crop_atom_groups is not None
+            and crop_drop is not None
             and split == 'train'
         )
 
@@ -445,6 +448,17 @@ class PlinderDataset(ZarrDataset):
 
             for i in range(0, n_lig_atoms, atoms_per_group):
                 lig_atom_groups.append(ligand.coords[i:i+atoms_per_group])
+            
+            # Randomly drop crop_drop percent of ligand groups
+            n_groups_to_drop = int(len(lig_atom_groups) * self.crop_drop)
+            if n_groups_to_drop > 0:
+                groups_to_drop = np.random.choice(
+                    len(lig_atom_groups), size=n_groups_to_drop, replace=False
+                )
+                lig_atom_groups = [
+                    group for j, group in enumerate(lig_atom_groups)
+                    if j not in groups_to_drop
+                ]
 
             # Get crop distances for each group of ligand atoms
             crop_distances = [sample_crop_distance(self.crop_min_distance, self.crop_max_distance) for _ in lig_atom_groups]
