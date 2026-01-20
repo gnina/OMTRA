@@ -315,7 +315,7 @@ def filter_npndes_by_distance(
     return filtered if filtered else None
 
 
-def sample_crop_distance(min_distance: float, max_distance: float) -> float:
+def sample_crop_distance(min_distance: float, max_distance: float, alpha: float, beta: float) -> float:
     """
     Sample a crop distance uniformly between min and max.
     
@@ -331,4 +331,28 @@ def sample_crop_distance(min_distance: float, max_distance: float) -> float:
     float
         Sampled crop distance
     """
-    return np.random.uniform(min_distance, max_distance)
+    #Generate beta distribution sample in [0, 1]
+    beta_sample = np.random.beta(alpha, beta)
+    return min_distance + beta_sample * (max_distance - min_distance)
+
+def compute_ligand_groups(n_lig_atoms: int):
+    """
+    Compute number of groups based on a mathematical function of ligand atom count.
+    
+    Parameters
+    ----------
+    n_lig_atoms : int (typically number of ligand atoms)
+    
+    Returns
+    -------
+    int
+        Number of groups to create
+    """
+    #compute number of ligand atoms
+
+    if n_lig_atoms <= 4:
+        return 1
+    
+    #using sqrt x as a function
+    n_groups = max(2, min(int(np.sqrt(n_lig_atoms))))
+    return n_groups
