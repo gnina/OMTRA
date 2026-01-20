@@ -44,6 +44,7 @@ from omtra.dataset.crop_utils import (
     filter_npndes_by_distance,
     sample_crop_distance,
     crop_structure_data_multiple_distances,
+    compute_ligand_groups,
 )
 
 import warnings
@@ -72,8 +73,8 @@ class PlinderDataset(ZarrDataset):
         max_pharms_sampled: int = 8,
         crop_min_distance: Optional[float] = None,
         crop_max_distance: Optional[float] = None,
-        crop_atom_groups: Optional[float] = None, #number of groups of atoms to use for dynamic cropping
-        crop_drop: Optional[float] = None, #percent of ligand groups to drop when cropping
+        alpha: Optional[float] = None,   # beta distribution alpha parameter for dynamic cropping
+        beta: Optional[float] = None,    # beta distribution beta parameter for dynamic cropping
     ):
         super().__init__(
             split,
@@ -97,13 +98,13 @@ class PlinderDataset(ZarrDataset):
         # Dynamic cropping: only applied during training when both distances are specified
         self.crop_min_distance = crop_min_distance
         self.crop_max_distance = crop_max_distance
-        self.crop_atom_groups = crop_atom_groups
-        self.crop_drop = crop_drop
+        self.alpha = alpha
+        self.beta = beta
         self.dynamic_crop = (
             crop_min_distance is not None 
             and crop_max_distance is not None
-            and crop_atom_groups is not None
-            and crop_drop is not None
+            and alpha is not None
+            and beta is not None
             and split == 'train'
         )
 
@@ -441,27 +442,17 @@ class PlinderDataset(ZarrDataset):
         # Apply dynamic cropping during training (should this be if include_protein and then if self.dynamic_crop
         #in case dyanmic crop is not enabled but we need the protein?)
         if self.dynamic_crop and include_protein:
-            # Break ligand atoms into crop_atom_groups groups (ligand.coords of shape (M,3))
+            # Break ligand atoms into n_groups groups (ligand.coords of shape (M,3))
             lig_atom_groups = []
             n_lig_atoms = len(ligand.coords)
-            atoms_per_group = max(2, n_lig_atoms // self.crop_atom_groups)
+            n_groups = compute_ligand_groups(n_lig_atoms)
+            atoms_per_group = max(2, n_lig_atoms // n_groups)
 
             for i in range(0, n_lig_atoms, atoms_per_group):
                 lig_atom_groups.append(ligand.coords[i:i+atoms_per_group])
             
-            # Randomly drop crop_drop percent of ligand groups
-            n_groups_to_drop = int(len(lig_atom_groups) * self.crop_drop)
-            if n_groups_to_drop > 0:
-                groups_to_drop = np.random.choice(
-                    len(lig_atom_groups), size=n_groups_to_drop, replace=False
-                )
-                lig_atom_groups = [
-                    group for j, group in enumerate(lig_atom_groups)
-                    if j not in groups_to_drop
-                ]
-
             # Get crop distances for each group of ligand atoms
-            crop_distances = [sample_crop_distance(self.crop_min_distance, self.crop_max_distance) for _ in lig_atom_groups]
+            crop_distances = [sample_crop_distance(self.crop_min_distance, self.crop_max_distance, self.alpha, self.beta) for _ in lig_atom_groups]
 
             # Crop the pocket
             cropped_pocket = crop_structure_data_multiple_distances(pocket, lig_atom_groups, crop_distances)
@@ -471,7 +462,7 @@ class PlinderDataset(ZarrDataset):
                 pocket = cropped_pocket
                 
                 # Filter NPNDEs by distance to ligand
-                crop_dist = sample_crop_distance(self.crop_min_distance, self.crop_max_distance)
+                crop_dist = sample_crop_distance(self.crop_min_distance, self.crop_max_distance, self.alpha, self.beta)
                 npndes = filter_npndes_by_distance(npndes, ligand.coords, crop_dist)
                 
                 # Crop link structure using same residue set as pocket
