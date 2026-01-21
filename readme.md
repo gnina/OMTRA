@@ -178,9 +178,22 @@ For conditional generation tasks, you can provide input structures directly:
 |----------|------|-------------|
 | `--protein_file` | path | Protein structure file (PDB or CIF format) |
 | `--ligand_file` | path | Ligand structure file (SDF format) |
-| `--pharmacophore_file` | path | Pharmacophore constraints file (XYZ format) |
+| `--pharmacophore_file` | path | Pharmacophore file (JSON from Pharmit, XYZ, or SDF format) |
+| `--pocket` | string | Define binding pocket (see [Pocket Definition](#pocket-definition)) |
 
 When input files are provided, `--n_samples` specifies how many samples to generate for that single input system.
+
+### Pocket Definition
+
+The `--pocket` argument defines the protein binding site using one of three formats:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| `ligand:` | `--pocket ligand:ref.sdf` | Extract pocket around ligand atoms (8 Å cutoff) |
+| `center:` | `--pocket center:10.5,20.3,15.2` | Use bounding box around coordinates |
+| `residues:` | `--pocket residues:A:123-125,B:200` | Use specific residues as pocket |
+
+For `center:` format, use `--bbox_length` to control the bounding box size (default: 23 Å)
 
 ### Advanced Sampling Options
 
@@ -204,6 +217,8 @@ When input files are provided, `--n_samples` specifies how many samples to gener
 
 OMTRA supports multiple drug design tasks. Use the `--task` argument to select one:
 
+**Note:** Tasks marked with ⚠️ do not have pre-trained checkpoints available yet.
+
 ### Unconditional Generation
 | Task | Description |
 |------|-------------|
@@ -213,15 +228,17 @@ OMTRA supports multiple drug design tasks. Use the `--task` argument to select o
 | Task | Description |
 |------|-------------|
 | `fixed_protein_ligand_denovo_condensed` | Design ligands for a fixed protein binding site |
-| `protein_ligand_denovo_condensed` | Joint generation of ligand with flexible protein |
+| `protein_ligand_denovo_condensed` ⚠️ | Joint generation of ligand with flexible protein |
+| `exp_apo_conditioned_denovo_ligand_condensed` ⚠️ | De novo ligand generation starting from experimental apo structure |
+| `pred_apo_conditioned_denovo_ligand_condensed` ⚠️ | De novo ligand generation starting from predicted apo structure |
 
 ### Docking Tasks
 | Task | Description |
 |------|-------------|
 | `rigid_docking_condensed` | Dock a known ligand into a fixed protein structure |
-| `flexible_docking_condensed` | Dock with protein flexibility |
-| `expapo_conditioned_ligand_docking_condensed` | Docking starting from experimental apo structure |
-| `predapo_conditioned_ligand_docking_condensed` | Docking starting from predicted apo structure |
+| `flexible_docking_condensed` ⚠️ | Dock with protein flexibility |
+| `expapo_conditioned_ligand_docking_condensed` ⚠️ | Docking starting from experimental apo structure |
+| `predapo_conditioned_ligand_docking_condensed` ⚠️ | Docking starting from predicted apo structure |
 
 ### Conformer Generation
 | Task | Description |
@@ -231,11 +248,12 @@ OMTRA supports multiple drug design tasks. Use the `--task` argument to select o
 ### Pharmacophore-Conditioned Tasks
 | Task | Description |
 |------|-------------|
-| `denovo_ligand_pharmacophore_condensed` | Generate ligand and pharmacophore jointly |
+| `denovo_ligand_pharmacophore_condensed` ⚠️ | Generate ligand and pharmacophore jointly |
 | `denovo_ligand_from_pharmacophore_condensed` | Design ligand matching a given pharmacophore |
 | `ligand_conformer_from_pharmacophore_condensed` | Generate conformer satisfying pharmacophore |
 | `fixed_protein_pharmacophore_ligand_denovo_condensed` | Design ligand for protein with pharmacophore constraints |
 | `rigid_docking_pharmacophore_condensed` | Dock ligand with pharmacophore constraints |
+| `protein_ligand_pharmacophore_denovo_condensed` ⚠️ | Joint generation of ligand, protein, and pharmacophore |
 
 ## CLI Examples
 
@@ -248,14 +266,34 @@ omtra --task denovo_ligand_condensed \
 ```
 
 ### Structure-Based Drug Design (Protein-Conditioned)
+
+Using a reference ligand to define the pocket:
 ```bash
 omtra --task fixed_protein_ligand_denovo_condensed \
   --protein_file my_protein.pdb \
-  --ligand_file reference_ligand.sdf \
+  --pocket ligand:reference_ligand.sdf \
   --n_samples 50 \
   --output_dir outputs/sbdd_samples
 ```
-The reference ligand is used to define the binding site center. If omitted, the protein center of mass is used.
+
+Using coordinates to define the pocket center:
+```bash
+omtra --task fixed_protein_ligand_denovo_condensed \
+  --protein_file my_protein.pdb \
+  --pocket center:10.5,20.3,15.2 \
+  --bbox_length 25.0 \
+  --n_samples 50 \
+  --output_dir outputs/sbdd_samples
+```
+
+Using specific residues to define the pocket:
+```bash
+omtra --task fixed_protein_ligand_denovo_condensed \
+  --protein_file my_protein.pdb \
+  --pocket residues:A:123-130,A:200,B:50-55 \
+  --n_samples 50 \
+  --output_dir outputs/sbdd_samples
+```
 
 ### Molecular Docking
 ```bash
@@ -275,9 +313,11 @@ omtra --task ligand_conformer_condensed \
 ```
 
 ### Pharmacophore-Guided Design
+
+Using a pharmacophore file directly (JSON from Pharmit or XYZ):
 ```bash
 omtra --task denovo_ligand_from_pharmacophore_condensed \
-  --pharmacophore_file constraints.xyz \
+  --pharmacophore_file constraints.json \
   --n_samples 100 \
   --output_dir outputs/pharm_guided
 ```
@@ -285,7 +325,7 @@ omtra --task denovo_ligand_from_pharmacophore_condensed \
 Alternatively, extract pharmacophores from a ligand SDF file:
 ```bash
 omtra --task denovo_ligand_from_pharmacophore_condensed \
-  --ligand_file reference_ligand.sdf \
+  --pharmacophore_file reference_ligand.sdf \
   --n_samples 100 \
   --output_dir outputs/pharm_guided
 ```
