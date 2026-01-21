@@ -143,26 +143,99 @@ def create_parser():
         help="Path to ligand structure file (SDF) for ligand-conditioned tasks"
     )
     parser.add_argument(
+        "--pocket",
+        type=str,
+        default=None,
+        help=(
+            "Define the pocket using one of three formats: "
+            "1) 'ligand:path/to/ligand.sdf' - use a reference ligand, "
+            "2) 'center:x,y,z' - use center coordinates (also set --bbox_length, default 23.0), "
+            "3) 'residues:A:123-125,B:200' - list specific residues. "
+        )
+    )
+    parser.add_argument(
         "--pharmacophore_file",
         type=Path, 
         default=None,
-        help="Path to pharmacophore file (XYZ format) for pharmacophore-conditioned tasks. If not provided, pharmacophores will be extracted from --ligand_file if available."
+        help="Path to pharmacophore file (JSON from Pharmit, XYZ, or ligand SDF) for pharmacophore-conditioned tasks."
+    )
+    parser.add_argument(
+        "--bbox_length",
+        type=float,
+        default=23.0,
+        help="Bounding box length (Angstroms) when using --pocket center:x,y,z. Default: 23.0"
     )
     return parser
 
 
-def _check_available_files(args):
-    """Check what input files are available."""
+def _parse_pocket_argument(pocket_arg: str):
+    if not pocket_arg:
+        return None
+    
+    if pocket_arg.startswith('ligand:'):
+        file_path = pocket_arg[7:]
+        if not file_path:
+            raise ValueError("'ligand:' requires a file path")
+        return {'type': 'file', 'value': Path(file_path)}
+    
+    if pocket_arg.startswith('center:'):
+        parts = [x.strip() for x in pocket_arg[7:].split(',')]
+        if len(parts) != 3:
+            raise ValueError(f"'center:' expects exactly 3 values (x,y,z), got {len(parts)}")
+        try:
+            return {'type': 'center', 'value': [float(p) for p in parts]}
+        except ValueError:
+            raise ValueError(f"'center:' coordinates must be numbers")
+    
+    if pocket_arg.startswith('residues:'):
+        residues_str = pocket_arg[9:]
+        if not residues_str:
+            raise ValueError("'residues:' requires residue specifications")
+        
+        residue_specs = []
+        for spec in residues_str.split(','):
+            if ':' not in spec:
+                raise ValueError(f"Expected 'CHAIN:RESID', got '{spec}'")
+            chain, res_part = spec.strip().split(':', 1)
+            try:
+                if '-' in res_part:
+                    start, end = map(int, res_part.split('-'))
+                    residue_specs.extend((chain, r) for r in range(start, end + 1))
+                else:
+                    residue_specs.append((chain, int(res_part)))
+            except ValueError:
+                raise ValueError(f"Invalid residue: '{spec}'")
+        
+        if not residue_specs:
+            raise ValueError("No valid residues specified")
+        return {'type': 'residues', 'value': residue_specs}
+    
+    raise ValueError(
+        f"Pocket must start with 'ligand:', 'center:', or 'residues:'. Got: '{pocket_arg}'"
+    )
+
+
+def _validate_task_inputs(args, task):
     has_protein = args.protein_file is not None
     has_ligand = args.ligand_file is not None
     has_pharmacophore = args.pharmacophore_file is not None
+    has_dataset_path = args.pharmit_path is not None or args.plinder_path is not None
     
-    return has_protein, has_ligand, has_pharmacophore
-
-
-def _validate_task_inputs(args, task, has_protein, has_ligand, has_pharmacophore):
-    """Validate that required inputs for the task are provided."""
+    pocket_definition = None
+    if args.pocket is not None:
+        try:
+            pocket_definition = _parse_pocket_argument(args.pocket)
+        except ValueError as e:
+            print(f"Error parsing --pocket argument: {e}")
+            sys.exit(1)
+    
+    if task.unconditional:
+        return has_protein, has_ligand, has_pharmacophore, False, pocket_definition
     required = set(task.groups_fixed)
+    
+    has_pocket_definition = pocket_definition is not None
+    has_pocket_ligand_file = has_pocket_definition and pocket_definition.get('type') == 'file'
+    
     missing = []
     
     # Map groups_fixed to file types
@@ -172,10 +245,12 @@ def _validate_task_inputs(args, task, has_protein, has_ligand, has_pharmacophore
         missing.append("ligand file (--ligand_file)")
     if 'ligand_identity_condensed' in required and not has_ligand:
         missing.append("ligand file (--ligand_file)")
-    if 'pharmacophore' in required and not has_pharmacophore and not has_ligand:
-        missing.append("pharmacophore file (--pharmacophore_file) or ligand file (--ligand_file)")
-    
-    has_dataset_path = args.pharmit_path is not None or args.plinder_path is not None
+    if 'pharmacophore' in required and not has_pharmacophore:
+        missing.append("pharmacophore file (--pharmacophore_file)")
+    if 'protein_identity' in required and not has_dataset_path and not has_pocket_definition:
+        missing.append(
+            "pocket definition (--pocket ligand:..., --pocket center:x,y,z, or --pocket residues:CHAIN:RESID,...)"
+        )
     
     if missing:
         if has_dataset_path:
@@ -188,18 +263,13 @@ def _validate_task_inputs(args, task, has_protein, has_ligand, has_pharmacophore
             print(f"Error: Task '{args.task}' requires the following inputs that were not provided:")
             for item in missing:
                 print(f"  - {item}")
-            print("\nEither provide the required input files or specify a dataset path (--pharmit_path or --plinder_path).")
+            print("Either provide the required input files or specify a dataset path (--pharmit_path or --plinder_path).")
             sys.exit(1)
     
-    if 'protein_identity' in task.groups_fixed and not has_ligand:
-        print("Warning: Protein-conditioned task detected but no reference ligand provided.")
-        print("The system will use the protein center of mass instead of the reference ligand center of mass.")
-        print("Consider providing a reference ligand file (--ligand_file) for better results.")
+    return has_protein, has_ligand, has_pharmacophore, has_pocket_ligand_file, pocket_definition
 
 
 def run_sample(args):
-    from routines.sample import main as sample_main
-    import torch
     from omtra.tasks.register import task_name_to_class
     from omtra.utils.checkpoints import get_checkpoint_path_for_task, TASK_TO_CHECKPOINT
     
@@ -218,26 +288,51 @@ def run_sample(args):
             sys.exit(1)
         args.checkpoint = checkpoint_path
     
-    has_protein, has_ligand, has_pharmacophore = _check_available_files(args)
+    has_protein, has_ligand, has_pharmacophore, has_pocket_ligand_file, pocket_definition = _validate_task_inputs(args, task)
     
-    # Validate inputs
-    if not task.unconditional:
-        _validate_task_inputs(args, task, has_protein, has_ligand, has_pharmacophore)
+    # validate --use_gt_n_lig_atoms: requires pocket ligand 
+    if args.use_gt_n_lig_atoms:
+        if not has_pocket_ligand_file:
+            print("Error: --use_gt_n_lig_atoms requires a pocket ligand, but no pocket ligand was passed.")
+            sys.exit(1)
     
     # create graphs from files
-    if args.protein_file or args.ligand_file or args.pharmacophore_file:
+    if args.protein_file or args.ligand_file or args.pocket is not None or args.pharmacophore_file:
+        import torch
         from omtra.utils.file_to_graph import create_conditional_graphs_from_files
         
         device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         
+        if pocket_definition is not None and pocket_definition.get('type') == 'center':
+            if 'bbox_length' not in pocket_definition:
+                pocket_definition['bbox_length'] = args.bbox_length
+            args.pocket_center = pocket_definition['value']
+        else:
+            args.pocket_center = None
+        
         g_list = create_conditional_graphs_from_files(
             protein_file=args.protein_file,
-            ligand_file=args.ligand_file, 
+            ligand_file=args.ligand_file,
+            pocket_definition=pocket_definition,
             pharmacophore_file=args.pharmacophore_file,
             task=task,
             n_samples=1,  # 1 graph from the input file
-            device=device
+            device=device,
         )
+        
+        if pocket_definition and not args.pocket_center:
+            import numpy as np
+            pocket_type = pocket_definition.get('type')
+            if pocket_type == 'file':
+                from omtra.utils.file_to_graph import load_ligand_rdkit
+                coords = load_ligand_rdkit(pocket_definition['value'], compute_condensed=False).coords
+                if isinstance(coords, torch.Tensor):
+                    coords = coords.cpu().numpy()
+                args.pocket_center = np.mean(coords, axis=0).tolist()
+            elif pocket_type == 'residues' and g_list:
+                coords = g_list[0].nodes['prot_atom'].data.get('x_1_true')
+                if coords is not None:
+                    args.pocket_center = coords.mean(dim=0).cpu().numpy().tolist()
         
         # When using input files: 1 system, n_samples is the number of replicates
         args.n_replicates = args.n_samples
@@ -245,6 +340,7 @@ def run_sample(args):
         
         args.g_list_from_files = g_list
     
+    from routines.sample import main as sample_main
     sample_main(args)
 
 
