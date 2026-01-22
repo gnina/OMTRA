@@ -9,6 +9,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 from typing import Dict, Optional, Set, Tuple, List
+import scipy.stats as stats
 
 from omtra.data.plinder import StructureData, BackboneData, LigandData
 
@@ -354,5 +355,52 @@ def compute_ligand_groups(n_lig_atoms: int):
         return 1
     
     #using sqrt x as a function
-    n_groups = max(2, min(int(np.sqrt(n_lig_atoms))))
+    n_groups = max(2, min(50, int(np.sqrt(n_lig_atoms))))
     return n_groups
+
+def compute_distribution_statistics(coords):
+    """
+    Compute multiple statistics to characterize coordinate distribution.
+    
+    Parameters
+    ----------
+    coords : np.ndarray
+        Atom coordinates (shape: (N, 3))
+    
+    Returns
+    -------
+    dict
+        Dictionary of distribution statistics
+    """
+    # Compute geometric center
+    center = np.mean(coords, axis=0)
+    
+    # Compute distances from center
+    distances = np.linalg.norm(coords - center, axis=1)
+    
+    # Compute various statistics
+    stats_dict = {
+        # Central tendency measures
+        'mean_distance': np.mean(distances),
+        'median_distance': np.median(distances),
+        
+        # Spread measures
+        'std_distance': np.std(distances),
+        'iqr_distance': np.percentile(distances, 75) - np.percentile(distances, 25),
+        
+        # Asymmetry measures
+        'skewness': stats.skew(distances),
+        'quartile_asymmetry': (
+            np.percentile(distances, 75) - np.percentile(distances, 50)
+        ) - (
+            np.percentile(distances, 50) - np.percentile(distances, 25)
+        ),
+        
+        # Tail behavior
+        'max_distance': np.max(distances),
+        'min_distance': np.min(distances),
+        '90th_percentile': np.percentile(distances, 90),
+        '10th_percentile': np.percentile(distances, 10)
+    }
+    
+    return stats_dict
