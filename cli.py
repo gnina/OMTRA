@@ -357,6 +357,15 @@ def run_sample(args):
 
 
 def main():
+    # Check if user wants to run a subcommand
+    if len(sys.argv) > 1 and sys.argv[1] == 'mol2pharm':
+        # Run mol2pharm subcommand
+        from omtra.scripts.mol2pharm import main as mol2pharm_main
+        # Remove 'mol2pharm' from sys.argv and run
+        sys.argv.pop(1)
+        sys.exit(mol2pharm_main())
+    
+    # Otherwise, run the main sampling CLI
     parser = create_parser()
     args = parser.parse_args()
     
