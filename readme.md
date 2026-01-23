@@ -179,21 +179,13 @@ For conditional generation tasks, you can provide input structures directly:
 | `--protein_file` | path | Protein structure file (PDB or CIF format) |
 | `--ligand_file` | path | Ligand structure file (SDF format) |
 | `--pharmacophore_file` | path | Pharmacophore file (JSON from Pharmit, XYZ, or SDF format) |
-| `--pocket` | string | Define binding pocket (see [Pocket Definition](#pocket-definition)) |
+| | | **Pocket definition (choose one):** |
+| `--pocket_ligand` | path | Path to reference ligand file (SDF) to define pocket around ligand atoms |
+| `--pocket_center` | string | Pocket center coordinates as 'x,y,z' |
+| `--pocket_residues` | string | Pocket residues as 'CHAIN:RESID,CHAIN:START-END' (e.g., 'A:123-125,B:200') |
+| `--bbox_length` | float | Bounding box length (Angstroms) when using `--pocket_center` (default: 23.0) |
 
 When input files are provided, `--n_samples` specifies how many samples to generate for that single input system.
-
-### Pocket Definition
-
-The `--pocket` argument defines the protein binding site using one of three formats:
-
-| Format | Example | Description |
-|--------|---------|-------------|
-| `ligand:` | `--pocket ligand:ref.sdf` | Extract pocket around ligand atoms (8 Å cutoff) |
-| `center:` | `--pocket center:10.5,20.3,15.2` | Use bounding box around coordinates |
-| `residues:` | `--pocket residues:A:123-125,B:200` | Use specific residues as pocket |
-
-For `center:` format, use `--bbox_length` to control the bounding box size (default: 23 Å)
 
 ### Advanced Sampling Options
 
@@ -271,7 +263,7 @@ Using a reference ligand to define the pocket:
 ```bash
 omtra --task fixed_protein_ligand_denovo_condensed \
   --protein_file my_protein.pdb \
-  --pocket ligand:reference_ligand.sdf \
+  --pocket_ligand reference_ligand.sdf \
   --n_samples 50 \
   --output_dir outputs/sbdd_samples
 ```
@@ -280,7 +272,7 @@ Using coordinates to define the pocket center:
 ```bash
 omtra --task fixed_protein_ligand_denovo_condensed \
   --protein_file my_protein.pdb \
-  --pocket center:10.5,20.3,15.2 \
+  --pocket_center 10.5,20.3,15.2 \
   --bbox_length 25.0 \
   --n_samples 50 \
   --output_dir outputs/sbdd_samples
@@ -290,7 +282,7 @@ Using specific residues to define the pocket:
 ```bash
 omtra --task fixed_protein_ligand_denovo_condensed \
   --protein_file my_protein.pdb \
-  --pocket residues:A:123-130,A:200,B:50-55 \
+  --pocket_residues A:123-130,A:200,B:50-55 \
   --n_samples 50 \
   --output_dir outputs/sbdd_samples
 ```

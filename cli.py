@@ -142,16 +142,24 @@ def create_parser():
         default=None,
         help="Path to ligand structure file (SDF) for ligand-conditioned tasks"
     )
-    parser.add_argument(
-        "--pocket",
+    pocket_group = parser.add_mutually_exclusive_group()
+    pocket_group.add_argument(
+        "--pocket_ligand",
+        type=Path,
+        default=None,
+        help="Path to reference ligand file (SDF) to define pocket around ligand atoms"
+    )
+    pocket_group.add_argument(
+        "--pocket_center",
         type=str,
         default=None,
-        help=(
-            "Define the pocket using one of three formats: "
-            "1) 'ligand:path/to/ligand.sdf' - use a reference ligand, "
-            "2) 'center:x,y,z' - use center coordinates (also set --bbox_length, default 23.0), "
-            "3) 'residues:A:123-125,B:200' - list specific residues. "
-        )
+        help="Pocket center coordinates as 'x,y,z' (also set --bbox_length, default 23.0)"
+    )
+    pocket_group.add_argument(
+        "--pocket_residues",
+        type=str,
+        default=None,
+        help="Pocket residues as 'CHAIN:RESID,CHAIN:START-END' (e.g., 'A:123-125,B:200')"
     )
     parser.add_argument(
         "--pharmacophore_file",
@@ -163,40 +171,40 @@ def create_parser():
         "--bbox_length",
         type=float,
         default=23.0,
-        help="Bounding box length (Angstroms) when using --pocket center:x,y,z. Default: 23.0"
+        help="Bounding box length (Angstroms) when using --pocket_center. Default: 23.0"
     )
     return parser
 
 
-def _parse_pocket_argument(pocket_arg: str):
-    if not pocket_arg:
-        return None
+def _build_pocket_definition(pocket_ligand, pocket_center, pocket_residues, bbox_length):
+    """Build pocket_definition dict from separate CLI arguments."""
+    # Argparse enforces mutual exclusivity, so at most one will be provided
+    if pocket_ligand is not None:
+        return {'type': 'file', 'value': Path(pocket_ligand)}
     
-    if pocket_arg.startswith('ligand:'):
-        file_path = pocket_arg[7:]
-        if not file_path:
-            raise ValueError("'ligand:' requires a file path")
-        return {'type': 'file', 'value': Path(file_path)}
-    
-    if pocket_arg.startswith('center:'):
-        parts = [x.strip() for x in pocket_arg[7:].split(',')]
+    if pocket_center is not None:
+        parts = [x.strip() for x in pocket_center.split(',')]
         if len(parts) != 3:
-            raise ValueError(f"'center:' expects exactly 3 values (x,y,z), got {len(parts)}")
+            raise ValueError(f"--pocket_center expects exactly 3 values (x,y,z), got {len(parts)}")
         try:
-            return {'type': 'center', 'value': [float(p) for p in parts]}
+            center_coords = [float(p) for p in parts]
+            pocket_def = {'type': 'center', 'value': center_coords}
+            if bbox_length is not None:
+                pocket_def['bbox_length'] = bbox_length
+            return pocket_def
         except ValueError:
-            raise ValueError(f"'center:' coordinates must be numbers")
+            raise ValueError(f"--pocket_center coordinates must be numbers")
     
-    if pocket_arg.startswith('residues:'):
-        residues_str = pocket_arg[9:]
-        if not residues_str:
-            raise ValueError("'residues:' requires residue specifications")
+    if pocket_residues is not None:
+        if not pocket_residues:
+            raise ValueError("--pocket_residues requires residue specifications")
         
         residue_specs = []
-        for spec in residues_str.split(','):
+        for spec in pocket_residues.split(','):
+            spec = spec.strip()
             if ':' not in spec:
                 raise ValueError(f"Expected 'CHAIN:RESID', got '{spec}'")
-            chain, res_part = spec.strip().split(':', 1)
+            chain, res_part = spec.split(':', 1)
             try:
                 if '-' in res_part:
                     start, end = map(int, res_part.split('-'))
@@ -210,9 +218,7 @@ def _parse_pocket_argument(pocket_arg: str):
             raise ValueError("No valid residues specified")
         return {'type': 'residues', 'value': residue_specs}
     
-    raise ValueError(
-        f"Pocket must start with 'ligand:', 'center:', or 'residues:'. Got: '{pocket_arg}'"
-    )
+    return None
 
 
 def _validate_task_inputs(args, task):
@@ -222,11 +228,16 @@ def _validate_task_inputs(args, task):
     has_dataset_path = args.pharmit_path is not None or args.plinder_path is not None
     
     pocket_definition = None
-    if args.pocket is not None:
+    if args.pocket_ligand is not None or args.pocket_center is not None or args.pocket_residues is not None:
         try:
-            pocket_definition = _parse_pocket_argument(args.pocket)
+            pocket_definition = _build_pocket_definition(
+                args.pocket_ligand,
+                args.pocket_center,
+                args.pocket_residues,
+                args.bbox_length
+            )
         except ValueError as e:
-            print(f"Error parsing --pocket argument: {e}")
+            print(f"Error parsing pocket arguments: {e}")
             sys.exit(1)
     
     if task.unconditional:
@@ -249,7 +260,7 @@ def _validate_task_inputs(args, task):
         missing.append("pharmacophore file (--pharmacophore_file)")
     if 'protein_identity' in required and not has_dataset_path and not has_pocket_definition:
         missing.append(
-            "pocket definition (--pocket ligand:..., --pocket center:x,y,z, or --pocket residues:CHAIN:RESID,...)"
+            "pocket definition (--pocket_ligand, --pocket_center, or --pocket_residues)"
         )
     
     if missing:
@@ -297,7 +308,8 @@ def run_sample(args):
             sys.exit(1)
     
     # create graphs from files
-    if args.protein_file or args.ligand_file or args.pocket is not None or args.pharmacophore_file:
+    has_pocket_arg = args.pocket_ligand is not None or args.pocket_center is not None or args.pocket_residues is not None
+    if args.protein_file or args.ligand_file or has_pocket_arg or args.pharmacophore_file:
         import torch
         from omtra.utils.file_to_graph import create_conditional_graphs_from_files
         
