@@ -235,25 +235,33 @@ Pre-trained weights: `omtra/trained_models/`
 - Use for: development, testing, code changes
 
 **cluster** (experiment machine):
-- Path: TBD (update when known)
-- Conda env: TBD
-- Pharmit data: full dataset available
+- Path: `/net/galaxy/home/koes/icd3/moldiff/OMTRA`
+- Conda env: `omtra`
+- Pharmit data: `data/pharmit`
 - Use for: training runs, computing marginals, experiments
-- SLURM commands: TBD
+- SLURM: `sbatch --array=1-N train_multigpu_2.slurm train_cmds.txt`
 
 ### Current Session Handoff
 
 **Branch**: `noisy-paths-stage1`
 
-**Next steps for cluster**:
-1. Pull the branch: `git fetch && git checkout noisy-paths-stage1`
-2. Compute marginals (requires full pharmit data):
-   ```bash
-   python omtra_pipelines/compute_marginals/compute_marginals.py \
-       --pharmit_path /path/to/pharmit --split train
-   ```
-3. Run Stage 1 vs Stage 2 comparison experiments
-4. Report results back
+**Date**: 2026-01-24
+
+**Training runs in progress** (SLURM job 51893727):
+- `noisy_stage1_uniform` (array task 2): Stage 1 with α=0.15 (~3.75% max corruption)
+- `noisy_stage2_marginal` (array task 3): Stage 2 with α=0.15 (~3.75% max corruption)
+- `noisy_stage1_alpha32` (array task 4): Stage 1 with α=0.32 (8% max corruption)
+
+**Baseline already ran**: `noisy_baseline` completed ~99k steps (job 51893591_3)
+
+**Next steps (for another session)**:
+1. Implement Stage 4: Corruption classification head
+   - Add auxiliary head to predict which tokens are corrupted vs clean
+   - Train jointly with main denoising objective
+   - Use predictions to guide remasking at inference
+2. Implement Stage 5: Modified sampling with corruption-aware remasking
+   - At inference, use corruption head predictions to identify likely errors
+   - Remask high-confidence corrupted tokens and resample
 
 ---
 
@@ -268,7 +276,7 @@ Pre-trained weights: `omtra/trained_models/`
 | 1 | **Uniform corruption**: Replace some unmasked tokens with uniform samples during training | Implemented | `noisy-paths-stage1` |
 | 2 | **Data-marginal corruption**: Use empirical token distribution instead of uniform | Implemented | `noisy-paths-stage1` |
 | 3 | **Model-induced corruption**: Sample from current denoiser to create corruptions | Planned | - |
-| 4 | **Corruption classification head**: Add head to classify clean vs corrupted tokens | Planned | - |
+| 4 | **Corruption classification head**: Add head to classify clean vs corrupted tokens | **Next** | - |
 | 5 | **Modified sampling**: Follow three-way marginal path at inference | Planned | - |
 
 **Three-way conditional path**:
@@ -282,13 +290,34 @@ where `β_t = α·t·(1-t)` and `p_corrupt` varies by stage:
 
 **Key files**:
 - `omtra/models/conditional_paths/paths.py`: Core three-way path implementation
-- `configs/model/conditional_paths/noisy.yaml`: Config to enable noisy paths
+- `configs/model/conditional_paths/noisy.yaml`: Stage 1 config (α=0.15, ~3.75% max)
+- `configs/model/conditional_paths/noisy_marginal.yaml`: Stage 2 config (α=0.15)
+- `configs/model/conditional_paths/noisy_alpha32.yaml`: Higher corruption config (α=0.32, 8% max)
 - `docs/noisy_paths.md`: Detailed documentation
+
+**Corruption level math**:
+- `β_t = noise_alpha * t * (1-t)` peaks at t=0.5
+- `β_max = noise_alpha * 0.25`
+- α=0.15 → 3.75% max corruption
+- α=0.32 → 8% max corruption
 
 **Training with noisy paths**:
 ```bash
+# Stage 1 (uniform corruption, default α=0.15)
 python routines/train.py model/conditional_paths=noisy name=noisy_experiment ...
+
+# Stage 2 (data-marginal corruption)
+python routines/train.py model/conditional_paths=noisy_marginal name=noisy_experiment ...
+
+# Stage 1 with higher corruption (α=0.32, 8% max)
+python routines/train.py model/conditional_paths=noisy_alpha32 name=noisy_experiment ...
 ```
+
+**Command file**: `noisy_paths_cmds.txt` - 4 training commands (no comments, array-friendly)
+- Line 1: baseline (no noisy paths)
+- Line 2: stage1 uniform (α=0.15)
+- Line 3: stage2 marginal (α=0.15)
+- Line 4: stage1 alpha32 (α=0.32)
 
 **Pharmit zarr structure** (for computing marginals):
 ```
@@ -306,3 +335,21 @@ python routines/train.py model/conditional_paths=noisy name=noisy_experiment ...
 ```
 
 **Note**: Edge data is sparse—only stores non-zero bond orders. For marginal computation, must estimate fraction of "no bond" (type 0) edges from graph structure.
+
+### Stage 4 Implementation Notes (for next session)
+
+**Corruption classification head design**:
+1. Add binary classification head parallel to categorical prediction heads in `vector_field.py`
+2. For each discrete token position, predict P(corrupted | x_t, t)
+3. Ground truth: track which tokens were corrupted during `sample_xt()` in paths.py
+4. Loss: binary cross-entropy, weighted to handle class imbalance (most tokens are clean)
+
+**Key integration points**:
+- `omtra/models/conditional_paths/paths.py`: Already tracks corruption via `is_corrupted` mask in `sample_xt()`
+- `omtra/models/vector_field.py`: Add new MLP head for corruption prediction
+- `omtra/models/omtra.py`: Add corruption classification loss to training_step
+
+**Inference changes** (Stage 5):
+- During sampling, use corruption head to identify likely errors
+- Remask tokens where P(corrupted) > threshold
+- Continue denoising from remasked state
