@@ -888,9 +888,14 @@ class OMTRA(pl.LightningModule):
                     atom_mask_old = g_i_copy.nodes['lig'].data['atom_mask_1_true'].bool()
 
                     n_fixed_atoms = atom_mask_old.sum().item()
-                    atom_mask_new = torch.zeros(n_lig_atoms[g_idx], dtype=torch.bool, device=g_i.device) 
+                    atom_mask_new = torch.zeros(n_lig_atoms[g_idx], dtype=torch.bool, device=g_i.device)
                     atom_mask_new[:n_fixed_atoms] = True
                     g_i.nodes['lig'].data['atom_mask_1_true'] = atom_mask_new.long()
+
+                    # Create mapping from old atom indices to new atom indices
+                    # Fixed atoms in old graph are reindexed to [0, 1, 2, ..., n_fixed_atoms-1] in new graph
+                    old_to_new_atom_idx = torch.full((atom_mask_old.shape[0],), -1, dtype=torch.long, device=g_i.device)
+                    old_to_new_atom_idx[atom_mask_old] = torch.arange(n_fixed_atoms, device=g_i.device)
 
                     src, dst = edge_idxs
                     edge_mask_new = atom_mask_new[src] & atom_mask_new[dst]
@@ -900,12 +905,29 @@ class OMTRA(pl.LightningModule):
                     edge_mask_old = atom_mask_old[src_old] & atom_mask_old[dst_old]
                     g_i.edges['lig_to_lig'].data['edge_mask_1_true'] = edge_mask_new.long()
 
+                    # Map old edges to new edges using atom index mapping
+                    src_old_fixed = src_old[edge_mask_old]
+                    dst_old_fixed = dst_old[edge_mask_old]
+                    src_new_mapped = old_to_new_atom_idx[src_old_fixed]
+                    dst_new_mapped = old_to_new_atom_idx[dst_old_fixed]
+
                     for m_name in task.partial_modalities_fixed:
                         m = name_to_modality(m_name)
                         if m.is_node:
                             g_i.nodes['lig'].data[f"{m.data_key}_1_true"][atom_mask_new] = g_i_copy.nodes['lig'].data[f"{m.data_key}_1_true"][atom_mask_old]
                         else:
-                            g_i.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][edge_mask_new] = g_i_copy.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][edge_mask_old]
+                            # Need to find where each old edge maps to in the new edge list
+                            # Build mapping from (src, dst) pairs to edge indices in new graph
+                            edge_to_idx_new = {}
+                            for idx, (s, d) in enumerate(zip(src, dst)):
+                                edge_to_idx_new[(s.item(), d.item())] = idx
+
+                            # Copy edge data using the correct mapping
+                            old_edge_data = g_i_copy.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][edge_mask_old]
+                            for i, (s_new, d_new) in enumerate(zip(src_new_mapped, dst_new_mapped)):
+                                new_edge_idx = edge_to_idx_new.get((s_new.item(), d_new.item()))
+                                if new_edge_idx is not None:
+                                    g_i.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][new_edge_idx] = old_edge_data[i]
         
         add_pharm = "pharmacophore" in groups_generated
         if protein_present and add_pharm:
