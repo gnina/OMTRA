@@ -411,10 +411,7 @@ class OMTRA(pl.LightningModule):
         if self.distort_p > 0.0:
             t_mask = (t > self.distort_t)[node_batch_idxs["lig"]]
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
-            if "lig_x" in task_class.partial_modalities_fixed:
-                distort_mask = distort_mask & t_mask.unsqueeze(-1) & (~g.nodes["lig"].data['atom_mask_1_true'].unsqueeze(-1)) # don't apply geometry distortion to fixed atoms if ligand coordinate modality is partially fixed
-            else: 
-                distort_mask = distort_mask & t_mask.unsqueeze(-1)
+            distort_mask = distort_mask & t_mask.unsqueeze(-1)
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
         
         # add noise to pharmacophore coordinates
@@ -893,12 +890,6 @@ class OMTRA(pl.LightningModule):
                     n_fixed_atoms = atom_mask_old.sum().item()
                     atom_mask_new = torch.zeros(n_lig_atoms[g_idx], dtype=torch.bool, device=g_i.device) 
                     atom_mask_new[:n_fixed_atoms] = True
-
-                    # if n_lig_atoms[g_idx].item() > atom_mask_old.shape[0]:
-                    #     atom_pad = torch.zeros(n_lig_atoms[g_idx].item() - atom_mask_old.shape[0], dtype=torch.bool, device=atom_mask_old.device)
-                    #     atom_mask_new = torch.cat([atom_mask_old, atom_pad])
-                    # else:
-                    #     atom_mask_new = atom_mask_old[:n_lig_atoms[g_idx].item()]
                     g_i.nodes['lig'].data['atom_mask_1_true'] = atom_mask_new.long()
 
                     src, dst = edge_idxs
@@ -912,14 +903,9 @@ class OMTRA(pl.LightningModule):
                     for m_name in task.partial_modalities_fixed:
                         m = name_to_modality(m_name)
                         if m.is_node:
-                            dks = [dk for dk in g.nodes['lig'].data.keys() if m.data_key in dk]
-                            for dk in dks:
-                                g_i.nodes['lig'].data[dk][atom_mask_new] = g_i_copy.nodes['lig'].data[dk][atom_mask_old]
+                            g_i.nodes['lig'].data[f"{m.data_key}_1_true"][atom_mask_new] = g_i_copy.nodes['lig'].data[f"{m.data_key}_1_true"][atom_mask_old]
                         else:
-                            dks = [dk for dk in g.edges['lig_to_lig'].data.keys() if m.data_key in dk]
-                            for dk in dks:
-                                g_i.edges['lig_to_lig'].data[dk][edge_mask_new] = g_i_copy.edges['lig_to_lig'].data[dk][edge_mask_old]
-
+                            g_i.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][edge_mask_new] = g_i_copy.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][edge_mask_old]
         
         add_pharm = "pharmacophore" in groups_generated
         if protein_present and add_pharm:
@@ -991,16 +977,6 @@ class OMTRA(pl.LightningModule):
             data_src = g.nodes[m.entity_name] if m.is_node else g.edges[m.entity_name]
             dk = m.data_key
             data_src.data[f"{dk}_t"] = data_src.data[f"{dk}_0"]
-
-            if m.name in task.partial_modalities_fixed:
-                if m.is_node:
-                    mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
-                    gt_labels = g.nodes[m.entity_name].data[f'{m.data_key}_1_true']
-                else:
-                    # Take upper triangle for edge modalities
-                    mask = g.edges[m.entity_name].data['edge_mask_1_true'].bool()
-                    gt_labels = g.edges[m.entity_name].data[f'{m.data_key}_1_true']
-                data_src.data[f"{dk}_t"][mask] = gt_labels[mask]
 
         # set x_1_true to x_t for modalities fixed
         for m in task.modalities_fixed:

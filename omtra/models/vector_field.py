@@ -39,6 +39,7 @@ from omtra.data.graph.utils import get_batch_idxs
 from omtra.utils.graph import g_local_scope
 from omtra.data.graph.layout import GraphLayout
 from omtra.models.embeddings.pos_embed import get_pos_embedding
+from omtra.models.embeddings.fixed_cond_embed import FixedConditionEmbedder
 from omtra.models.adaln import AdaLNWeightGenerator
 
 from omtra.priors.align import rigid_alignment
@@ -68,6 +69,12 @@ class VectorField(nn.Module):
         res_id_embed_dim: int = 64,
         pos_emb: bool = False,
         n_pre_gvp_convs: int = 1,
+        fixed_coord_max_std: float = 0.0,
+        fixed_coord_std: Optional[float] = None,
+        fixed_atom_max_prob: float = 0.0,
+        fixed_atom_prob: Optional[float] = None,
+        fixed_edge_max_prob: float = 0.0,
+        fixed_edge_prob: Optional[float] = None,
         transformer_cfg: Optional[DictConfig] = _default_transformer_cfg,
     ):
         super().__init__()
@@ -84,6 +91,13 @@ class VectorField(nn.Module):
         self.has_mask = has_mask
         self.fake_atoms = fake_atoms
         self.pos_emb = pos_emb
+        
+        self.fixed_coord_max_std = fixed_coord_max_std
+        self.fixed_coord_std = fixed_coord_std
+        self.fixed_atom_max_prob = fixed_atom_max_prob
+        self.fixed_atom_prob = fixed_atom_prob
+        self.fixed_edge_max_prob = fixed_edge_max_prob
+        self.fixed_edge_prob = fixed_edge_prob
 
         self.rbf_dmax = rbf_dmax
         self.rbf_dim = rbf_dim
@@ -107,15 +121,19 @@ class VectorField(nn.Module):
         ]
         modality_present_space = set()
         modality_generated_space = set()
+        partial_modality_fixed_space = set()
         for task_class in task_classes:
             for m in task_class.modalities_fixed:
                 modality_present_space.add(m.name)
             for m in task_class.modalities_generated:
                 modality_present_space.add(m.name)
                 modality_generated_space.add(m.name)
+            for m in task_class.partial_modalities_fixed:
+                partial_modality_fixed_space.add(m)
 
         modality_present_space = sorted(list(modality_present_space))
         modality_generated_space = sorted(list(modality_generated_space))
+        partial_modality_fixed_space = sorted(list(partial_modality_fixed_space))
 
         modalities_present_cls = [
             name_to_modality(modality_name) for modality_name in modality_present_space
@@ -124,6 +142,25 @@ class VectorField(nn.Module):
             name_to_modality(modality_name)
             for modality_name in modality_generated_space
         ]
+        partial_modality_fixed_cls = [
+            name_to_modality(modality_name)
+            for modality_name in partial_modality_fixed_space
+        ]
+
+        self.fixed_cond_embedder = FixedConditionEmbedder(
+            partial_modality_fixed_cls=partial_modality_fixed_cls,
+            token_dim=self.token_dim,
+            n_hidden_scalars=self.n_hidden_scalars,
+            n_hidden_edge_feats=self.n_hidden_edge_feats,
+            fake_atoms=self.fake_atoms,
+            res_id_embed_dim=res_id_embed_dim,
+            fixed_coord_max_std=self.fixed_coord_max_std,
+            fixed_coord_std=self.fixed_coord_std,
+            fixed_atom_max_prob=self.fixed_atom_max_prob,
+            fixed_atom_prob=self.fixed_atom_prob,
+            fixed_edge_max_prob=self.fixed_edge_max_prob,
+            fixed_edge_prob=self.fixed_edge_prob,
+            )
 
         # get the set of all nodes present in our graphs
         self.node_types = set(
@@ -494,6 +531,14 @@ class VectorField(nn.Module):
             node_scalar_features[ntype] = self.scalar_embedding[ntype](
                 cat_feats
             )
+        
+        # add embeddings for fixed atoms/edges
+        fixed_node_features, fixed_edge_features = self.fixed_cond_embedder(g, task_class)
+        for ntype in fixed_node_features.keys():
+            node_scalar_features[ntype] = node_scalar_features[ntype] + fixed_node_features[ntype]
+        for etype in fixed_edge_features.keys():
+            edge_features[etype] = edge_features[etype] + fixed_edge_features[etype]
+        # TODO: layer norm after add?
 
         if self.pos_emb:
             for ntype in node_scalar_features.keys():
@@ -747,28 +792,10 @@ class VectorField(nn.Module):
                 continue
             if m.data_key == "x":
                 node_pos = node_positions[m.entity_name]
-                # masking for fixed partial modalities of fixed fragments
-                if m.name in task_class.partial_modalities_fixed:
-                    mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
-                    gt_pos = g.nodes[m.entity_name].data['x_1_true']
-                    node_pos[mask] = gt_pos[mask]
                 dst_dict[m.name] = node_pos
 
             elif m.is_categorical:
                 dst_dict[m.name] = logits[m.name]
-
-                # masking for fixed partial modalities of fixed fragments
-                if m.name in task_class.partial_modalities_fixed:
-                    if m.is_node:
-                        mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
-                        gt_labels = g.nodes[m.entity_name].data[f'{m.data_key}_1_true']
-                    else:
-                        # Take upper triangle for edge modalities
-                        mask = g.edges[m.entity_name].data['edge_mask_1_true'][upper_edge_mask[m.entity_name]].bool()
-                        gt_labels = g.edges[m.entity_name].data[f'{m.data_key}_1_true'][upper_edge_mask[m.entity_name]]
-                    one_hot = torch.zeros_like(dst_dict[m.name])
-                    one_hot[torch.arange(dst_dict[m.name].size(0), device=dst_dict[m.name].device), gt_labels] = 1.0
-                    dst_dict[m.name][mask] = one_hot[mask]
                 if apply_softmax:
                     dst_dict[m.name] = torch.softmax(
                         dst_dict[m.name], dim=-1
@@ -942,19 +969,6 @@ class VectorField(nn.Module):
                 extract_latents_for_confidence=extract_latents_for_confidence,
                 **kwargs,
             )
-
-            if len(task.partial_modalities_fixed) > 0:
-                for m_name in task.partial_modalities_fixed:
-                    m = name_to_modality(m_name)
-                    if m.is_node:
-                        data_src = g.nodes['lig']
-                        mask = data_src.data['atom_mask_1_true'].bool()
-                    else:
-                        data_src = g.edges['lig_to_lig']
-                        mask = data_src.data['edge_mask_1_true'].bool()
-                
-                    data_src.data[f"{m.data_key}_t"][mask] = data_src.data[f"{m.data_key}_1_true"][mask]
-                    data_src.data[f"{m.data_key}_1_pred"][mask] = data_src.data[f"{m.data_key}_1_true"][mask]
 
             if visualize:
                 add_frame(g)

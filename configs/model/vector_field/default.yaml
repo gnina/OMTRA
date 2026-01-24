@@ -29,3 +29,6 @@ use_dst_feats:                 false
 dst_feat_msg_reduction_factor: 4
 rebuild_edges:                 true
 res_id_embed_dim:              64
+fixed_coord_max_std:           ${fixed_coord_max_std}
+fixed_atom_max_prob:           ${fixed_atom_max_prob}
+fixed_edge_max_prob:           ${fixed_edge_max_prob}
