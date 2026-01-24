@@ -622,9 +622,15 @@ class OMTRA(pl.LightningModule):
             alpha_t_modality = alpha_t[modality_name][batch_idxs].unsqueeze(-1)
             beta_t_modality = beta_t[modality_name][batch_idxs].unsqueeze(-1)
 
-            data_src[modality.entity_name].data[f"{dk}_t"] = conditional_path_fn(
+            # Conditional path functions return (x_t, is_corrupted) tuple
+            x_t, is_corrupted = conditional_path_fn(
                 source, target, alpha_t_modality, beta_t_modality
             )
+            data_src[modality.entity_name].data[f"{dk}_t"] = x_t
+
+            # Store corruption mask for discrete modalities (used by corruption classification head)
+            if is_corrupted is not None:
+                data_src[modality.entity_name].data[f"{dk}_is_corrupted"] = is_corrupted
 
         # for all modalities held fixed, convert the true values to the current time
         for modality in task_class.modalities_fixed:
@@ -660,6 +666,9 @@ class OMTRA(pl.LightningModule):
         n_lig_atom_margin: Union[float, None] = None,
         n_lig_atoms_mean: Union[float, None] = None,
         n_lig_atoms_std: Union[float, None] = None,
+        # Stage 5: Corruption-aware remasking
+        corruption_remasking: bool = False,
+        corruption_threshold: float = 0.5,
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
@@ -943,7 +952,16 @@ class OMTRA(pl.LightningModule):
         # the only reason i'm allowing it to be none by default and manually adding it in
         # is that i don't want to define a default number of timesteps in more than one palce
         # it is already defined as default arg to VectorField.integrate
-        itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing, stochastic_sampling=stochastic_sampling, noise_scaler=noise_scaler, eps=eps)
+        itg_kwargs = dict(
+            visualize=visualize,
+            extract_latents_for_confidence=extract_latents_for_confidence,
+            time_spacing=time_spacing,
+            stochastic_sampling=stochastic_sampling,
+            noise_scaler=noise_scaler,
+            eps=eps,
+            corruption_remasking=corruption_remasking,
+            corruption_threshold=corruption_threshold,
+        )
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
 
@@ -1004,6 +1022,9 @@ class OMTRA(pl.LightningModule):
         noise_scaler: float = 1.0,
         eps: float = 0.01,
         n_lig_atom_margin: Union[float, None] = None,
+        # Stage 5: Corruption-aware remasking
+        corruption_remasking: bool = False,
+        corruption_threshold: float = 0.5,
     ) -> List[SampledSystem]:
         
         n_samples = len(g_list) if g_list is not None else 1
@@ -1038,6 +1059,8 @@ class OMTRA(pl.LightningModule):
                                             noise_scaler=noise_scaler,
                                             eps=eps,
                                             n_lig_atom_margin=n_lig_atom_margin,
+                                            corruption_remasking=corruption_remasking,
+                                            corruption_threshold=corruption_threshold,
                                             )
                 # re-order samples
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):
@@ -1061,6 +1084,8 @@ class OMTRA(pl.LightningModule):
                                             noise_scaler=noise_scaler,
                                             eps=eps,
                                             n_lig_atom_margin=n_lig_atom_margin,
+                                            corruption_remasking=corruption_remasking,
+                                            corruption_threshold=corruption_threshold,
                                             )
 
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):
