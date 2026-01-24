@@ -226,6 +226,35 @@ Pre-trained weights: `omtra/trained_models/`
 - CUDA 12.1 recommended
 - Install via `./build_env.sh` or Docker
 
+### Machine-Specific Info
+
+**masuda** (dev machine):
+- Path: `/home/ian/projects/mol_diffusion/OMTRA`
+- Conda env: `omtra`
+- Pharmit data: `data/pharmit` (may not exist locally)
+- Use for: development, testing, code changes
+
+**cluster** (experiment machine):
+- Path: TBD (update when known)
+- Conda env: TBD
+- Pharmit data: full dataset available
+- Use for: training runs, computing marginals, experiments
+- SLURM commands: TBD
+
+### Current Session Handoff
+
+**Branch**: `noisy-paths-stage1`
+
+**Next steps for cluster**:
+1. Pull the branch: `git fetch && git checkout noisy-paths-stage1`
+2. Compute marginals (requires full pharmit data):
+   ```bash
+   python omtra_pipelines/compute_marginals/compute_marginals.py \
+       --pharmit_path /path/to/pharmit --split train
+   ```
+3. Run Stage 1 vs Stage 2 comparison experiments
+4. Report results back
+
 ---
 
 ## Active Research: Noisy Paths Experiment
