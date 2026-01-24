@@ -905,7 +905,8 @@ class OMTRA(pl.LightningModule):
                         edge_idx_map_new[(s.item(), d.item())] = idx
 
                     # Get fixed edge mask for old ligand
-                    src_old, dst_old = build_lig_edge_idxs(atom_mask_old.shape[0]).to(g_i.device)
+                    n_gt_lig_atoms =  atom_mask_old.shape[0] - n_fake_atoms_gt[g_idx]
+                    src_old, dst_old = build_lig_edge_idxs(n_gt_lig_atoms).to(g_i.device)
                     edge_mask_old = atom_mask_old[src_old] & atom_mask_old[dst_old]
                     src_old_fixed = src_old[edge_mask_old]      # fixed src atoms in old ligand
                     dst_old_fixed = dst_old[edge_mask_old]      # fixed dst atoms in old ligand
