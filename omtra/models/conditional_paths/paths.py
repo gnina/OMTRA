@@ -31,7 +31,8 @@ def sample_continuous_interpolant(
             "i didn't think we would model continuous edge features"
         )
 
-    return x_t
+    # Return tuple for consistency with ctmc_mask (no corruption for continuous)
+    return x_t, None
 
 
 @register_conditional_path("ctmc_mask")
@@ -80,7 +81,9 @@ def sample_masked_ctmc(
                      (e.g., 'lig_cond_a_marginal' or 'lig_e_marginal').
 
     Returns:
-        x_t: Corrupted tokens at time t
+        Tuple of:
+            x_t: Corrupted tokens at time t
+            is_corrupted: Boolean mask indicating which tokens were corrupted (None if noise_alpha=0)
     """
     alpha_t = alpha_t.squeeze(-1)
     beta_t = beta_t.squeeze(-1)
@@ -90,6 +93,7 @@ def sample_masked_ctmc(
         x_t = x_1.clone()
         mask = torch.rand_like(x_t.float()) < alpha_t
         x_t[mask] = x_0[mask]
+        is_corrupted = None
     else:
         # Three-way path with corruption
         noise_t = noise_alpha * beta_t * alpha_t
@@ -107,6 +111,10 @@ def sample_masked_ctmc(
 
         # Tokens that get corrupted (noise)
         corrupt_tokens = rand >= (prob_mask + prob_target)
+
+        # Track which tokens are corrupted for the classification head
+        is_corrupted = corrupt_tokens.clone()
+
         if corrupt_tokens.any():
             n_corrupt = corrupt_tokens.sum().item()
 
@@ -135,7 +143,10 @@ def sample_masked_ctmc(
 
     if ue_mask is not None:
         x_t[~ue_mask] = x_t[ue_mask]
+        # For edges, also symmetrize the corruption mask
+        if is_corrupted is not None:
+            is_corrupted[~ue_mask] = is_corrupted[ue_mask]
 
-    return x_t
+    return x_t, is_corrupted
 
 

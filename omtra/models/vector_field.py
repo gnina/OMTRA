@@ -384,6 +384,26 @@ class VectorField(nn.Module):
                 nn.Linear(n_hidden_edge_feats, m.n_categories),
             )
 
+        # Corruption classification heads (Stage 4 of noisy paths experiment)
+        # Binary classifiers to predict which tokens were corrupted during training
+        self.node_corruption_heads = nn.ModuleDict()
+        self.edge_corruption_heads = nn.ModuleDict()
+        for m in modalities_generated_cls:
+            if not m.is_categorical:
+                continue
+            if m.graph_entity == "node":
+                self.node_corruption_heads[m.name] = nn.Sequential(
+                    nn.Linear(n_hidden_scalars, n_hidden_scalars),
+                    nn.SiLU(),
+                    nn.Linear(n_hidden_scalars, 1),  # Binary classification
+                )
+            elif m.graph_entity == "edge":
+                self.edge_corruption_heads[m.name] = nn.Sequential(
+                    nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
+                    nn.SiLU(),
+                    nn.Linear(n_hidden_edge_feats, 1),  # Binary classification
+                )
+
         if self.self_conditioning:
             # raise NotImplementedError("Self conditioning not implemented yet")
             self.self_conditioning_residual_layer = SelfConditioningResidualLayer(
@@ -755,12 +775,18 @@ class VectorField(nn.Module):
             )
 
         logits = {}
+        corruption_logits = {}
         for m in task_class.modalities_generated:
             if m.is_node and m.is_categorical:
                 ntype = m.entity_name
                 logits[m.name] = self.node_output_heads[m.name](
                     node_scalar_features[ntype]
                 )
+                # Corruption classification prediction
+                if m.name in self.node_corruption_heads:
+                    corruption_logits[m.name] = self.node_corruption_heads[m.name](
+                        node_scalar_features[ntype]
+                    ).squeeze(-1)  # (n_nodes,)
             elif not m.is_node and m.is_categorical:
                 etype = m.entity_name
                 ue_feats = edge_features[etype][upper_edge_mask[etype]]
@@ -768,6 +794,11 @@ class VectorField(nn.Module):
                 logits[m.name] = self.edge_output_heads[m.name](
                     ue_feats + le_feats
                 )
+                # Corruption classification prediction for edges
+                if m.name in self.edge_corruption_heads:
+                    corruption_logits[m.name] = self.edge_corruption_heads[m.name](
+                        ue_feats + le_feats
+                    ).squeeze(-1)  # (n_upper_edges,)
 
         # project node positions back into zero-COM subspace
         if remove_com:
@@ -813,6 +844,9 @@ class VectorField(nn.Module):
                     dst_dict[m.name] = torch.softmax(
                         dst_dict[m.name], dim=-1
                     )
+                # Add corruption classification logits if available
+                if m.name in corruption_logits:
+                    dst_dict[f"{m.name}_corruption_logits"] = corruption_logits[m.name]
             elif m.data_key == "v":
                 ntype = m.entity_name
                 s_in = node_scalar_features[ntype]
@@ -880,6 +914,8 @@ class VectorField(nn.Module):
         visualize=False,
         extract_latents_for_confidence=False,
         time_spacing: str = "even",
+        corruption_remasking: bool = False,
+        corruption_threshold: float = 0.5,
         **kwargs,
     ):
         # TODO: adapt flowmol integrate for hetero version
@@ -980,6 +1016,8 @@ class VectorField(nn.Module):
                 last_step=last_step,
                 prev_dst_dict=dst_dict,
                 extract_latents_for_confidence=extract_latents_for_confidence,
+                corruption_remasking=corruption_remasking,
+                corruption_threshold=corruption_threshold,
                 **kwargs,
             )
 
@@ -1047,6 +1085,8 @@ class VectorField(nn.Module):
         stochastic_sampling: bool = False,
         noise_scaler: float = 1.0,
         eps: float = 0.01,
+        corruption_remasking: bool = False,
+        corruption_threshold: float = 0.5,
     ):
         device = g.device
 
@@ -1197,6 +1237,55 @@ class VectorField(nn.Module):
 
             data_src[f"{m.data_key}_t"] = xt
             data_src[f"{m.data_key}_1_pred"] = x_1_sampled
+
+        # Stage 5: Corruption-aware remasking
+        # If enabled, check corruption predictions and remask tokens predicted as corrupted
+        if corruption_remasking and not last_step:
+            for m in categorical_modalities:
+                corruption_key = f"{m.name}_corruption_logits"
+                if corruption_key not in dst_dict:
+                    continue
+
+                if m.is_node:
+                    if g.num_nodes(m.entity_name) == 0:
+                        continue
+                    data_src = g.nodes[m.entity_name].data
+                else:
+                    if g.num_edges(m.entity_name) == 0:
+                        continue
+                    data_src = g.edges[m.entity_name].data
+
+                # Get corruption probabilities
+                corruption_logits = dst_dict[corruption_key]
+                corruption_probs = torch.sigmoid(corruption_logits)
+
+                # Get current tokens
+                xt = data_src[f"{m.data_key}_t"]
+
+                # Determine mask index
+                has_fake_atoms = self.fake_atoms and m.name in ['lig_a', 'lig_cond_a']
+                mask_index = m.n_categories + int(has_fake_atoms)
+
+                # For edges, we only have predictions for upper edges
+                if not m.is_node:
+                    ue_mask = upper_edge_mask[m.entity_name]
+                    xt_upper = xt[ue_mask]
+
+                    # Identify tokens to remask (high corruption probability AND not already masked)
+                    should_remask = (corruption_probs > corruption_threshold) & (xt_upper != mask_index)
+
+                    # Apply remasking
+                    xt_upper[should_remask] = mask_index
+
+                    # Symmetrize back to full edge tensor
+                    xt[ue_mask] = xt_upper
+                    xt[~ue_mask] = xt_upper
+                    data_src[f"{m.data_key}_t"] = xt
+                else:
+                    # For nodes, directly apply remasking
+                    should_remask = (corruption_probs > corruption_threshold) & (xt != mask_index)
+                    xt[should_remask] = mask_index
+                    data_src[f"{m.data_key}_t"] = xt
 
         return g, dst_dict
     

@@ -255,13 +255,14 @@ Pre-trained weights: `omtra/trained_models/`
 **Baseline already ran**: `noisy_baseline` completed ~99k steps (job 51893591_3)
 
 **Next steps (for another session)**:
-1. Implement Stage 4: Corruption classification head
-   - Add auxiliary head to predict which tokens are corrupted vs clean
-   - Train jointly with main denoising objective
-   - Use predictions to guide remasking at inference
-2. Implement Stage 5: Modified sampling with corruption-aware remasking
-   - At inference, use corruption head predictions to identify likely errors
-   - Remask high-confidence corrupted tokens and resample
+1. ~~Implement Stage 4: Corruption classification head~~ **DONE**
+2. ~~Implement Stage 5: Corruption-aware remasking~~ **DONE**
+3. Run experiments comparing:
+   - Baseline (no noisy paths)
+   - Stage 1/2 (noisy paths, no corruption head)
+   - Stage 4 (noisy paths + corruption head training)
+   - Stage 5 (noisy paths + corruption-aware remasking at inference)
+4. Implement Stage 3: Model-induced corruption (optional, if Stages 4/5 don't help enough)
 
 ---
 
@@ -276,8 +277,8 @@ Pre-trained weights: `omtra/trained_models/`
 | 1 | **Uniform corruption**: Replace some unmasked tokens with uniform samples during training | Implemented | `noisy-paths-stage1` |
 | 2 | **Data-marginal corruption**: Use empirical token distribution instead of uniform | Implemented | `noisy-paths-stage1` |
 | 3 | **Model-induced corruption**: Sample from current denoiser to create corruptions | Planned | - |
-| 4 | **Corruption classification head**: Add head to classify clean vs corrupted tokens | **Next** | - |
-| 5 | **Modified sampling**: Follow three-way marginal path at inference | Planned | - |
+| 4 | **Corruption classification head**: Add head to classify clean vs corrupted tokens | Implemented | `noisy-paths-stage1` |
+| 5 | **Modified sampling**: Corruption-aware remasking at inference | Implemented | `noisy-paths-stage1` |
 
 **Three-way conditional path**:
 ```
@@ -289,10 +290,13 @@ where `β_t = α·t·(1-t)` and `p_corrupt` varies by stage:
 - Stage 3: denoiser's own predictions
 
 **Key files**:
-- `omtra/models/conditional_paths/paths.py`: Core three-way path implementation
+- `omtra/models/conditional_paths/paths.py`: Core three-way path implementation (returns corruption masks)
+- `omtra/models/vector_field.py`: Corruption classification heads (`node_corruption_heads`, `edge_corruption_heads`)
+- `omtra/aux_losses/corruption.py`: Corruption classification loss function
 - `configs/model/conditional_paths/noisy.yaml`: Stage 1 config (α=0.15, ~3.75% max)
 - `configs/model/conditional_paths/noisy_marginal.yaml`: Stage 2 config (α=0.15)
 - `configs/model/conditional_paths/noisy_alpha32.yaml`: Higher corruption config (α=0.32, 8% max)
+- `configs/model/aux_losses/corruption.yaml`: Corruption classification loss config
 - `docs/noisy_paths.md`: Detailed documentation
 
 **Corruption level math**:
@@ -311,6 +315,9 @@ python routines/train.py model/conditional_paths=noisy_marginal name=noisy_exper
 
 # Stage 1 with higher corruption (α=0.32, 8% max)
 python routines/train.py model/conditional_paths=noisy_alpha32 name=noisy_experiment ...
+
+# Stage 4 (noisy paths + corruption classification head)
+python routines/train.py model/conditional_paths=noisy model/aux_losses=corruption name=noisy_stage4 ...
 ```
 
 **Command file**: `noisy_paths_cmds.txt` - 4 training commands (no comments, array-friendly)
@@ -336,20 +343,57 @@ python routines/train.py model/conditional_paths=noisy_alpha32 name=noisy_experi
 
 **Note**: Edge data is sparse—only stores non-zero bond orders. For marginal computation, must estimate fraction of "no bond" (type 0) edges from graph structure.
 
-### Stage 4 Implementation Notes (for next session)
+### Stage 4 Implementation (Completed)
 
-**Corruption classification head design**:
-1. Add binary classification head parallel to categorical prediction heads in `vector_field.py`
-2. For each discrete token position, predict P(corrupted | x_t, t)
-3. Ground truth: track which tokens were corrupted during `sample_xt()` in paths.py
-4. Loss: binary cross-entropy, weighted to handle class imbalance (most tokens are clean)
+**Training with corruption classification head**:
+```bash
+# Stage 4: Noisy paths + corruption classification head
+python routines/train.py \
+    model/conditional_paths=noisy \
+    model/aux_losses=corruption \
+    name=noisy_stage4 ...
+```
 
-**Key integration points**:
-- `omtra/models/conditional_paths/paths.py`: Already tracks corruption via `is_corrupted` mask in `sample_xt()`
-- `omtra/models/vector_field.py`: Add new MLP head for corruption prediction
-- `omtra/models/omtra.py`: Add corruption classification loss to training_step
+**Implementation summary**:
+1. `paths.py`: `sample_masked_ctmc()` now returns `(x_t, is_corrupted)` tuple
+2. `omtra.py`: `sample_conditional_path()` stores corruption masks in graph data
+3. `vector_field.py`: Added `node_corruption_heads` and `edge_corruption_heads` ModuleDicts
+4. `corruption.py`: New auxiliary loss with BCE + positive class weighting
 
-**Inference changes** (Stage 5):
-- During sampling, use corruption head to identify likely errors
-- Remask tokens where P(corrupted) > threshold
-- Continue denoising from remasked state
+**Configuration**:
+- `configs/model/aux_losses/corruption.yaml`: Default config (weight=1.0, pos_weight=10.0)
+- `pos_weight` handles class imbalance (most tokens are clean)
+
+**Data flow**:
+1. During training, `sample_masked_ctmc()` creates corruption mask
+2. Mask stored in graph: `g.nodes['lig'].data['a_is_corrupted']` (and edges)
+3. Vector field predicts: `dst_dict['lig_cond_a_corruption_logits']`
+4. Loss computes BCE between predictions and ground truth
+
+### Stage 5 Implementation (Completed)
+
+**Sampling with corruption-aware remasking**:
+```python
+# In Python
+sampled_systems = model.sample(
+    task_name="fixed_protein_ligand_denovo_condensed",
+    g_list=graphs,
+    corruption_remasking=True,      # Enable Stage 5 remasking
+    corruption_threshold=0.5,        # P(corrupted) threshold for remasking
+)
+```
+
+**How it works**:
+1. After each integration step, check corruption predictions for discrete tokens
+2. For tokens where `sigmoid(corruption_logits) > threshold`, reset to mask token
+3. This gives those tokens another chance to be correctly predicted
+4. Remasking is skipped on the last step (tokens must be finalized)
+
+**Key files**:
+- `vector_field.py`: `step()` applies remasking after categorical updates
+- `vector_field.py`: `integrate()` passes remasking params through
+- `omtra.py`: `sample()` and `sample_in_batches()` accept remasking params
+
+**Parameters**:
+- `corruption_remasking` (bool): Enable/disable corruption-aware remasking
+- `corruption_threshold` (float): Probability threshold (default 0.5). Lower = more aggressive remasking
