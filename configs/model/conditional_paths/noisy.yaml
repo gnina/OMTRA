@@ -1,0 +1,62 @@
+# Noisy paths experiment (Stage 1): Uniform corruption of unmasked tokens
+#
+# This config enables the three-way conditional path for discrete modalities:
+#   p_t(x | x_1) = (t - β_t/2) δ_{x_1}(x) + β_t p_uniform(x) + (1 - t - β_t/2) δ_mask(x)
+#
+# where β_t = noise_alpha * t * (1-t), peaking at t=0.5 and zero at boundaries.
+#
+# This trains the model to be robust to incorrect unmasked tokens, addressing
+# the train-test gap where inference-time states include denoiser errors.
+#
+# Reference: noisy_paths.zip research plan, Stage 1
+
+# Override for all tasks that use ctmc_mask on discrete ligand modalities
+# noise_alpha=0.15 gives ~3.75% uniform corruption at t=0.5
+
+denovo_ligand_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+
+fixed_protein_ligand_denovo_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+
+rigid_docking_condensed:
+  # Docking only generates ligand positions, not identity
+  # No discrete modalities to corrupt
+
+ligand_conformer_condensed:
+  # Conformer generation only generates ligand positions, not identity
+  # No discrete modalities to corrupt
+
+denovo_ligand_from_pharmacophore_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+
+fixed_protein_pharmacophore_ligand_denovo_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
