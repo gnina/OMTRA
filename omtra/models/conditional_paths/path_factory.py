@@ -18,17 +18,24 @@ def get_conditional_path_fns(
     conditional_path_fn_output = {}
     for modality in task_cls.modalities_generated:
         try:
+            # Handle None config or missing task/modality keys
+            if conditional_path_config is None:
+                raise KeyError("conditional_path_config is None")
             conditional_path_fn_key = conditional_path_config[task_cls.name][
                 modality.name
             ]["type"]
-        except KeyError:
+        except (KeyError, TypeError):
+            # Fall back to task class defaults
             conditional_path_fn_key = task_cls.conditional_paths[modality.name]["type"]
 
         try:
+            if conditional_path_config is None:
+                raise KeyError("conditional_path_config is None")
             conditional_path_params = conditional_path_config[task_cls.name][
                 modality.name
             ]["params"]
-        except KeyError:
+        except (KeyError, TypeError):
+            # Fall back to task class defaults
             conditional_path_params = task_cls.conditional_paths[modality.name].get(
                 "params", {}
             )
