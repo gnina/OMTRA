@@ -1,0 +1,81 @@
+# Noisy paths experiment (Stage 2): Data-marginal corruption of unmasked tokens
+#
+# This extends Stage 1 by replacing uniform corruption with samples from
+# the empirical data marginal distribution. This better approximates the
+# structure of realistic denoiser mistakes (biased toward frequent tokens).
+#
+# Prerequisites:
+#   1. Compute marginals using the pipeline:
+#      python omtra_pipelines/compute_marginals/compute_marginals.py \
+#          --pharmit_path data/pharmit --split train
+#   2. This creates data/pharmit/train_marginals.npz
+#
+# Reference: noisy_paths.zip research plan, Stage 2
+
+# Default marginals path (relative to working directory)
+# Override with: model.conditional_paths.marginal_path=/path/to/marginals.npz
+_marginal_path: &marginal_path ${pharmit_path}/train_marginals.npz
+
+denovo_ligand_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+      marginal_path: *marginal_path
+      marginal_key: lig_cond_a_marginal
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+      marginal_path: *marginal_path
+      marginal_key: lig_e_marginal
+
+fixed_protein_ligand_denovo_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+      marginal_path: *marginal_path
+      marginal_key: lig_cond_a_marginal
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+      marginal_path: *marginal_path
+      marginal_key: lig_e_marginal
+
+rigid_docking_condensed:
+  # Docking only generates ligand positions, not identity
+  # No discrete modalities to corrupt
+
+ligand_conformer_condensed:
+  # Conformer generation only generates ligand positions, not identity
+  # No discrete modalities to corrupt
+
+denovo_ligand_from_pharmacophore_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+      marginal_path: *marginal_path
+      marginal_key: lig_cond_a_marginal
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+      marginal_path: *marginal_path
+      marginal_key: lig_e_marginal
+
+fixed_protein_pharmacophore_ligand_denovo_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+      marginal_path: *marginal_path
+      marginal_key: lig_cond_a_marginal
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.15
+      marginal_path: *marginal_path
+      marginal_key: lig_e_marginal
