@@ -1,0 +1,16 @@
+# Corruption classification auxiliary loss (Stage 4 of noisy paths experiment)
+# Use with noisy paths (model/conditional_paths=noisy or noisy_marginal)
+#
+# This loss trains the model to predict which tokens were corrupted during
+# the three-way conditional path. At inference, these predictions can guide
+# remasking of likely errors.
+#
+# The pos_weight parameter controls class imbalance handling:
+# - Higher values (10-20) make the model more sensitive to detecting corruption
+# - Lower values (1-5) reduce false positives but may miss actual corruption
+# - Default of 10.0 works well for typical corruption rates (3-8%)
+
+corruption_classification:
+  params:
+    weight: 1.0
+    pos_weight: 10.0
