@@ -970,7 +970,7 @@ class OMTRA(pl.LightningModule):
                     ntype="pharm",
                 )
 
-        # TODO: batch the graphs
+        # TODO: batch the graphs 
         g = dgl.batch(g_flat).to(device)
         com_batch = torch.stack(coms_flat, dim=0).to(device)
 
