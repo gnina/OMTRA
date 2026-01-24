@@ -1,0 +1,52 @@
+# Noisy paths experiment with noise_alpha=0.32 (max beta_t = 8%)
+#
+# β_t = noise_alpha * t * (1-t)
+# At t=0.5: β_max = 0.32 * 0.25 = 0.08 (8% corruption)
+
+denovo_ligand_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.32
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.32
+
+fixed_protein_ligand_denovo_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.32
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.32
+
+rigid_docking_condensed:
+  # Docking only generates ligand positions, not identity
+  # No discrete modalities to corrupt
+
+ligand_conformer_condensed:
+  # Conformer generation only generates ligand positions, not identity
+  # No discrete modalities to corrupt
+
+denovo_ligand_from_pharmacophore_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.32
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.32
+
+fixed_protein_pharmacophore_ligand_denovo_condensed:
+  lig_cond_a:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.32
+  lig_e_condensed:
+    type: ctmc_mask
+    params:
+      noise_alpha: 0.32
