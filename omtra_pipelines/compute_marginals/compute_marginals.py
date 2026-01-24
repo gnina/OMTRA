@@ -38,6 +38,7 @@ def compute_marginals(
     output_path: str = None,
     n_samples: int = None,
     chunk_size: int = 10000,
+    sample_ranges: list = None,
     verbose: bool = True,
 ):
     """
@@ -49,6 +50,7 @@ def compute_marginals(
         output_path: Where to save the marginals (.npz file)
         n_samples: Number of molecules to sample (None = all)
         chunk_size: Number of molecules to process per batch
+        sample_ranges: List of (start, end) tuples for sampling specific ranges
         verbose: Print progress
 
     Returns:
@@ -62,13 +64,22 @@ def compute_marginals(
     root = zarr.open(store=store, mode='r')
 
     # Get dataset size
-    n_graphs = root['lig/node/graph_lookup'].shape[0]
-    if n_samples is not None:
-        n_graphs = min(n_graphs, n_samples)
+    n_graphs_total = root['lig/node/graph_lookup'].shape[0]
+
+    # Build list of ranges to process
+    if sample_ranges is not None:
+        ranges_to_process = [(s, min(e, n_graphs_total)) for s, e in sample_ranges]
+        n_graphs = sum(e - s for s, e in ranges_to_process)
+    elif n_samples is not None:
+        n_graphs = min(n_graphs_total, n_samples)
+        ranges_to_process = [(0, n_graphs)]
+    else:
+        n_graphs = n_graphs_total
+        ranges_to_process = [(0, n_graphs)]
 
     if verbose:
         print(f"Computing marginals from {zarr_path}")
-        print(f"Processing {n_graphs:,} molecules")
+        print(f"Processing {n_graphs:,} molecules from {len(ranges_to_process)} ranges")
 
     # Initialize condensed atom typer
     cond_a_typer = CondensedAtomTyper(fake_atoms=False)
@@ -95,11 +106,15 @@ def compute_marginals(
     node_extra = root['lig/node/extra_feats']
     edge_e = root['lig/edge/e']
 
-    pbar = tqdm(range(0, n_graphs, chunk_size), disable=not verbose, desc="Processing molecules")
+    # Build iterator over all chunk positions across ranges
+    chunk_positions = []
+    for range_start, range_end in ranges_to_process:
+        for pos in range(range_start, range_end, chunk_size):
+            chunk_positions.append((pos, min(pos + chunk_size, range_end)))
 
-    for chunk_start in pbar:
-        chunk_end = min(chunk_start + chunk_size, n_graphs)
+    pbar = tqdm(chunk_positions, disable=not verbose, desc="Processing molecules")
 
+    for chunk_start, chunk_end in pbar:
         # Get node slice indices for this chunk
         node_slices = node_lookup[chunk_start:chunk_end]
 
