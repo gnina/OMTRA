@@ -7,6 +7,8 @@ from typing import List
 
 class Task:
 
+    partial_modalities_fixed: List[str] = []
+
     @classproperty
     def groups_present(self):
         return self.groups_fixed + self.groups_generated
