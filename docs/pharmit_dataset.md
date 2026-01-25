@@ -1,6 +1,6 @@
 # Pharmit Dataset
 
-Where is the pharmit dataset? How do we download it? Somebody tell us please!!!!
+> **⚠️ Note:** December 6th 2025: We are going to uplaoad the Pharmit Dataset to a public server in a few days. Below is documentation for when it is available.
 
 The pharmit dataset is available for independent use separate from OMTRA. The dataset class can be found under `pharmit_utils/pharmit.py`. An instance of the `PharmitDataset` class can be configured to return RDKit molecules or a dictionary of tensors.
 
