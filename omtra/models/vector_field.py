@@ -76,6 +76,7 @@ class VectorField(nn.Module):
         fixed_edge_max_prob: float = 0.0,
         fixed_edge_prob: Optional[float] = None,
         transformer_cfg: Optional[DictConfig] = _default_transformer_cfg,
+        pharm_pos_std_flag: bool = False,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -98,6 +99,10 @@ class VectorField(nn.Module):
         self.fixed_atom_prob = fixed_atom_prob
         self.fixed_edge_max_prob = fixed_edge_max_prob
         self.fixed_edge_prob = fixed_edge_prob
+        self.pharm_pos_std_flag = pharm_pos_std_flag
+
+        # self.convs_per_update = convs_per_update
+        # self.n_molecule_updates = n_molecule_updates
 
         self.rbf_dmax = rbf_dmax
         self.rbf_dim = rbf_dim
@@ -234,6 +239,9 @@ class VectorField(nn.Module):
             input_dim = n_cat_feats * token_dim # + self.time_embedding_dim + self.task_embedding_dim
             if res_id_embed_dim is not None and ntype == 'prot_atom':
                 input_dim += res_id_embed_dim
+            if self.pharm_pos_std_flag and ntype == 'pharm':
+                input_dim += 1
+
 
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
@@ -519,6 +527,11 @@ class VectorField(nn.Module):
 
         # get time embedding
         t_emb = self.time_embedder(t)
+
+        # if pharm noising, add pharm pos stddev to node scalar features
+        if 'pharm' in node_scalar_features and self.pharm_pos_std_flag and g.num_nodes('pharm') > 0:
+            pharm_stddev = g.nodes['pharm'].data['pharm_pos_std']
+            node_scalar_features['pharm'].append(pharm_stddev)
 
         # construct global conditioning tensor (time + task)
         global_conditioning = self.c_proj(torch.cat([task_embedding_batch, t_emb], dim=-1))
