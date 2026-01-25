@@ -37,7 +37,6 @@ class PharmitDataset(ZarrDataset):
         self.use_fake_atoms = fake_atom_p > 0
         self.max_pharms_sampled = max_pharms_sampled
 
-
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
         # dists_dict = np.load(dists_file)
 
@@ -86,6 +85,8 @@ class PharmitDataset(ZarrDataset):
         # check if this task includes condensed atom typing
         condensed_atom_typing = 'ligand_identity_condensed' in task_class.groups_present
 
+        partial_modality_conditioning = len(task_class.partial_modalities_fixed) > 0
+
         # slice lig node data
         xace_dict = {}
         start_idx, end_idx = self.slice_array('lig/node/graph_lookup', idx)
@@ -114,6 +115,18 @@ class PharmitDataset(ZarrDataset):
             del xace_dict['a']
             del xace_dict['c']
 
+        if partial_modality_conditioning:
+            frags = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)[:, -1]
+            frag_ids = np.unique(frags)
+            n_frags = frag_ids.shape[0]
+
+            if n_frags <= 1:
+                fixed_frags = []
+            else:
+                # Uniformly sample between 1 and # frags-1 fragments to fix 
+                num_frags_fixed = np.random.randint(1, n_frags)
+                fixed_frags = np.random.choice(frag_ids, size=num_frags_fixed, replace=False)
+            xace_dict['fixed_atom_mask'] = torch.from_numpy(np.isin(frags, fixed_frags).astype(np.int64))
             
         # get slice indicies for ligand-ligand edges
         edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)
@@ -124,6 +137,9 @@ class PharmitDataset(ZarrDataset):
         xace_dict['e'] = self.slice_array('lig/edge/e', start_idx, end_idx)
         xace_dict['edge_idxs'] = self.slice_array('lig/edge/edge_index', start_idx, end_idx)
 
+        if partial_modality_conditioning:
+            xace_dict['fixed_edge_mask'] = (xace_dict['fixed_atom_mask'][xace_dict['edge_idxs'][:, 0]] 
+                                            & xace_dict['fixed_atom_mask'][xace_dict['edge_idxs'][:, 1]]).long()
 
         # convert to torch tensors and set data types
         for k in xace_dict:
@@ -190,6 +206,10 @@ class PharmitDataset(ZarrDataset):
         g_edge_idxs = {
             'lig_to_lig': xace_ligand.edge_idxs,
         }
+
+        if partial_modality_conditioning:
+            g_node_data['lig']['atom_mask_1_true'] = xace_ligand.fixed_atom_mask
+            g_edge_data['lig_to_lig']['edge_mask_1_true'] = xace_ligand.fixed_edge_mask
 
         # if this task includes pharmacophore data, then we need to slice and add that data to the graph
         if include_pharmacophore:
