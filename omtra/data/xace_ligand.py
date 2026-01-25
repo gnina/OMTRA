@@ -35,6 +35,9 @@ class MolXACE:
 
     cond_a: Optional[Union[np.ndarray, torch.Tensor]] = None    # condensed atom typing
 
+    fixed_atom_mask: Optional[Union[np.ndarray, torch.Tensor]] = None # atom mask for fixed fragments
+    fixed_edge_mask: Optional[Union[np.ndarray, torch.Tensor]] = None # edge mask for fixed fragments
+
     edge_idxs: Optional[Union[np.ndarray, torch.Tensor]] = None   # corresponds to edge index (upper triangular edges)
     tcv_counts: Optional[dict] = None
     failure_mode: Optional[str] = None
@@ -71,12 +74,22 @@ class MolXACE:
         edge_idxs = torch.cat((upper_edge_idxs, lower_edge_idxs), dim=1)
         bond_types = torch.cat((upper_edge_labels, upper_edge_labels))
 
+        fixed_edge_mask = None
+
+        if self.fixed_edge_mask is not None:
+            fixed_adj = torch.zeros((n_atoms, n_atoms), dtype=self.fixed_edge_mask.dtype)
+            fixed_adj[self.edge_idxs[:, 0], self.edge_idxs[:, 1]] = self.fixed_edge_mask.long()
+            upper_fixed_mask = fixed_adj[upper_edge_idxs[0],upper_edge_idxs[1]]
+            fixed_edge_mask = torch.cat((upper_fixed_mask, upper_fixed_mask), dim=0)
+       
         if self.cond_a is not None:     # condensed atom typing
             dense_xace = MolXACE(
                 x=self.x,
                 cond_a=self.cond_a,
                 e=bond_types,
-                edge_idxs=edge_idxs
+                edge_idxs=edge_idxs,
+                fixed_atom_mask=self.fixed_atom_mask,
+                fixed_edge_mask=fixed_edge_mask
             )
 
         elif self.impl_H is not None:   # Extra features
@@ -90,7 +103,9 @@ class MolXACE:
                 ring=self.ring,
                 chiral=self.chiral,
                 e=bond_types,
-                edge_idxs=edge_idxs
+                edge_idxs=edge_idxs,
+                fixed_atom_mask=self.fixed_atom_mask,
+                fixed_edge_mask=fixed_edge_mask
             )
 
         else:                       # regular 
@@ -99,9 +114,11 @@ class MolXACE:
                 a=self.a,
                 c=self.c,
                 e=bond_types,
-                edge_idxs=edge_idxs
+                edge_idxs=edge_idxs,
+                fixed_atom_mask=self.fixed_atom_mask,
+                fixed_edge_mask=fixed_edge_mask
             )
-            
+
         return dense_xace
 
 
@@ -267,6 +284,9 @@ def add_fake_atoms(mol: MolXACE, fake_atom_p: float, cond_a_typer: CondensedAtom
                 new_feat = torch.cat((old_feat, fake_atom_feats), dim=0)    
                 setattr(mol, extra_feat, new_feat)      # Add fake atom extra features
     
+    if mol.fixed_atom_mask is not None: # partial modality conditioning
+        fake_atom_fixed_mask = torch.zeros_like(mol.fixed_atom_mask[anchor_atom_idxs])
+        mol.fixed_atom_mask = torch.cat((mol.fixed_atom_mask, fake_atom_fixed_mask), dim=0)
     return mol
 
 
