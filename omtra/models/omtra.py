@@ -892,38 +892,56 @@ class OMTRA(pl.LightningModule):
                     atom_mask_new[:n_fixed_atoms] = True
                     g_i.nodes['lig'].data['atom_mask_1_true'] = atom_mask_new.long()
 
-                    # Create mapping from old atom indices to new atom indices
+                    # Create vectorized mapping from old atom indices to new atom indices
                     fixed_atoms_old = torch.where(atom_mask_old)[0]
-                    fixed_atom_map = { old_idx.item(): new_idx for new_idx, old_idx in enumerate(fixed_atoms_old)}
-                
-                    src, dst = edge_idxs
-                    edge_mask_new = atom_mask_new[src] & atom_mask_new[dst]
-                    g_i.edges['lig_to_lig'].data['edge_mask_1_true'] = edge_mask_new.long()
-                    # Create mapping from (src, dst) pairs to edge idx in new ligand
-                    edge_idx_map_new = {}
-                    for idx, (s, d) in enumerate(zip(src, dst)):
-                        edge_idx_map_new[(s.item(), d.item())] = idx
+                    old_to_new = torch.zeros(atom_mask_old.shape[0], dtype=torch.long, device=g_i.device)
+                    old_to_new[fixed_atoms_old] = torch.arange(n_fixed_atoms, device=g_i.device)
 
-                    # Get fixed edge mask for old ligand
-                    n_gt_lig_atoms =  atom_mask_old.shape[0] - n_fake_atoms_gt[g_idx]
+                    # Get edge indices for old graph (edges don't include fake atoms)
+                    n_gt_lig_atoms = atom_mask_old.shape[0] - n_fake_atoms_gt[g_idx]
                     src_old, dst_old = build_lig_edge_idxs(n_gt_lig_atoms).to(g_i.device)
-                    edge_mask_old = atom_mask_old[src_old] & atom_mask_old[dst_old]
-                    src_old_fixed = src_old[edge_mask_old]      # fixed src atoms in old ligand
-                    dst_old_fixed = dst_old[edge_mask_old]      # fixed dst atoms in old ligand
 
-                    # Map index of old edges to index of new edges
-                    edge_lookup = {}
-                    for i, (s, d) in enumerate(zip(src_old_fixed, dst_old_fixed)):
-                        edge_lookup[i] = edge_idx_map_new[(fixed_atom_map[s.item()], fixed_atom_map[d.item()])] 
-        
+                    # Use original graph's edge_mask_1_true, which marks fixed edges in the old graph
+                    # (not all edges in the dense fully-connected graph)
+                    edge_mask_old = g_i_copy.edges['lig_to_lig'].data['edge_mask_1_true'].bool()
+                    src_old_fixed = src_old[edge_mask_old]
+                    dst_old_fixed = dst_old[edge_mask_old]
+
+                    # Map old fixed edge endpoints to new atom indices
+                    src_new_from_old = old_to_new[src_old_fixed]
+                    dst_new_from_old = old_to_new[dst_old_fixed]
+
+                    # Compute edge indices in new graph using build_lig_edge_idxs ordering:
+                    # Upper triangle edges first, then lower triangle edges
+                    n_new = n_lig_atoms[g_idx].item()
+                    n_upper_new = n_new * (n_new - 1) // 2
+                    is_upper = src_new_from_old < dst_new_from_old
+
+                    # Upper triangle formula: src*n - src*(src+1)//2 + dst - src - 1
+                    upper_idx = (src_new_from_old * n_new
+                                 - (src_new_from_old * (src_new_from_old + 1)) // 2
+                                 + dst_new_from_old - src_new_from_old - 1)
+
+                    # Lower triangle: offset + corresponding upper triangle index (with src/dst swapped)
+                    lower_upper_idx = (dst_new_from_old * n_new
+                                       - (dst_new_from_old * (dst_new_from_old + 1)) // 2
+                                       + src_new_from_old - dst_new_from_old - 1)
+                    lower_idx = n_upper_new + lower_upper_idx
+
+                    edge_indices_new = torch.where(is_upper, upper_idx, lower_idx)
+
+                    # Set edge_mask_1_true for new graph (marking which edges are fixed bonds)
+                    edge_mask_new_bonds = torch.zeros(g_i.num_edges('lig_to_lig'), dtype=torch.long, device=g_i.device)
+                    edge_mask_new_bonds[edge_indices_new] = 1
+                    g_i.edges['lig_to_lig'].data['edge_mask_1_true'] = edge_mask_new_bonds
+
                     for m_name in task.partial_modalities_fixed:
                         m = name_to_modality(m_name)
                         if m.is_node:
                             g_i.nodes['lig'].data[f"{m.data_key}_1_true"][atom_mask_new] = g_i_copy.nodes['lig'].data[f"{m.data_key}_1_true"][atom_mask_old]
                         else:
                             old_data = g_i_copy.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][edge_mask_old]
-                            for old_edge_idx, new_edge_idx  in edge_lookup.items():
-                                g_i.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][new_edge_idx] = old_data[old_edge_idx]
+                            g_i.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][edge_indices_new] = old_data
         
         add_pharm = "pharmacophore" in groups_generated
         if protein_present and add_pharm:
