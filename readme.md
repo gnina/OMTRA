@@ -25,6 +25,7 @@ OMTRA is described in our preprint: [https://arxiv.org/abs/2512.05080](https://a
   - [CLI Reference](#cli-reference)
   - [Available Tasks](#available-tasks)
   - [CLI Examples](#cli-examples)
+  - [Pharmacophore File Formats](#pharmacophore-file-formats)
   - [Web Application](#omtra-web-application)
 - [Training](#training)
 - [Additional Documentation](#additional-documentation)
@@ -178,7 +179,12 @@ For conditional generation tasks, you can provide input structures directly:
 |----------|------|-------------|
 | `--protein_file` | path | Protein structure file (PDB or CIF format) |
 | `--ligand_file` | path | Ligand structure file (SDF format) |
-| `--pharmacophore_file` | path | Pharmacophore constraints file (XYZ format) |
+| `--pharmacophore_file` | path | Pharmacophore file (JSON from Pharmit, XYZ, or SDF format) |
+| | | **Pocket definition (choose one):** |
+| `--pocket_ligand` | path | Path to reference ligand file (SDF) to define pocket around ligand atoms |
+| `--pocket_center` | string | Pocket center coordinates as 'x,y,z' |
+| `--pocket_residues` | string | Pocket residues as 'CHAIN:RESID,CHAIN:START-END' (e.g., 'A:123-125,B:200') |
+| `--bbox_length` | float | Bounding box length (Angstroms) when using `--pocket_center` (default: 23.0) |
 
 When input files are provided, `--n_samples` specifies how many samples to generate for that single input system.
 
@@ -204,6 +210,8 @@ When input files are provided, `--n_samples` specifies how many samples to gener
 
 OMTRA supports multiple drug design tasks. Use the `--task` argument to select one:
 
+**Note:** Tasks marked with ⚠️ do not have pre-trained checkpoints available yet.
+
 ### Unconditional Generation
 | Task | Description |
 |------|-------------|
@@ -213,15 +221,17 @@ OMTRA supports multiple drug design tasks. Use the `--task` argument to select o
 | Task | Description |
 |------|-------------|
 | `fixed_protein_ligand_denovo_condensed` | Design ligands for a fixed protein binding site |
-| `protein_ligand_denovo_condensed` | Joint generation of ligand with flexible protein |
+| `protein_ligand_denovo_condensed` ⚠️ | Joint generation of ligand with flexible protein |
+| `exp_apo_conditioned_denovo_ligand_condensed` ⚠️ | De novo ligand generation starting from experimental apo structure |
+| `pred_apo_conditioned_denovo_ligand_condensed` ⚠️ | De novo ligand generation starting from predicted apo structure |
 
 ### Docking Tasks
 | Task | Description |
 |------|-------------|
 | `rigid_docking_condensed` | Dock a known ligand into a fixed protein structure |
-| `flexible_docking_condensed` | Dock with protein flexibility |
-| `expapo_conditioned_ligand_docking_condensed` | Docking starting from experimental apo structure |
-| `predapo_conditioned_ligand_docking_condensed` | Docking starting from predicted apo structure |
+| `flexible_docking_condensed` ⚠️ | Dock with protein flexibility |
+| `expapo_conditioned_ligand_docking_condensed` ⚠️ | Docking starting from experimental apo structure |
+| `predapo_conditioned_ligand_docking_condensed` ⚠️ | Docking starting from predicted apo structure |
 
 ### Conformer Generation
 | Task | Description |
@@ -231,11 +241,12 @@ OMTRA supports multiple drug design tasks. Use the `--task` argument to select o
 ### Pharmacophore-Conditioned Tasks
 | Task | Description |
 |------|-------------|
-| `denovo_ligand_pharmacophore_condensed` | Generate ligand and pharmacophore jointly |
+| `denovo_ligand_pharmacophore_condensed` ⚠️ | Generate ligand and pharmacophore jointly |
 | `denovo_ligand_from_pharmacophore_condensed` | Design ligand matching a given pharmacophore |
 | `ligand_conformer_from_pharmacophore_condensed` | Generate conformer satisfying pharmacophore |
 | `fixed_protein_pharmacophore_ligand_denovo_condensed` | Design ligand for protein with pharmacophore constraints |
 | `rigid_docking_pharmacophore_condensed` | Dock ligand with pharmacophore constraints |
+| `protein_ligand_pharmacophore_denovo_condensed` ⚠️ | Joint generation of ligand, protein, and pharmacophore |
 
 ## CLI Examples
 
@@ -248,14 +259,34 @@ omtra --task denovo_ligand_condensed \
 ```
 
 ### Structure-Based Drug Design (Protein-Conditioned)
+
+Using a reference ligand to define the pocket:
 ```bash
 omtra --task fixed_protein_ligand_denovo_condensed \
   --protein_file my_protein.pdb \
-  --ligand_file reference_ligand.sdf \
+  --pocket_ligand reference_ligand.sdf \
   --n_samples 50 \
   --output_dir outputs/sbdd_samples
 ```
-The reference ligand is used to define the binding site center. If omitted, the protein center of mass is used.
+
+Using coordinates to define the pocket center:
+```bash
+omtra --task fixed_protein_ligand_denovo_condensed \
+  --protein_file my_protein.pdb \
+  --pocket_center 10.5,20.3,15.2 \
+  --bbox_length 25.0 \
+  --n_samples 50 \
+  --output_dir outputs/sbdd_samples
+```
+
+Using specific residues to define the pocket:
+```bash
+omtra --task fixed_protein_ligand_denovo_condensed \
+  --protein_file my_protein.pdb \
+  --pocket_residues A:123-130,A:200,B:50-55 \
+  --n_samples 50 \
+  --output_dir outputs/sbdd_samples
+```
 
 ### Molecular Docking
 ```bash
@@ -275,9 +306,11 @@ omtra --task ligand_conformer_condensed \
 ```
 
 ### Pharmacophore-Guided Design
+
+Using a pharmacophore file directly (JSON from Pharmit or XYZ):
 ```bash
 omtra --task denovo_ligand_from_pharmacophore_condensed \
-  --pharmacophore_file constraints.xyz \
+  --pharmacophore_file constraints.json \
   --n_samples 100 \
   --output_dir outputs/pharm_guided
 ```
@@ -285,10 +318,190 @@ omtra --task denovo_ligand_from_pharmacophore_condensed \
 Alternatively, extract pharmacophores from a ligand SDF file:
 ```bash
 omtra --task denovo_ligand_from_pharmacophore_condensed \
-  --ligand_file reference_ligand.sdf \
+  --pharmacophore_file reference_ligand.sdf \
   --n_samples 100 \
   --output_dir outputs/pharm_guided
 ```
+
+-----------------------------------------------------------------------------------------------------
+
+## Pharmacophore File Formats
+
+OMTRA accepts pharmacophore constraints in three formats: **JSON** (from Pharmit), **XYZ**, or **SDF** (ligand file for automatic extraction). This section documents the JSON format, which provides the most control and is compatible with the [Pharmit](http://pharmit.csb.pitt.edu/) tool.
+
+### Quick Start: Converting SDF to Pharmacophore JSON
+
+The easiest way to create a pharmacophore JSON file is using the built-in converter:
+
+```bash
+# Basic usage
+omtra mol2pharm ligand.sdf -o pharmacophore.json --pretty
+
+# With verbose output to see extracted features
+omtra mol2pharm ligand.sdf -o pharmacophore.json --pretty --verbose
+```
+
+This will extract pharmacophore features from your ligand and save them in the JSON format ready for use with OMTRA.
+
+### JSON Format Specification
+
+The pharmacophore JSON format follows the structure generated by Pharmit's command-line tool and web interface. While not a widely standardized format, it is the de facto format used by the Pharmit pharmacophore search engine.
+
+#### Structure
+
+```json
+{
+  "points": [
+    {
+      "name": "Aromatic",
+      "x": 10.5,
+      "y": 20.3,
+      "z": 15.2,
+      "enabled": true
+    },
+    {
+      "name": "HydrogenAcceptor",
+      "x": 8.2,
+      "y": 18.7,
+      "z": 14.1,
+      "enabled": true
+    }
+  ]
+}
+```
+
+#### Field Descriptions
+
+- **`points`** (array, required): List of pharmacophore feature definitions
+  - **`name`** (string, required): Pharmacophore feature type (see [Supported Feature Types](#supported-pharmacophore-feature-types))
+  - **`x`**, **`y`**, **`z`** (float, required): 3D coordinates in Angstroms
+  - **`enabled`** (boolean, optional): Whether this feature should be used (default: `true`)
+
+#### Supported Pharmacophore Feature Types
+
+OMTRA recognizes the following pharmacophore feature types:
+
+| Feature Type | Description |
+|--------------|-------------|
+| `Aromatic` | Aromatic ring center (6-membered or 5-membered rings) |
+| `HydrogenDonor` | Hydrogen bond donor (e.g., NH, OH groups) |
+| `HydrogenAcceptor` | Hydrogen bond acceptor (e.g., C=O, N, O atoms) |
+| `PositiveIon` | Positively charged or ionizable group |
+| `NegativeIon` | Negatively charged or ionizable group (e.g., carboxylate) |
+| `Hydrophobic` | Hydrophobic/lipophilic region |
+| `Halogen` | Halogen bond donor (F, Cl, Br, I) |
+
+**Note:** Features with unrecognized `name` values will be treated as `UNK` (unknown) type.
+
+### Complete Example
+
+Here's a complete pharmacophore JSON file defining a binding hypothesis with multiple features:
+
+```json
+{
+  "points": [
+    {
+      "name": "Aromatic",
+      "x": 12.456,
+      "y": 8.234,
+      "z": 15.789,
+      "enabled": true
+    },
+    {
+      "name": "HydrogenDonor",
+      "x": 10.123,
+      "y": 11.456,
+      "z": 14.234,
+      "enabled": true
+    },
+    {
+      "name": "HydrogenAcceptor",
+      "x": 14.567,
+      "y": 9.890,
+      "z": 13.456,
+      "enabled": true
+    },
+    {
+      "name": "Hydrophobic",
+      "x": 11.234,
+      "y": 7.890,
+      "z": 17.123,
+      "enabled": true
+    },
+    {
+      "name": "PositiveIon",
+      "x": 13.890,
+      "y": 12.345,
+      "z": 16.789,
+      "enabled": false
+    }
+  ]
+}
+```
+
+In this example, the `PositiveIon` feature is disabled (`"enabled": false`) and will be ignored during generation.
+
+### Generating Pharmacophore JSON Files
+
+You can create pharmacophore JSON files in several ways:
+
+1. **OMTRA CLI Tool** (Recommended): Extract pharmacophores from ligand SDF files directly:
+   ```bash
+   omtra mol2pharm ligand.sdf -o pharmacophore.json --pretty
+   ```
+   
+   Additional options:
+   ```bash
+   # Get verbose output with feature breakdown
+   omtra mol2pharm ligand.sdf -o pharm.json --verbose
+   
+   # Create with all features disabled by default
+   omtra mol2pharm ligand.sdf -o pharm.json --all-disabled
+   
+   # Process only first molecule in multi-molecule SDF
+   omtra mol2pharm multi.sdf -o pharm.json --first-only
+   ```
+
+2. **Pharmit Web Interface**: Visit [http://pharmit.csb.pitt.edu/](http://pharmit.csb.pitt.edu/), upload a ligand, and export the pharmacophore features as JSON
+
+3. **Pharmit Command-Line Tool**: Extract pharmacophores from a ligand SDF file:
+   ```bash
+   pharmit pharma -in ligand.sdf -out pharmacophore.json
+   ```
+
+4. **OMTRA Web Application**: Upload an SDF file to the web interface, which will automatically extract and visualize pharmacophore features for interactive selection
+
+5. **Manual Creation**: Write JSON files directly using the format above, defining features at specific 3D coordinates based on your design hypothesis
+
+### Alternative Format: XYZ
+
+OMTRA also accepts a simpler XYZ format for pharmacophores:
+
+```
+7
+Pharmacophore features
+P 12.456 8.234 15.789
+S 10.123 11.456 14.234
+F 14.567 9.890 13.456
+C 11.234 7.890 17.123
+N 13.890 12.345 16.789
+O 9.123 10.456 12.890
+Cl 15.678 13.234 18.456
+```
+
+**Format specification:**
+- Line 1: Number of pharmacophore points
+- Line 2: Comment line (ignored)
+- Lines 3+: `ELEMENT X Y Z` where `ELEMENT` is mapped to feature type:
+  - `P` = Aromatic
+  - `S` = HydrogenDonor
+  - `F` = HydrogenAcceptor
+  - `N` = PositiveIon
+  - `O` = NegativeIon
+  - `C` = Hydrophobic
+  - `Cl` = Halogen
+
+-----------------------------------------------------------------------------------------------------
 
 ### Debug Mode
 Set the `OMTRA_DEBUG` environment variable for full stack traces:

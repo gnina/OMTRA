@@ -68,6 +68,7 @@ class CrossdockedDataset(ZarrDataset):
         res_id_embed_dim: int = 64,
         crop_min_distance: Optional[float] = None,
         crop_max_distance: Optional[float] = None,
+        max_pharms_sampled: int = 8,
     ):
         #zarr files are read by the init function of the parent class, ZarrDataset
         super().__init__(
@@ -80,6 +81,7 @@ class CrossdockedDataset(ZarrDataset):
         self.fake_atom_p = fake_atom_p
 
         self.res_id_embed_dim = res_id_embed_dim
+        self.max_pharms_sampled = max_pharms_sampled
 
         # Dynamic cropping: only applied during training when both distances are specified
         self.crop_min_distance = crop_min_distance
@@ -391,20 +393,37 @@ class CrossdockedDataset(ZarrDataset):
             ligand.atom_chiral=lig_extra_feats_dict['chiral']
 
         if include_pharmacophore:
-            pharm_start, pharm_end = (
-                system_info["pharm_start"],
-                system_info["pharm_end"],
-            )
-            pharmacophore = PharmacophoreData(
-                coords=self.slice_array("pharmacophore/coords", pharm_start, pharm_end),
-                types=self.slice_array("pharmacophore/types", pharm_start, pharm_end),
-                vectors=self.slice_array(
-                    "pharmacophore/vectors", pharm_start, pharm_end
-                ),
-                interactions=self.slice_array(
-                    "pharmacophore/interactions", pharm_start, pharm_end
-                ),
-            )
+            # Check if pharmacophore start and end exist and are not NaN
+            # doing this because there are some situations where pharm_start and pharm_end are None
+            if pd.notna(system_info.get("pharm_start", np.nan)) and pd.notna(system_info.get("pharm_end", np.nan)):
+                pharm_start = int(system_info["pharm_start"])
+                pharm_end = int(system_info["pharm_end"])
+
+                pharm_idxs = np.arange(pharm_start, pharm_end)
+                interacting_pharms = pharm_idxs[self.slice_array("pharmacophore/interactions", pharm_start, pharm_end)]
+
+                if len(interacting_pharms) == 0:
+                    print(f"Warning: No interacting pharmacophores in system {index}.")
+                    pharmacophore = None
+                else:
+                    pharm_sample_size = np.random.randint(1, min(self.max_pharms_sampled, len(interacting_pharms)) + 1)
+                    pharm_sample = np.random.choice(interacting_pharms, size=pharm_sample_size, replace=False)
+
+                    coords = np.array([self.slice_array("pharmacophore/coords", i, i+1) for i in pharm_sample]).squeeze(1)
+                    types = np.array([self.slice_array("pharmacophore/types", i, i+1) for i in pharm_sample]).squeeze(1)
+                    vectors = np.array([self.slice_array("pharmacophore/vectors", i, i+1) for i in pharm_sample]).squeeze(1)
+                    interactions = np.ones(len(pharm_sample), dtype=bool)
+                    
+                    pharmacophore = PharmacophoreData(
+                        coords=coords,
+                        types=types,
+                        vectors=vectors,
+                        interactions=interactions
+                    )
+            else:
+                # No valid pharmacophore data
+                print(f"Warning: No pharmacophore data in system {index}.")
+                pharmacophore = None
 
         # Apply dynamic cropping during training
         if self.dynamic_crop and include_protein:
@@ -1018,7 +1037,7 @@ class CrossdockedDataset(ZarrDataset):
         edge_idxs.update(lig_edge_idxs)
         edge_data.update(lig_edge_data)
 
-        if include_pharmacophore:
+        if include_pharmacophore and system.pharmacophore is not None:
             pharm_node_data, pharm_edge_idxs, pharm_edge_data = (
                 self.convert_pharmacophore(system.pharmacophore)
             )

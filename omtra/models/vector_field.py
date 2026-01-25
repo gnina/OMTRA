@@ -72,7 +72,8 @@ class VectorField(nn.Module):
         dst_feat_msg_reduction_factor: float = 4,
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
-        res_id_embed_dim: int = 64
+        res_id_embed_dim: int = 64, 
+        pharm_pos_std_flag: bool = False,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -91,6 +92,7 @@ class VectorField(nn.Module):
         self.has_mask = has_mask
         self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
+        self.pharm_pos_std_flag = pharm_pos_std_flag
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -196,6 +198,9 @@ class VectorField(nn.Module):
             input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
             if res_id_embed_dim is not None and ntype == 'prot_atom':
                 input_dim += res_id_embed_dim
+            if self.pharm_pos_std_flag and ntype == 'pharm':
+                input_dim += 1
+
 
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
@@ -462,6 +467,10 @@ class VectorField(nn.Module):
             task_idx
         )  # tensor of shape (batch_size, token_dim)
 
+        if 'pharm' in node_scalar_features and self.pharm_pos_std_flag and g.num_nodes('pharm') > 0:
+            pharm_stddev = g.nodes['pharm'].data['pharm_pos_std']
+            node_scalar_features['pharm'].append(pharm_stddev)
+
         # add time and task embedding to node scalar features
         for ntype in node_scalar_features.keys():
             # add time embedding to node scalar features
@@ -713,9 +722,29 @@ class VectorField(nn.Module):
             if m.is_node and g.num_nodes(m.entity_name) == 0:
                 continue
             if m.data_key == "x":
-                dst_dict[m.name] = node_positions[m.entity_name]
+                node_pos = node_positions[m.entity_name]
+                # masking for fixed partial modalities of fixed fragments
+                if m.name in task_class.partial_modalities_fixed:
+                    mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
+                    gt_pos = g.nodes[m.entity_name].data['x_1_true']
+                    node_pos[mask] = gt_pos[mask]
+                dst_dict[m.name] = node_pos
+
             elif m.is_categorical:
                 dst_dict[m.name] = logits[m.name]
+
+                # masking for fixed partial modalities of fixed fragments
+                if m.name in task_class.partial_modalities_fixed:
+                    if m.is_node:
+                        mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
+                        gt_labels = g.nodes[m.entity_name].data[f'{m.data_key}_1_true']
+                    else:
+                        # Take upper triangle for edge modalities
+                        mask = g.edges[m.entity_name].data['edge_mask_1_true'][upper_edge_mask[m.entity_name]].bool()
+                        gt_labels = g.edges[m.entity_name].data[f'{m.data_key}_1_true'][upper_edge_mask[m.entity_name]]
+                    one_hot = torch.zeros_like(dst_dict[m.name])
+                    one_hot[torch.arange(dst_dict[m.name].size(0), device=dst_dict[m.name].device), gt_labels] = 1.0
+                    dst_dict[m.name][mask] = one_hot[mask]
                 if apply_softmax:
                     dst_dict[m.name] = torch.softmax(
                         dst_dict[m.name], dim=-1
@@ -890,9 +919,22 @@ class VectorField(nn.Module):
                 **kwargs,
             )
 
+            if len(task.partial_modalities_fixed) > 0:
+                for m_name in task.partial_modalities_fixed:
+                    m = name_to_modality(m_name)
+                    if m.is_node:
+                        data_src = g.nodes['lig']
+                        mask = data_src.data['atom_mask_1_true'].bool()
+                    else:
+                        data_src = g.edges['lig_to_lig']
+                        mask = data_src.data['edge_mask_1_true'].bool()
+                
+                    data_src.data[f"{m.data_key}_t"][mask] = data_src.data[f"{m.data_key}_1_true"][mask]
+                    data_src.data[f"{m.data_key}_1_pred"][mask] = data_src.data[f"{m.data_key}_1_true"][mask]
+
             if visualize:
                 add_frame(g)
-
+                
         # set x_1 = x_t
         for modality in task.node_modalities_present:
             ntype = modality.entity_name
