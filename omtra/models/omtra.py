@@ -80,6 +80,7 @@ class OMTRA(pl.LightningModule):
         time_scaled_loss: bool = False,
         pharm_var: float = 0.0,
         chiral_edges: bool = True,
+        lr_warmup_steps: int = 0,
 
     ):
         super().__init__()
@@ -103,6 +104,7 @@ class OMTRA(pl.LightningModule):
         self.cat_loss_weight = cat_loss_weight
         self.pharm_var = pharm_var
         self.chiral_edges = chiral_edges 
+        self.lr_warmup_steps = lr_warmup_steps
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -344,7 +346,14 @@ class OMTRA(pl.LightningModule):
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device, coms=coms)
+        samples = self.sample(
+            task_name, 
+            g_list=g_list, 
+            n_replicates=n_replicates, 
+            n_timesteps=200, 
+            n_lig_atom_margin=0.1,
+            device=device, 
+            coms=coms)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         if not self.eval_config:
@@ -514,6 +523,24 @@ class OMTRA(pl.LightningModule):
         optimizer = hydra.utils.instantiate(
             self.optimizer_cfg, params=self.parameters()
         )
+
+        # Linear LR warmup
+        if self.lr_warmup_steps > 0:
+            def lr_lambda(current_step: int):
+                if current_step < self.lr_warmup_steps:
+                    return float(current_step + 1) / float(self.lr_warmup_steps)
+                return 1.0
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "step",
+                    "frequency": 1,
+                    "name": "lr_warmup",
+                },
+            }
+
         return optimizer
 
     def sample_conditional_path(
@@ -598,6 +625,8 @@ class OMTRA(pl.LightningModule):
         eps: float = 0.01,
         # use_gt_n_lig_atoms: bool = False,
         n_lig_atom_margin: Union[float, None] = None,
+        n_lig_atoms_mean: Union[float, None] = None,
+        n_lig_atoms_std: Union[float, None] = None,
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
@@ -616,7 +645,10 @@ class OMTRA(pl.LightningModule):
         if unconditional_n_atoms_dist is None:
             unconditional_n_atoms_dist = self.infer_n_atoms_dist(task)
 
+        # TODO: if the task is unconditional, no 
         use_gt_n_lig_atoms = n_lig_atom_margin is not None
+        graphs_with_ligs = g_list is not None and all(g.num_nodes("lig") > 0 for g in g_list)
+        use_gt_n_lig_atoms = use_gt_n_lig_atoms and graphs_with_ligs
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
@@ -682,8 +714,17 @@ class OMTRA(pl.LightningModule):
             else:
                 n_pharms = None
             
+            # use normal distribution if mean and std are provided
+            if n_lig_atoms_mean is not None and n_lig_atoms_std is not None:
+                n_samples = len(g_flat)
+                n_lig_atoms = torch.normal(
+                    mean=torch.tensor(n_lig_atoms_mean).expand(n_samples),
+                    std=torch.tensor(n_lig_atoms_std).expand(n_samples)
+                )
+                n_lig_atoms = torch.clamp(n_lig_atoms.round().long(), min=4)
+            
             # use ground truth number of lig atoms
-            if use_gt_n_lig_atoms:
+            elif use_gt_n_lig_atoms:
 
                 base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
                 base_n_atoms = base_n_atoms - n_fake_atoms_gt
@@ -712,8 +753,17 @@ class OMTRA(pl.LightningModule):
                 n_pharms = None
                 n_samples = len(g_flat)
 
+            # use normal distribution if mean and std are provided
+            if n_lig_atoms_mean is not None and n_lig_atoms_std is not None:
+                n_samples_normal = len(g_flat)
+                n_lig_atoms = torch.normal(
+                    mean=torch.tensor(n_lig_atoms_mean).expand(n_samples_normal),
+                    std=torch.tensor(n_lig_atoms_std).expand(n_samples_normal)
+                )
+                n_lig_atoms = torch.clamp(n_lig_atoms.round().long(), min=4)
+
             # use ground truth number of lig atoms
-            if use_gt_n_lig_atoms:
+            elif use_gt_n_lig_atoms:
                 base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
                 base_n_atoms = base_n_atoms - n_fake_atoms_gt
                 margins = torch.clamp(base_n_atoms * n_lig_atom_margin, min=1).int()

@@ -80,6 +80,25 @@ def parse_args():
         help='Additional arguments to pass to docking_eval.py (default: --disable_gnina --disable_pb_valid --disable_rmsd)'
     )
     
+    parser.add_argument(
+        '--split', 
+        type=str, 
+        default='test',
+        help='Data split to use (default: test)'
+    )
+    parser.add_argument(
+        '--dataset', 
+        type=str, 
+        default='plinder',
+        help='Dataset arg passed to docking_eval.py (default: plinder)'
+    )
+    parser.add_argument(
+        "--crossdocked_path",
+        type=Path,
+        default=None,
+        help="Path to crossdocked dataset (default: None)"
+    )
+    
     return parser.parse_args()
 
 
@@ -136,8 +155,12 @@ def generate_commands(chunks, chunk_files, args):
                 f'--bs_per_gbmem=5',  # Example fixed argument; adjust as needed
                 f'--output_dir={cmd_output_dir}',  # Output directory for this chunk and replicate
                 f'--plinder_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder',
-                f'--split=test'
+                f'--split={args.split}',
+                f'--dataset={args.dataset}'
             ]
+
+            if args.crossdocked_path is not None:
+                cmd_parts.append(f'--crossdocked_path={args.crossdocked_path}')
             
             # Add additional arguments
             if args.additional_args:
