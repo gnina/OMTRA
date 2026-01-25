@@ -684,7 +684,7 @@ class CrossdockedDataset(ZarrDataset):
         Dict[str, Dict[str, torch.Tensor]],
     ]:
 
-        lig_xace = ligand.to_xace_mol(dense=True)
+        lig_xace = ligand.to_xace_mol(dense=False)
 
         # denovo_ligand = 'ligand_identity' in task.groups_generated
         # if self.fake_atom_p > 0 and denovo_ligand:
@@ -697,6 +697,9 @@ class CrossdockedDataset(ZarrDataset):
                 lig_xace = add_fake_atoms(lig_xace, self.fake_atom_p, cond_a_typer)
             else:
                 lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
+
+        # note: very important to densify AFTER adding fake atoms
+        lig_xace = lig_xace.sparse_to_dense()
 
         # lig_c = self.encode_charges(lig_xace.c)
         # node_data = {
