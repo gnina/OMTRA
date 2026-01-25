@@ -637,7 +637,7 @@ class OMTRA(pl.LightningModule):
             
             #check if the number of nodes of node type is 0
             if modality.is_node and g.num_nodes(modality.entity_name) == 0:
-                print(f"Skipping fixed modality as there are no nodes of type {modality.entity_name}")
+                # print(f"Skipping fixed modality as there are no nodes of type {modality.entity_name}")
                 continue
 
             data_src[modality.entity_name].data[f"{dk}_t"] = data_src[
