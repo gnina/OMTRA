@@ -77,6 +77,7 @@ def build_complex_graph(
     edge_data: Dict[str, Dict[str, torch.Tensor]],
     task=None,
     graph_config=None,
+    fixed_frag_mask=None,
 ) -> dgl.DGLHeteroGraph:
     
     # check that all node types are valid
