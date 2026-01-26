@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-import math
-import torch.nn.functional as F
+import numpy as np
+from functools import lru_cache
 import dgl
 from typing import List, Optional
 from collections import defaultdict
@@ -13,6 +13,11 @@ from omtra.tasks.modalities import (
 from omtra.utils.graph import g_local_scope
 from omtra.models.gvp import _norm_no_nan
 
+@lru_cache(maxsize=8)
+def _load_marginals(marginal_path: str, key: str) -> torch.Tensor:
+    """Load marginal probabilities from an .npz file (cached)."""
+    data = np.load(marginal_path)
+    return torch.from_numpy(data[key]).float()
 
 class FixedConditionEmbedder(nn.Module):
     def __init__(self,
@@ -22,23 +27,23 @@ class FixedConditionEmbedder(nn.Module):
                  n_hidden_edge_feats: int = 64,
                  fake_atoms: bool = True,
                  res_id_embed_dim: int = 64,
+                 marginal_path: str = None,
+                 marginal_key: str = None,
                  fixed_coord_max_std: float = 0.0,
                  fixed_coord_std: Optional[float] = None,
-                 fixed_atom_max_prob: float = 0.0,
-                 fixed_atom_prob: Optional[float] = None,
-                 fixed_edge_max_prob: float = 0.0,
-                 fixed_edge_prob: Optional[float] = None,
+                 fixed_token_max_prob: float = 0.0,
+                 fixed_token_prob: Optional[float] = None,
                  ):
         super().__init__()
+
+        self.marginal_path = marginal_path
+        self.marginal_key = marginal_key
 
         self.fixed_coord_max_std = fixed_coord_max_std
         self.fixed_coord_std = fixed_coord_std
 
-        self.fixed_atom_max_prob = fixed_atom_max_prob
-        self.fixed_atom_prob = fixed_atom_prob
-
-        self.fixed_edge_max_prob = fixed_edge_max_prob
-        self.fixed_edge_prob = fixed_edge_prob
+        self.fixed_token_max_prob = fixed_token_max_prob
+        self.fixed_token_prob = fixed_token_prob
 
         # realistically this may be over engineered because we currently only fix ligand atoms, but trying to make this general for the case where we fix other modalities
         ntype_cat_feats = defaultdict(int)
@@ -145,15 +150,9 @@ class FixedConditionEmbedder(nn.Module):
                 if ntype not in atom_masks.keys():
                     atom_masks[ntype] = mask
 
-                if (self.fixed_atom_max_prob > 0.0) or (self.fixed_atom_prob is not None):
-                    if self.fixed_atom_prob is not None:     # Use specific user-defined probability
-                        prob = torch.full((gt.shape[0],), self.fixed_atom_prob, device=gt.device)
-                    else:   # Sample probability from U(0, fixed_cat_max_prob)
-                        prob = torch.rand(gt.shape[0], device=gt.device) * self.fixed_atom_max_prob    # sample prob from U(0, fixed_cat_max_std)
-                    noise_mask = torch.rand(gt.shape[0], device=gt.device) < prob   # Bernoulli trial selecting noised atoms
+                if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
+                    gt, prob = self.corrupt_tokens(gt, g.nodes[ntype].data[f"{modality.data_key}_0"])
                     fixed_node_scalar_features[ntype].append(prob.unsqueeze(-1))
-                    # TODO: marginal distribution (weighted by observed tuple counts)
-                    raise NotImplementedError('noising for categorical atom features has not been implemented yet.')
 
                 fixed_atom_feats = self.token_embeddings[modality.name](gt) * mask.unsqueeze(-1)
                 fixed_node_scalar_features[ntype].append(fixed_atom_feats)
@@ -170,12 +169,7 @@ class FixedConditionEmbedder(nn.Module):
 
                 # noise coordinates of fixed atoms
                 if (self.fixed_coord_max_std > 0.0) or (self.fixed_coord_std is not None):
-                    if self.fixed_coord_std is not None:    # Use specific user-defined sigma
-                        sigma = torch.full((x.shape[0], 1), self.fixed_coord_std, device=x.device)
-                    else:   # Sample sigma from U(0, fixed_coord_max_std)
-                        sigma = torch.rand((x.shape[0], 1), device=x.device) * self.fixed_coord_max_std    
-                    eps = torch.randn_like(x) * sigma   # sample episilon from N(0, sigma)
-                    x = x + eps                         # add noise to the true fixed atom positions
+                    x, sigma = self.corrupt_coords(x)
                     fixed_node_scalar_features[ntype].append(sigma)
                 
                 fixed_atom_coords = self.coord_embedding[modality.entity_name](x) * mask.unsqueeze(-1)
@@ -200,15 +194,9 @@ class FixedConditionEmbedder(nn.Module):
             if etype not in edge_masks.keys():
                 edge_masks[etype] = mask
 
-            if (self.fixed_edge_max_prob > 0.0) or (self.fixed_edge_prob is not None):
-                if self.fixed_edge_prob is not None:     # Use specific user-defined probability
-                    prob = torch.full((gt.shape[0],), self.fixed_edge_prob, device=gt.device)
-                else:   # Sample probability from U(0, fixed_cat_max_prob)
-                    prob = torch.rand(gt.shape[0], device=gt.device) * self.fixed_edge_max_prob    # sample prob from U(0, fixed_cat_max_std)
-                noise_mask = torch.rand(gt.shape[0], device=gt.device) < prob   # Bernoulli trial selecting noised atoms
+            if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
+                gt, prob = self.corrupt_tokens(gt, g.edges[etype].data[f"{modality.data_key}_0"])
                 fixed_edge_features[etype].append(prob.unsqueeze(-1))
-                # TODO: marginal distribution (weighted by observed tuple counts)
-                raise NotImplementedError('noising for categorical edge features has not been implemented yet.')
             
             fixed_edge_feats = self.token_embeddings[modality.name](gt) * mask.unsqueeze(-1)
             fixed_edge_features[etype].append(fixed_edge_feats)
@@ -239,4 +227,47 @@ class FixedConditionEmbedder(nn.Module):
             ) * edge_masks[etype].unsqueeze(-1)   
 
         return fixed_node_scalar_features, fixed_edge_features
-        
+
+    def corrupt_tokens(self,
+                       gt: torch.Tensor,
+                       g0: torch.Tensor):
+        if self.fixed_token_prob is not None:     # Use specific user-defined probability
+            prob = torch.full((gt.shape[0],), self.fixed_token_prob, device=gt.device)
+        else:   # Sample probability from U(0, fixed_cat_max_prob)
+            prob = torch.rand(gt.shape[0], device=gt.device) * self.fixed_token_max_prob    # sample prob from U(0, fixed_cat_max_std)
+        corrupt_tokens = torch.rand(gt.shape[0], device=gt.device) < prob   # Bernoulli trial selecting noised atoms   
+
+        if corrupt_tokens.any():
+            n_corrupt = corrupt_tokens.sum().item()
+
+            if self.marginal_path is not None and self.marginal_key is not None:
+                # Sample from data marginal
+                marginal_probs = _load_marginals(self.marginal_path, self.marginal_key)
+                marginal_probs = marginal_probs.to(gt.device)
+                corrupt_samples = torch.multinomial(
+                    marginal_probs,
+                    num_samples=n_corrupt,
+                    replacement=True,
+                )
+            else:
+                # Sample uniformly
+                mask_index = g0.max().item()
+                n_categories = int(mask_index)
+                corrupt_samples = torch.randint(
+                    low=0,
+                    high=n_categories,
+                    size=(n_corrupt,),
+                    device=gt.device,
+                )
+            gt[corrupt_tokens] = corrupt_samples.to(gt.dtype)
+        return gt, prob
+
+    def corrupt_coords(self,
+                       x: torch.Tensor):
+        if self.fixed_coord_std is not None:    # Use specific user-defined sigma
+            sigma = torch.full((x.shape[0], 1), self.fixed_coord_std, device=x.device)
+        else:   # Sample sigma from U(0, fixed_coord_max_std)
+            sigma = torch.rand((x.shape[0], 1), device=x.device) * self.fixed_coord_max_std    
+        eps = torch.randn_like(x) * sigma   # sample episilon from N(0, sigma)
+        x = x + eps                         # add noise to the true fixed atom positions
+        return x, sigma
