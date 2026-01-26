@@ -180,12 +180,24 @@ def main(cfg: DictConfig):
         original_cfg_path = run_dir / ".hydra/config.yaml"
         original_cfg = OmegaConf.load(original_cfg_path)
         # Only apply CLI overrides to the original config
+        # Strip Hydra-specific prefixes (+, ~) from overrides
         overrides = HydraConfig.get().overrides.task
-        cli_cfg = OmegaConf.from_dotlist(overrides)
+        cleaned_overrides = []
+        for override in overrides:
+            # Skip config group overrides (e.g., task_group=xxx)
+            if '=' not in override:
+                continue
+            # Strip + prefix (append) and ~ prefix (delete)
+            if override.startswith('+') or override.startswith('~'):
+                override = override[1:]
+            cleaned_overrides.append(override)
+        cli_cfg = OmegaConf.from_dotlist(cleaned_overrides)
         cfg = OmegaConf.merge(original_cfg, cli_cfg)
         cfg.og_run_dir = str(run_dir)
-    else:
-        cfg = merge_task_spec(cfg)
+
+    # merge_task_spec populates single_dataset_configs from separate YAML files
+    # This is needed for both fresh runs and resumed runs
+    cfg = merge_task_spec(cfg)
 
     # train the model
     _ = train(cfg)
