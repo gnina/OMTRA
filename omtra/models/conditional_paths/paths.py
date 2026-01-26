@@ -119,7 +119,7 @@ def sample_masked_ctmc(
             n_corrupt = corrupt_tokens.sum().item()
 
             if marginal_path is not None and marginal_key is not None:
-                # Stage 2: Sample from data marginal
+                # Sample from data marginal
                 marginal_probs = _load_marginals(marginal_path, marginal_key)
                 marginal_probs = marginal_probs.to(x_1.device)
                 corrupt_samples = torch.multinomial(
@@ -128,8 +128,7 @@ def sample_masked_ctmc(
                     replacement=True,
                 )
             else:
-                # Stage 1: Sample uniformly
-                # x_0 contains the mask index = n_categories
+                # Sample uniformly
                 mask_index = x_0[corrupt_tokens].max().item()
                 n_categories = int(mask_index)
                 corrupt_samples = torch.randint(

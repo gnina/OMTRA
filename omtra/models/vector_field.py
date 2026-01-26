@@ -73,6 +73,8 @@ class VectorField(nn.Module):
         fixed_coord_std: Optional[float] = None,
         fixed_token_max_prob: float = 0.0,
         fixed_token_prob: Optional[float] = None,
+        marginal_path: str = None,
+        marginal_keys: dict = None,
         transformer_cfg: Optional[DictConfig] = _default_transformer_cfg,
         pharm_pos_std_flag: bool = False,
         enable_corruption_heads: bool = False,
@@ -161,6 +163,8 @@ class VectorField(nn.Module):
             fixed_coord_std=self.fixed_coord_std,
             fixed_token_max_prob=self.fixed_token_max_prob,
             fixed_token_prob=self.fixed_token_prob,
+            marginal_path=marginal_path,
+            marginal_keys=marginal_keys,
             )
 
         # get the set of all nodes present in our graphs

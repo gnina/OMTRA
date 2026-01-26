@@ -19,3 +19,10 @@ pos_emb:                       false
 n_pre_gvp_convs:               1
 fixed_coord_max_std:           ${fixed_coord_max_std}
 fixed_token_max_prob:          ${fixed_token_max_prob}
+
+# Marginal distribution for fixed token corruption
+# Uses data-marginal corruption by default (samples from empirical token distribution)
+marginal_path:                 ${pharmit_path}/train_marginals.npz
+marginal_keys:
+  lig_cond_a: lig_cond_a_marginal
+  lig_e_condensed: lig_e_marginal

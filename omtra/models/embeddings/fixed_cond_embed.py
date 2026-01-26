@@ -12,6 +12,7 @@ from omtra.tasks.modalities import (
 )
 from omtra.utils.graph import g_local_scope
 from omtra.models.gvp import _norm_no_nan
+from omtra.data.graph.utils import get_upper_edge_mask
 
 @lru_cache(maxsize=8)
 def _load_marginals(marginal_path: str, key: str) -> torch.Tensor:
@@ -28,7 +29,7 @@ class FixedConditionEmbedder(nn.Module):
                  fake_atoms: bool = True,
                  res_id_embed_dim: int = 64,
                  marginal_path: str = None,
-                 marginal_key: str = None,
+                 marginal_keys: dict = None,
                  fixed_coord_max_std: float = 0.0,
                  fixed_coord_std: Optional[float] = None,
                  fixed_token_max_prob: float = 0.0,
@@ -37,7 +38,7 @@ class FixedConditionEmbedder(nn.Module):
         super().__init__()
 
         self.marginal_path = marginal_path
-        self.marginal_key = marginal_key
+        self.marginal_keys = marginal_keys or {}
 
         self.fixed_coord_max_std = fixed_coord_max_std
         self.fixed_coord_std = fixed_coord_std
@@ -91,7 +92,7 @@ class FixedConditionEmbedder(nn.Module):
             input_dim = (ntype_cat_feats[ntype] + ntype_coord_feats[ntype]) * token_dim 
             if res_id_embed_dim is not None and ntype == 'prot_atom':
                 input_dim += res_id_embed_dim
-            if (self.fixed_atom_max_prob > 0.0) or (self.fixed_atom_prob is not None):
+            if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
                 input_dim += ntype_cat_feats[ntype] 
             if (self.fixed_coord_max_std > 0.0) or (self.fixed_coord_std is not None):    # raw atom coordinates are injected into scalar features
                 input_dim += ntype_coord_feats[ntype]
@@ -109,7 +110,7 @@ class FixedConditionEmbedder(nn.Module):
         self.edge_embedding = nn.ModuleDict()
         for etype in edge_types:
             input_dim = token_dim
-            if (self.fixed_edge_max_prob > 0.0) or (self.fixed_edge_prob is not None):
+            if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
                 input_dim += 1
             if any((m.data_key == "x" and f"{m.entity_name}_to_{m.entity_name}" == etype) for m in partial_modality_fixed_cls):
                 input_dim += token_dim
@@ -151,7 +152,7 @@ class FixedConditionEmbedder(nn.Module):
                     atom_masks[ntype] = mask
 
                 if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
-                    gt, prob = self.corrupt_tokens(gt, g.nodes[ntype].data[f"{modality.data_key}_0"])
+                    gt, prob = self.corrupt_tokens(gt, g.nodes[ntype].data[f"{modality.data_key}_0"], modality.name, mask)
                     fixed_node_scalar_features[ntype].append(prob.unsqueeze(-1))
 
                 fixed_atom_feats = self.token_embeddings[modality.name](gt) * mask.unsqueeze(-1)
@@ -195,7 +196,8 @@ class FixedConditionEmbedder(nn.Module):
                 edge_masks[etype] = mask
 
             if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
-                gt, prob = self.corrupt_tokens(gt, g.edges[etype].data[f"{modality.data_key}_0"])
+                ue_mask = get_upper_edge_mask(g, etype)
+                gt, prob = self.corrupt_tokens(gt, g.edges[etype].data[f"{modality.data_key}_0"], modality.name, mask, ue_mask)
                 fixed_edge_features[etype].append(prob.unsqueeze(-1))
             
             fixed_edge_feats = self.token_embeddings[modality.name](gt) * mask.unsqueeze(-1)
@@ -230,19 +232,38 @@ class FixedConditionEmbedder(nn.Module):
 
     def corrupt_tokens(self,
                        gt: torch.Tensor,
-                       g0: torch.Tensor):
+                       g0: torch.Tensor,
+                       modality_name: str,
+                       valid_mask: torch.Tensor,
+                       ue_mask: Optional[torch.Tensor] = None):
+        """Corrupt discrete tokens for fixed atoms/edges.
+
+        Args:
+            gt: Ground truth token indices
+            g0: Prior tokens (used to infer n_categories for uniform fallback)
+            modality_name: Name of modality for marginal lookup
+            valid_mask: Boolean mask indicating which tokens are valid (fixed atoms). Only valid tokens can be corrupted.
+            ue_mask: upper edge mask to symmetrize edge corruption
+
+        Returns:
+            gt: Corrupted tokens
+            prob: Per-token corruption probability used
+        """
         if self.fixed_token_prob is not None:     # Use specific user-defined probability
             prob = torch.full((gt.shape[0],), self.fixed_token_prob, device=gt.device)
-        else:   # Sample probability from U(0, fixed_cat_max_prob)
-            prob = torch.rand(gt.shape[0], device=gt.device) * self.fixed_token_max_prob    # sample prob from U(0, fixed_cat_max_std)
-        corrupt_tokens = torch.rand(gt.shape[0], device=gt.device) < prob   # Bernoulli trial selecting noised atoms   
+        else:   # Sample probability from U(0, fixed_token_max_prob)
+            prob = torch.rand(gt.shape[0], device=gt.device) * self.fixed_token_max_prob
 
-        if corrupt_tokens.any():
-            n_corrupt = corrupt_tokens.sum().item()
+        # Only corrupt valid (fixed) tokens
+        corrupt_mask = (torch.rand(gt.shape[0], device=gt.device) < prob) & valid_mask
 
-            if self.marginal_path is not None and self.marginal_key is not None:
+        if corrupt_mask.any():
+            n_corrupt = corrupt_mask.sum().item()
+
+            marginal_key = self.marginal_keys.get(modality_name)
+            if self.marginal_path is not None and marginal_key is not None:
                 # Sample from data marginal
-                marginal_probs = _load_marginals(self.marginal_path, self.marginal_key)
+                marginal_probs = _load_marginals(self.marginal_path, marginal_key)
                 marginal_probs = marginal_probs.to(gt.device)
                 corrupt_samples = torch.multinomial(
                     marginal_probs,
@@ -259,7 +280,13 @@ class FixedConditionEmbedder(nn.Module):
                     size=(n_corrupt,),
                     device=gt.device,
                 )
-            gt[corrupt_tokens] = corrupt_samples.to(gt.dtype)
+            gt[corrupt_mask] = corrupt_samples.to(gt.dtype)
+        
+        if ue_mask is not None:
+            # Symmetrize edge corruption
+            gt[~ue_mask] = gt[ue_mask]
+            prob[~ue_mask] = prob[ue_mask]
+
         return gt, prob
 
     def corrupt_coords(self,
