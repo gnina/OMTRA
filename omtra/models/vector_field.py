@@ -70,9 +70,11 @@ class VectorField(nn.Module):
         n_pre_gvp_convs: int = 1,
         transformer_cfg: Optional[DictConfig] = _default_transformer_cfg,
         pharm_pos_std_flag: bool = False,
+        enable_corruption_heads: bool = False,
     ):
         super().__init__()
         self.graph_config = graph_config
+        self.enable_corruption_heads = enable_corruption_heads
         self.token_dim = token_dim
         self.task_embedding_dim = token_dim
         self.n_hidden_scalars = n_hidden_scalars
@@ -349,23 +351,25 @@ class VectorField(nn.Module):
 
         # Corruption classification heads (Stage 4 of noisy paths experiment)
         # Binary classifiers to predict which tokens were corrupted during training
+        # Only created when enable_corruption_heads=True (for backwards compatibility)
         self.node_corruption_heads = nn.ModuleDict()
         self.edge_corruption_heads = nn.ModuleDict()
-        for m in modalities_generated_cls:
-            if not m.is_categorical:
-                continue
-            if m.graph_entity == "node":
-                self.node_corruption_heads[m.name] = nn.Sequential(
-                    nn.Linear(n_hidden_scalars, n_hidden_scalars),
-                    nn.SiLU(),
-                    nn.Linear(n_hidden_scalars, 1),  # Binary classification
-                )
-            elif m.graph_entity == "edge":
-                self.edge_corruption_heads[m.name] = nn.Sequential(
-                    nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
-                    nn.SiLU(),
-                    nn.Linear(n_hidden_edge_feats, 1),  # Binary classification
-                )
+        if self.enable_corruption_heads:
+            for m in modalities_generated_cls:
+                if not m.is_categorical:
+                    continue
+                if m.graph_entity == "node":
+                    self.node_corruption_heads[m.name] = nn.Sequential(
+                        nn.Linear(n_hidden_scalars, n_hidden_scalars),
+                        nn.SiLU(),
+                        nn.Linear(n_hidden_scalars, 1),  # Binary classification
+                    )
+                elif m.graph_entity == "edge":
+                    self.edge_corruption_heads[m.name] = nn.Sequential(
+                        nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
+                        nn.SiLU(),
+                        nn.Linear(n_hidden_edge_feats, 1),  # Binary classification
+                    )
 
         if self.self_conditioning:
             # raise NotImplementedError("Self conditioning not implemented yet")

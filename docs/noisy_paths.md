@@ -183,6 +183,73 @@ Tests cover:
 
 ---
 
+## Stage 4: Corruption Classification Head
+
+**Goal**: Train the model to predict which tokens were corrupted, enabling corruption-aware remasking at inference.
+
+### Implementation
+
+Stage 4 adds binary classification heads that predict `P(token was corrupted | x_t, t)`. These heads are trained alongside the main denoising objective using a weighted BCE loss.
+
+The corruption heads are **optional** and disabled by default for backwards compatibility with existing checkpoints. When using the corruption classification loss, the config automatically enables them.
+
+### Configuration
+
+Use `configs/model/aux_losses/corruption.yaml`:
+
+```yaml
+# @package _global_
+model:
+  vector_field:
+    enable_corruption_heads: true  # Automatically enabled
+  aux_losses:
+    corruption_classification:
+      params:
+        weight: 1.0
+        pos_weight: 10.0  # Handles class imbalance (most tokens are clean)
+```
+
+### Usage
+
+```bash
+python routines/train.py \
+    model/conditional_paths=noisy \
+    model/aux_losses=corruption \
+    name=stage4_corruption_head \
+    task_group=pharmit5050_cond_a \
+    max_steps=200000
+```
+
+---
+
+## Stage 5: Corruption-Aware Remasking
+
+**Goal**: At inference, use the corruption classification predictions to remask tokens likely to be incorrect.
+
+### Implementation
+
+During sampling, after each integration step, tokens with high corruption probability (`P(corrupted) > threshold`) are reset to the mask token, giving them another chance to be correctly predicted.
+
+### Usage
+
+```python
+# In Python
+sampled_systems = model.sample(
+    task_name="fixed_protein_ligand_denovo_condensed",
+    g_list=graphs,
+    corruption_remasking=True,      # Enable Stage 5 remasking
+    corruption_threshold=0.5,        # P(corrupted) threshold for remasking
+)
+```
+
+**Parameters**:
+- `corruption_remasking` (bool): Enable/disable corruption-aware remasking
+- `corruption_threshold` (float): Probability threshold (default 0.5). Lower = more aggressive remasking
+
+**Note**: Remasking is skipped on the last integration step to ensure tokens are finalized.
+
+---
+
 ## Research Plan Context
 
 | Stage | Description | Corruption Distribution | Status |
@@ -190,8 +257,8 @@ Tests cover:
 | 1 | Uniform corruption | `p_uniform` | **Implemented** |
 | 2 | Data-marginal corruption | `p_data` (empirical marginal) | **Implemented** |
 | 3 | Model-induced corruption | `p_θ` (sample from denoiser) | Planned |
-| 4 | Corruption classification head | Add auxiliary head | Planned |
-| 5 | Modified sampling | Follow three-way path at inference | Planned |
+| 4 | Corruption classification head | Add auxiliary head | **Implemented** |
+| 5 | Modified sampling | Corruption-aware remasking | **Implemented** |
 
 Each stage builds on the previous, progressively closing the gap between training-time and inference-time state distributions.
 
@@ -207,9 +274,12 @@ This experiment tests whether:
 
 | File | Description |
 |------|-------------|
-| `omtra/models/conditional_paths/paths.py` | Core three-way path implementation |
+| `omtra/models/conditional_paths/paths.py` | Core three-way path implementation (returns corruption masks) |
+| `omtra/models/vector_field.py` | Corruption classification heads (`node_corruption_heads`, `edge_corruption_heads`) |
+| `omtra/aux_losses/corruption.py` | Corruption classification loss function |
 | `configs/model/conditional_paths/noisy.yaml` | Stage 1 config (uniform) |
 | `configs/model/conditional_paths/noisy_marginal.yaml` | Stage 2 config (data-marginal) |
+| `configs/model/aux_losses/corruption.yaml` | Stage 4 config (corruption classification loss) |
 | `omtra_pipelines/compute_marginals/compute_marginals.py` | Pipeline to compute marginals |
 | `tests/unit/test_noisy_paths.py` | Unit tests |
 | `noisy_paths.zip` | Research plan with mathematical derivations |

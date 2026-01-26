@@ -31,7 +31,7 @@ class TestNoisyPathsStage1:
         beta_t = torch.full((n_tokens, 1), t)
 
         # Run with no noise
-        x_t = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=0.0)
+        x_t, _ = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=0.0)
 
         # Check that tokens are either mask or target
         is_mask = x_t == mask_index
@@ -59,7 +59,7 @@ class TestNoisyPathsStage1:
         beta_t = torch.full((n_tokens, 1), t)
         noise_alpha = 0.15
 
-        x_t = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=noise_alpha)
+        x_t, _ = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=noise_alpha)
 
         # Check that some tokens are neither mask nor target (i.e., uniform corrupted)
         is_mask = x_t == mask_index
@@ -86,13 +86,13 @@ class TestNoisyPathsStage1:
         # At t=0: all should be masked
         alpha_t = torch.ones((n_tokens, 1))
         beta_t = torch.zeros((n_tokens, 1))
-        x_t = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=noise_alpha)
+        x_t, _ = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=noise_alpha)
         assert (x_t == mask_index).all(), "At t=0, all tokens should be masked"
 
         # At t=1: all should be target
         alpha_t = torch.zeros((n_tokens, 1))
         beta_t = torch.ones((n_tokens, 1))
-        x_t = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=noise_alpha)
+        x_t, _ = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=noise_alpha)
         assert (x_t == x_1).all(), "At t=1, all tokens should be target"
 
     def test_uniform_samples_in_valid_range(self):
@@ -111,7 +111,7 @@ class TestNoisyPathsStage1:
         beta_t = torch.full((n_tokens, 1), t)
 
         # Use high noise to get more uniform samples
-        x_t = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=0.5)
+        x_t, _ = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=0.5)
 
         # All values should be in valid range [0, n_categories] (including mask)
         assert (x_t >= 0).all(), "All tokens should be >= 0"
@@ -140,7 +140,7 @@ class TestNoisyPathsStage1:
         alpha_t = torch.full((n_tokens, 1), 1 - t)
         beta_t = torch.full((n_tokens, 1), t)
 
-        x_t = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=noise_alpha)
+        x_t, _ = sample_masked_ctmc(x_0, x_1, alpha_t, beta_t, noise_alpha=noise_alpha)
 
         # Expected probabilities at t=0.5:
         # noise_t = 0.2 * 0.5 * 0.5 = 0.05
@@ -203,7 +203,7 @@ class TestNoisyPathsStage2:
             alpha_t = torch.full((n_tokens, 1), 1 - t)
             beta_t = torch.full((n_tokens, 1), t)
 
-            x_t = sample_masked_ctmc(
+            x_t, _ = sample_masked_ctmc(
                 x_0, x_1, alpha_t, beta_t,
                 noise_alpha=noise_alpha,
                 marginal_path=str(marginal_path),
@@ -247,14 +247,14 @@ class TestNoisyPathsStage2:
 
             # Stage 1: Uniform
             torch.manual_seed(42)
-            x_t_uniform = sample_masked_ctmc(
+            x_t_uniform, _ = sample_masked_ctmc(
                 x_0, x_1, alpha_t, beta_t,
                 noise_alpha=noise_alpha,
             )
 
             # Stage 2: Marginal
             torch.manual_seed(42)
-            x_t_marginal = sample_masked_ctmc(
+            x_t_marginal, _ = sample_masked_ctmc(
                 x_0, x_1, alpha_t, beta_t,
                 noise_alpha=noise_alpha,
                 marginal_path=str(marginal_path),

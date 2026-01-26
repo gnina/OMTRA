@@ -69,3 +69,97 @@ python routines/train.py
     model.time_scaled_loss=true
     model/aux_losses=pairs \
 ```
+
+## Noisy Paths: Discrete Corruption Training
+
+Noisy paths training addresses train-test mismatch in discrete flow matching by introducing structured corruption of unmasked tokens during training. This teaches the model to correct incorrect tokens, improving robustness at inference time.
+
+### Stage 1: Uniform Corruption
+
+Train with uniform corruption of discrete tokens (atom types, bond types):
+
+```console
+python routines/train.py \
+    name=noisy_stage1 \
+    task_group=pharmit5050_cond_a \
+    model/conditional_paths=noisy \
+    max_steps=200000
+```
+
+The `noise_alpha` parameter controls corruption level (default 0.15 → ~3.75% max corruption at t=0.5).
+
+### Stage 2: Data-Marginal Corruption
+
+Uses empirical token distribution instead of uniform for more realistic corruption:
+
+```console
+python routines/train.py \
+    name=noisy_stage2 \
+    task_group=pharmit5050_cond_a \
+    model/conditional_paths=noisy_marginal \
+    max_steps=200000
+```
+
+**Prerequisite**: Compute marginal distributions first:
+```console
+python omtra_pipelines/compute_marginals/compute_marginals.py \
+    --pharmit_path data/pharmit \
+    --split train \
+    --output_path data/pharmit/train_marginals.npz
+```
+
+### Stage 4: Corruption Classification Head
+
+Train the model to predict which tokens were corrupted, enabling corruption-aware inference:
+
+```console
+python routines/train.py \
+    name=noisy_stage4 \
+    task_group=pharmit5050_cond_a \
+    model/conditional_paths=noisy \
+    model/aux_losses=corruption \
+    max_steps=200000
+```
+
+The `corruption` aux_loss config automatically enables `model.vector_field.enable_corruption_heads=true`.
+
+**Loss parameters** (in `configs/model/aux_losses/corruption.yaml`):
+- `weight`: Loss weight relative to main denoising loss (default: 1.0)
+- `pos_weight`: BCE positive class weight for class imbalance (default: 10.0)
+
+### Stage 5: Corruption-Aware Sampling
+
+After training with Stage 4, use corruption predictions during inference to remask likely errors:
+
+```python
+sampled_systems = model.sample(
+    task_name="fixed_protein_ligand_denovo_condensed",
+    g_list=graphs,
+    corruption_remasking=True,      # Enable remasking
+    corruption_threshold=0.5,        # P(corrupted) threshold
+)
+```
+
+### Combining Stages
+
+Example: Train with marginal corruption + corruption classification head:
+
+```console
+python routines/train.py \
+    name=noisy_stage2_stage4 \
+    task_group=pharmit5050_cond_a \
+    model/conditional_paths=noisy_marginal \
+    model/aux_losses=corruption \
+    max_steps=200000
+```
+
+### Configuration Files
+
+| Config | Description |
+|--------|-------------|
+| `model/conditional_paths=noisy` | Stage 1: uniform corruption (α=0.15) |
+| `model/conditional_paths=noisy_marginal` | Stage 2: data-marginal corruption |
+| `model/conditional_paths=noisy_alpha32` | Higher corruption rate (α=0.32, 8% max) |
+| `model/aux_losses=corruption` | Stage 4: corruption classification head |
+
+For detailed documentation, see [docs/noisy_paths.md](noisy_paths.md).

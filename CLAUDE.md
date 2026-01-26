@@ -357,11 +357,17 @@ python routines/train.py \
 **Implementation summary**:
 1. `paths.py`: `sample_masked_ctmc()` now returns `(x_t, is_corrupted)` tuple
 2. `omtra.py`: `sample_conditional_path()` stores corruption masks in graph data
-3. `vector_field.py`: Added `node_corruption_heads` and `edge_corruption_heads` ModuleDicts
+3. `vector_field.py`: Added `node_corruption_heads` and `edge_corruption_heads` ModuleDicts (optional, disabled by default)
 4. `corruption.py`: New auxiliary loss with BCE + positive class weighting
+
+**Backwards compatibility**:
+- Corruption heads are **optional** via `enable_corruption_heads` parameter (default: `false`)
+- Old checkpoints load without issues since heads aren't created by default
+- The `model/aux_losses=corruption` config automatically enables corruption heads
 
 **Configuration**:
 - `configs/model/aux_losses/corruption.yaml`: Default config (weight=1.0, pos_weight=10.0)
+- Uses `@package _global_` to set `model.vector_field.enable_corruption_heads=true`
 - `pos_weight` handles class imbalance (most tokens are clean)
 
 **Data flow**:
