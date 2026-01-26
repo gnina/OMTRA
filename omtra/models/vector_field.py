@@ -71,10 +71,8 @@ class VectorField(nn.Module):
         n_pre_gvp_convs: int = 1,
         fixed_coord_max_std: float = 0.0,
         fixed_coord_std: Optional[float] = None,
-        fixed_atom_max_prob: float = 0.0,
-        fixed_atom_prob: Optional[float] = None,
-        fixed_edge_max_prob: float = 0.0,
-        fixed_edge_prob: Optional[float] = None,
+        fixed_token_max_prob: float = 0.0,
+        fixed_token_prob: Optional[float] = None,
         transformer_cfg: Optional[DictConfig] = _default_transformer_cfg,
         pharm_pos_std_flag: bool = False,
         enable_corruption_heads: bool = False,
@@ -97,10 +95,8 @@ class VectorField(nn.Module):
         
         self.fixed_coord_max_std = fixed_coord_max_std
         self.fixed_coord_std = fixed_coord_std
-        self.fixed_atom_max_prob = fixed_atom_max_prob
-        self.fixed_atom_prob = fixed_atom_prob
-        self.fixed_edge_max_prob = fixed_edge_max_prob
-        self.fixed_edge_prob = fixed_edge_prob
+        self.fixed_token_max_prob = fixed_token_max_prob
+        self.fixed_token_prob = fixed_token_prob
         self.pharm_pos_std_flag = pharm_pos_std_flag
 
         # self.convs_per_update = convs_per_update
@@ -163,10 +159,8 @@ class VectorField(nn.Module):
             res_id_embed_dim=res_id_embed_dim,
             fixed_coord_max_std=self.fixed_coord_max_std,
             fixed_coord_std=self.fixed_coord_std,
-            fixed_atom_max_prob=self.fixed_atom_max_prob,
-            fixed_atom_prob=self.fixed_atom_prob,
-            fixed_edge_max_prob=self.fixed_edge_max_prob,
-            fixed_edge_prob=self.fixed_edge_prob,
+            fixed_token_max_prob=self.fixed_token_max_prob,
+            fixed_token_prob=self.fixed_token_prob,
             )
 
         # get the set of all nodes present in our graphs

@@ -18,5 +18,4 @@ res_id_embed_dim:              64
 pos_emb:                       false
 n_pre_gvp_convs:               1
 fixed_coord_max_std:           ${fixed_coord_max_std}
-fixed_atom_max_prob:           ${fixed_atom_max_prob}
-fixed_edge_max_prob:           ${fixed_edge_max_prob}
+fixed_token_max_prob:          ${fixed_token_max_prob}
