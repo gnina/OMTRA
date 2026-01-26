@@ -712,13 +712,10 @@ class OMTRA(pl.LightningModule):
         pharm_pos_std: Optional[torch.Tensor] = None, #std deviation for noise to be added to pharm positions
         n_lig_atoms_mean: Union[float, None] = None,
         n_lig_atoms_std: Union[float, None] = None,
-<<<<<<< HEAD
         prot_pos_std: Optional[torch.Tensor] = None,
-=======
         # Stage 5: Corruption-aware remasking
         corruption_remasking: bool = False,
         corruption_threshold: float = 0.5,
->>>>>>> ad952c2 (Implement Stage 4 & 5: Corruption classification head and remasking)
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
