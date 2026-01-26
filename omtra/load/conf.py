@@ -59,8 +59,8 @@ def instantiate_callbacks(callbacks_cfg: DictConfig, override_dir=None) -> List[
             print(f"Instantiating callback <{cb_conf._target_}>")
 
             # override checkpoint dir if specified
-            if override_dir is not None and 'CheckpointCallback' in cb_conf._target_:
-                cb_conf.dirpath = override_dir
+            if override_dir is not None and 'ModelCheckpoint' in cb_conf._target_:
+                cb_conf.dirpath = str(Path(override_dir) / 'checkpoints')
 
             callbacks.append(hydra.utils.instantiate(cb_conf))
 

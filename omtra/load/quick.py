@@ -78,8 +78,12 @@ def omtra_from_config(cfg: DictConfig) -> OMTRA:
     # TODO: there is al ligand_encoder and we are training OMTRA, we need a ligand_encoder_checkpoint argument
     # somewhere we need to check that this is the case and throw an error if not, perhaps in the train script?
 
-    hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
-    log_dir = hydra_cfg['runtime']['output_dir']
+    # Use og_run_dir from config if set (for resume), otherwise use hydra output dir
+    if cfg.get('og_run_dir') is not None:
+        log_dir = cfg.og_run_dir
+    else:
+        hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
+        log_dir = hydra_cfg['runtime']['output_dir']
 
     # load model
     model = hydra.utils.instantiate(
