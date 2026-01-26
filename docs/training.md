@@ -31,7 +31,24 @@ This is essentially a list. Each item of the list describes a "phase" of trainin
 This is a dictionary where each key is a task and the value is a list specifying the dataset we will use for that task, along with the probability of using the dataset for that task. In other words, the dataset task coupling is directly specifying the probability distribution p(dataset|task).
 
 ## Training Commands
-Default parameters are specified in config files under `configs/<GROUP>/default.yaml`. Parameters can be overwritten using command line arguments of the form `<GROUP>.<PARAMETER>=value`. 
+Default parameters are specified in config files under `configs/<GROUP>/default.yaml`. Parameters can be overwritten using command line arguments of the form `<GROUP>.<PARAMETER>=value`.
+
+### Resuming Training
+To resume training from a checkpoint, use the `+checkpoint` argument with the path to the checkpoint file:
+
+```console
+python routines/train.py \
+    +checkpoint=outputs/2026-01-26/my_run_2026-01-26_12-35-166011/checkpoints/last.ckpt \
+    max_steps=100000
+```
+
+When resuming:
+- The original config is loaded from the checkpoint's run directory (`.hydra/config.yaml`)
+- The W&B run is automatically resumed with the same run ID
+- Checkpoints continue to be saved to the original run directory
+- CLI overrides (like `max_steps` above) are applied on top of the original config
+
+You can resume multiple times from the same run - each resume will continue from where the last one left off. 
 
 #### Example Usage
 ```console
