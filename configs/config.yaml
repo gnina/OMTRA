@@ -28,8 +28,6 @@ distort_p: 0.2  # upper bound on fraction of atoms distorted
 distort_t: 0.0  # lower bound on time step for atom position distortion
 plinder_pskip_factor: 1.0 # 0 -> no weighted sampling, 1 -> uniform sampling over clusters
 res_id_embed_dim: 64 # dimension of residue id embedding
-fixed_coord_max_std: 0.0
-fixed_token_max_prob: 0.0
 pharm_pos_std: 0.0 # standard deviation to sample noise variance from for pharm positions
 prot_pos_std: 0.0 # standard deviation to sample noise std dev from for protein atom positions
 offset_std: 0.0 # offset to prior positions

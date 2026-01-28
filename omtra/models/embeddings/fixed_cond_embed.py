@@ -170,7 +170,7 @@ class FixedConditionEmbedder(nn.Module):
 
                 # noise coordinates of fixed atoms
                 if (self.fixed_coord_max_std > 0.0) or (self.fixed_coord_std is not None):
-                    x, sigma = self.corrupt_coords(x)
+                    x, sigma = self.corrupt_coords(x, mask)
                     fixed_node_scalar_features[ntype].append(sigma)
                 
                 fixed_atom_coords = self.coord_embedding[modality.entity_name](x) * mask.unsqueeze(-1)
@@ -256,6 +256,7 @@ class FixedConditionEmbedder(nn.Module):
 
         # Only corrupt valid (fixed) tokens
         corrupt_mask = (torch.rand(gt.shape[0], device=gt.device) < prob) & valid_mask
+        prob = prob * valid_mask
 
         if corrupt_mask.any():
             n_corrupt = corrupt_mask.sum().item()
@@ -290,11 +291,13 @@ class FixedConditionEmbedder(nn.Module):
         return gt, prob
 
     def corrupt_coords(self,
-                       x: torch.Tensor):
+                       x: torch.Tensor,
+                       valid_mask: torch.Tensor):
         if self.fixed_coord_std is not None:    # Use specific user-defined sigma
             sigma = torch.full((x.shape[0], 1), self.fixed_coord_std, device=x.device)
         else:   # Sample sigma from U(0, fixed_coord_max_std)
-            sigma = torch.rand((x.shape[0], 1), device=x.device) * self.fixed_coord_max_std    
-        eps = torch.randn_like(x) * sigma   # sample episilon from N(0, sigma)
-        x = x + eps                         # add noise to the true fixed atom positions
+            sigma = torch.rand((x.shape[0], 1), device=x.device) * self.fixed_coord_max_std 
+        sigma = sigma * valid_mask.unsqueeze(-1)    # mask out sigma for valid (fixed) atoms 
+        eps = torch.randn_like(x) * sigma           # sample episilon from N(0, sigma)
+        x = x + eps                                 # add noise to the true fixed atom positions
         return x, sigma

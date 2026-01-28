@@ -17,8 +17,8 @@ self_conditioning:             true
 res_id_embed_dim:              64
 pos_emb:                       false
 n_pre_gvp_convs:               1
-fixed_coord_max_std:           ${fixed_coord_max_std}
-fixed_token_max_prob:          ${fixed_token_max_prob}
+fixed_coord_max_std:           0.0
+fixed_token_max_prob:          0.0
 
 # Marginal distribution for fixed token corruption
 # Uses data-marginal corruption by default (samples from empirical token distribution)

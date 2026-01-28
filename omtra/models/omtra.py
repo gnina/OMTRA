@@ -954,8 +954,7 @@ class OMTRA(pl.LightningModule):
                     old_to_new[fixed_atoms_old] = torch.arange(n_fixed_atoms, device=g_i.device)
 
                     # Get edge indices for old graph (edges don't include fake atoms)
-                    n_gt_lig_atoms = atom_mask_old.shape[0] - n_fake_atoms_gt[g_idx]
-                    src_old, dst_old = build_lig_edge_idxs(n_gt_lig_atoms).to(g_i.device)
+                    src_old, dst_old = build_lig_edge_idxs(atom_mask_old.shape[0]).to(g_i.device)
 
                     # Use original graph's edge_mask_1_true, which marks fixed edges in the old graph
                     # (not all edges in the dense fully-connected graph)
