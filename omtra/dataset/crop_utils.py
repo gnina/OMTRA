@@ -355,30 +355,32 @@ def compute_ligand_groups(n_lig_atoms: int):
         return 1
     
     #using sqrt x as a function
-    n_groups = max(2, min(50, int(np.sqrt(n_lig_atoms))))
+    n_groups = max(2, min(30, int(0.5*0.333*n_lig_atoms))) #minimum 2 groups, maximum 30 groups, if above 4 atoms in ligand
     return n_groups
 
-def compute_distribution_statistics(coords):
+def compute_protein_ligand_distance_statistics(protein_coords, ligand_coords):
     """
-    Compute multiple statistics to characterize coordinate distribution.
+    Compute statistics on distances between protein and ligand atom coordinates.
     
     Parameters
     ----------
-    coords : np.ndarray
-        Atom coordinates (shape: (N, 3))
+    protein_coords : np.ndarray
+        Protein atom coordinates (shape: (N, 3))
+    ligand_coords : np.ndarray
+        Ligand atom coordinates (shape: (M, 3))
     
     Returns
     -------
     dict
-        Dictionary of distribution statistics
+        Dictionary of distance distribution statistics
     """
-    # Compute geometric center
-    center = np.mean(coords, axis=0)
+    # Compute pairwise distances
+    distances = np.linalg.norm(
+        protein_coords[:, np.newaxis, :] - ligand_coords[np.newaxis, :, :], 
+        axis=2
+    ).flatten()
     
-    # Compute distances from center
-    distances = np.linalg.norm(coords - center, axis=1)
-    
-    # Compute various statistics
+    # Compute statistics
     stats_dict = {
         # Central tendency measures
         'mean_distance': np.mean(distances),
@@ -386,21 +388,23 @@ def compute_distribution_statistics(coords):
         
         # Spread measures
         'std_distance': np.std(distances),
+        'variance_distance': np.var(distances),
         'iqr_distance': np.percentile(distances, 75) - np.percentile(distances, 25),
         
         # Asymmetry measures
         'skewness': stats.skew(distances),
+        'kurtosis': stats.kurtosis(distances),
         'quartile_asymmetry': (
             np.percentile(distances, 75) - np.percentile(distances, 50)
         ) - (
             np.percentile(distances, 50) - np.percentile(distances, 25)
         ),
         
-        # Tail behavior
-        'max_distance': np.max(distances),
+        # Range and percentile measures
         'min_distance': np.min(distances),
-        '90th_percentile': np.percentile(distances, 90),
-        '10th_percentile': np.percentile(distances, 10)
+        'max_distance': np.max(distances),
+        '10th_percentile': np.percentile(distances, 10),
+        '90th_percentile': np.percentile(distances, 90)
     }
     
     return stats_dict
