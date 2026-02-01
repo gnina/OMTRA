@@ -23,6 +23,10 @@ class SamplingParams(BaseModel):
     device: Optional[str] = Field(default="cuda", description="Device to run on")
     n_lig_atoms_mean: Optional[float] = Field(default=None, ge=4, description="Mean number of atoms for ligand samples (if provided, uses normal distribution instead of dataset distribution)")
     n_lig_atoms_std: Optional[float] = Field(default=None, ge=0.1, description="Standard deviation for number of atoms (required if n_lig_atoms_mean is provided)")
+    pocket_selection: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Pocket selection: {type: 'center'|'residues'|'file', value: coordinates|residues|upload_token, bbox_length?: float}"
+    )
     
     @validator('sampling_mode')
     def validate_sampling_mode(cls, v):
@@ -98,7 +102,7 @@ class JobResultResponse(BaseModel):
     state: JobStatus
     artifacts: List[ArtifactInfo] = []
     logs_url: Optional[str] = None
-    params: SamplingParams
+    params: Dict[str, Any]  # Can be SamplingParams or DockingParams - keep as dict to preserve all fields
     elapsed_seconds: Optional[float] = None
     error_message: Optional[str] = None
 
@@ -119,4 +123,36 @@ def generate_upload_token() -> str:
     """Generate a unique upload token"""
     return str(uuid.uuid4())
 
+
+class DockingParams(BaseModel):
+    """Parameters for docking jobs"""
+    docking_mode: str = Field(description="Docking mode: Rigid Docking or Rigid Docking + Pharmacophore")
+    seed: Optional[int] = Field(default=None, description="Random seed for reproducibility")
+    n_samples: int = Field(default=10, ge=1, le=100, description="Number of samples to generate")
+    steps: int = Field(default=100, ge=10, le=1000, description="Number of sampling steps")
+    device: Optional[str] = Field(default="cuda", description="Device to run on")
+    pocket_selection: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Pocket selection: {type: 'center'|'residues'|'file', value: coordinates|residues|file_path, bbox_length?: float}"
+    )
+    
+    @validator('docking_mode')
+    def validate_docking_mode(cls, v):
+        valid_modes = ["Rigid Docking", "Rigid Docking + Pharmacophore"]
+        if v not in valid_modes:
+            raise ValueError(f"docking_mode must be one of {valid_modes}")
+        return v
+
+
+class DockingJobSubmission(BaseModel):
+    """Docking job submission request"""
+    params: DockingParams
+    uploads: List[str] = Field(default=[], description="List of upload tokens")
+    job_id: Optional[str] = Field(default=None, description="Custom job ID (if not provided, will be auto-generated)")
+    
+    @validator('uploads')
+    def validate_uploads(cls, v):
+        if len(v) > 3:  # MAX_FILES_PER_JOB
+            raise ValueError("Maximum 3 files per job")
+        return v
 

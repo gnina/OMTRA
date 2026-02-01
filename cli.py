@@ -168,6 +168,12 @@ def create_parser():
         help="Path to pharmacophore file (JSON from Pharmit, XYZ, or ligand SDF) for pharmacophore-conditioned tasks."
     )
     parser.add_argument(
+        "--pharmacophore_tolerance",
+        type=float,
+        default=0.0,
+        help="Standard deviation of noise added to pharmacophore coordinates during sampling (default: 0.0)"
+    )
+    parser.add_argument(
         "--bbox_length",
         type=float,
         default=23.0,

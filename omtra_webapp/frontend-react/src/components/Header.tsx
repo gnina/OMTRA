@@ -10,17 +10,10 @@ export function Header() {
     <header className="sticky top-0 z-50 w-full border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
       <nav className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8" aria-label="Top">
         <div className="flex w-full items-center justify-between py-4">
-          <div className="flex items-center">
-            <a href="/" className="flex items-center gap-2">
-              <span className="text-2xl">🧪</span>
-              <span className="text-xl font-bold text-slate-900">OMTRA</span>
-            </a>
-          </div>
-          
-          {/* Desktop Navigation */}
-          <div className="hidden md:flex md:items-center md:gap-8">
-            <a 
-              href="#workspace" 
+          {/* Desktop Navigation - Left Side */}
+          <div className="hidden md:flex md:items-center md:gap-6">
+            <a
+              href="#workspace"
               onClick={(e) => {
                 e.preventDefault();
                 document.getElementById('workspace')?.scrollIntoView({ behavior: 'smooth' });
@@ -29,8 +22,8 @@ export function Header() {
             >
               Workspace
             </a>
-            <a 
-              href="#help" 
+            <a
+              href="#help"
               onClick={(e) => {
                 e.preventDefault();
                 const helpSection = document.getElementById('help') || document.querySelector('[id="help"]');
@@ -40,8 +33,8 @@ export function Header() {
             >
               Documentation
             </a>
-            <a 
-              href="#about" 
+            <a
+              href="#about"
               onClick={(e) => {
                 e.preventDefault();
                 document.getElementById('about')?.scrollIntoView({ behavior: 'smooth' });
@@ -49,6 +42,19 @@ export function Header() {
               className="text-sm font-medium text-slate-700 hover:text-primary-600 transition-colors"
             >
               About
+            </a>
+          </div>
+
+          {/* Logo - Center/Right */}
+          <div className="flex items-center md:ml-auto">
+            <a href="/" className="flex items-center gap-3 group">
+              <span className="text-4xl group-hover:scale-110 transition-transform">🧪</span>
+              <div className="flex flex-col">
+                <span className="text-2xl font-bold text-slate-900">
+                  OMTRA
+                </span>
+                <span className="text-xs text-slate-500 font-medium -mt-1">Molecular Generation</span>
+              </div>
             </a>
           </div>
 
@@ -120,4 +126,3 @@ export function Header() {
     </header>
   );
 }
-

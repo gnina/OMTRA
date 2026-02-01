@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import { JobStatus } from '@/types';
 import { Loader2, Download, ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import { MolecularViewer } from './MolecularViewer';
 import { MetricsTable } from './MetricsTable';
-import { InteractionDiagram2D } from './InteractionDiagram2D';
+import { InteractionDiagram2D, prefetchInteractionDiagram } from './InteractionDiagram2D';
 
 interface JobViewerProps {
   jobId: string;
@@ -18,6 +18,12 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
   const [moleculeIndex, setMoleculeIndex] = useState(0);
   const [inputValue, setInputValue] = useState('0');
   const [activeTab, setActiveTab] = useState<'3d' | '2d'>('3d');
+  const [prefetchedMolecules, setPrefetchedMolecules] = useState<Record<string, string>>({});
+
+  // Structural data state
+  const [proteinData, setProteinData] = useState<{ text: string, format: string } | null>(null);
+  const [pharmData, setPharmData] = useState<{ text: string, extension: string } | null>(null);
+  const [hasLoadedStructural, setHasLoadedStructural] = useState(false);
 
   // Sync inputValue when moleculeIndex changes from other sources (arrows, table selection)
   useEffect(() => {
@@ -38,6 +44,98 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
     queryFn: () => apiClient.getJobResult(jobId),
     enabled: status?.state === 'SUCCEEDED',
   });
+
+  const { data: inputFiles } = useQuery({
+    queryKey: ['job-inputs', jobId],
+    queryFn: () => apiClient.listInputFiles(jobId),
+  });
+
+  const sdfFiles = useMemo(() => {
+    if (!result?.artifacts) return [];
+    return result.artifacts
+      .filter((a: any) => a.filename.startsWith('sample_') && a.filename.endsWith('.sdf'))
+      .sort((a: any, b: any) => {
+        const numA = parseInt(a.filename.match(/\d+/)?.[0] || '0');
+        const numB = parseInt(b.filename.match(/\d+/)?.[0] || '0');
+        return numA - numB;
+      });
+  }, [result]);
+
+  // Bulk Pre-fetch result molecules, structural data, and interaction diagrams
+  useEffect(() => {
+    if (!result?.artifacts || sdfFiles.length === 0 || !status) return;
+
+    const prefetchEverything = async () => {
+      // 1. Fetch Structural Data (Protein & Pharma) if not already loaded
+      if (!hasLoadedStructural) {
+        try {
+          // Use the inputFiles from useQuery if available
+          const inputs = inputFiles || await apiClient.listInputFiles(jobId);
+          const mode = (result.params as any).docking_mode || result.params.sampling_mode || 'Unconditional';
+
+          const needsProtein = ['Protein-conditioned', 'Protein+Pharmacophore-conditioned', 'Rigid Docking', 'Rigid Docking + Pharmacophore'].includes(mode) || mode.toLowerCase().includes('protein') || mode.toLowerCase().includes('docking');
+          const needsPharmacophore = ['Pharmacophore-conditioned', 'Protein+Pharmacophore-conditioned', 'Rigid Docking + Pharmacophore'].includes(mode) || mode.toLowerCase().includes('pharmacophore');
+
+          // Parallel fetch for speed
+          const structuralPromises = [];
+
+          if (needsProtein) {
+            const protFile = inputs.files.find(f => f.extension === '.pdb' || f.extension === '.cif');
+            if (protFile) {
+              structuralPromises.push(apiClient.downloadInputFile(jobId, protFile.filename).then(async b => ({
+                type: 'protein' as const,
+                text: await b.text(),
+                format: protFile.extension === '.pdb' ? 'pdb' : 'cif'
+              })));
+            }
+          }
+
+          if (needsPharmacophore) {
+            const pharmFile = inputs.files.find(f => ['.xyz', '.json'].includes(f.extension.toLowerCase())) ||
+              inputs.files.find(f => f.extension.toLowerCase() === '.sdf');
+            if (pharmFile) {
+              structuralPromises.push(apiClient.downloadInputFile(jobId, pharmFile.filename).then(async b => ({
+                type: 'pharm' as const,
+                text: await b.text(),
+                extension: pharmFile.extension.toLowerCase()
+              })));
+            }
+          }
+
+          const results = await Promise.all(structuralPromises);
+          results.forEach(res => {
+            if (res.type === 'protein') setProteinData({ text: res.text, format: res.format });
+            if (res.type === 'pharm') setPharmData({ text: res.text, extension: res.extension });
+          });
+          setHasLoadedStructural(true);
+        } catch (err) {
+          console.error('Failed to prefetch structural data:', err);
+        }
+      }
+
+      // 2. Prefetch SDF contents for 3D Viewer
+      for (const file of sdfFiles) {
+        if (!prefetchedMolecules[file.filename]) {
+          try {
+            const blob = await apiClient.downloadFile(jobId, file.filename);
+            const text = await blob.text();
+            setPrefetchedMolecules(prev => ({ ...prev, [file.filename]: text }));
+          } catch (err) {
+            console.error(`Failed to prefetch ${file.filename}:`, err);
+          }
+        }
+      }
+
+      // 3. Prefetch 2D diagrams
+      for (const file of sdfFiles) {
+        prefetchInteractionDiagram(jobId, file.filename).catch(() => { });
+      }
+    };
+
+    if (status?.state === 'SUCCEEDED') {
+      prefetchEverything();
+    }
+  }, [result, sdfFiles, jobId, status?.state, inputFiles, hasLoadedStructural]);
 
   const isLoading = statusLoading || (status?.state === 'SUCCEEDED' && resultLoading);
 
@@ -131,13 +229,7 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
     );
   }
 
-  const sdfFiles = result.artifacts
-    .filter((a) => a.filename.startsWith('sample_') && a.filename.endsWith('.sdf'))
-    .sort((a, b) => {
-      const numA = parseInt(a.filename.match(/\d+/)?.[0] || '0');
-      const numB = parseInt(b.filename.match(/\d+/)?.[0] || '0');
-      return numA - numB;
-    });
+
 
   if (sdfFiles.length === 0) {
     return (
@@ -190,11 +282,11 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
           <h2 className="text-2xl font-semibold text-slate-900">
             Job Details:
           </h2>
-          <span 
-            className="text-2xl font-semibold text-slate-900" 
-            style={{ 
-              wordBreak: 'break-all', 
-              overflowWrap: 'anywhere', 
+          <span
+            className="text-2xl font-semibold text-slate-900"
+            style={{
+              wordBreak: 'break-all',
+              overflowWrap: 'anywhere',
               whiteSpace: 'normal'
             }}
           >
@@ -202,7 +294,7 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
           </span>
         </div>
         <div className="text-sm text-slate-600">
-          {result.params.sampling_mode} • {result.params.n_samples} samples •{' '}
+          {(result.params as any).docking_mode || result.params.sampling_mode || 'Unconditional'} • {(result.params as any).n_samples || (result.params as any).num_samples || 'N/A'} samples •{' '}
           {result.params.steps} steps
         </div>
       </div>
@@ -224,7 +316,7 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
         >
           <ChevronLeft className="w-6 h-6 text-slate-700" />
         </button>
-        
+
         {/* Right Arrow */}
         <button
           onClick={() => {
@@ -238,7 +330,7 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
         >
           <ChevronRight className="w-6 h-6 text-slate-700" />
         </button>
-        
+
         <div className="text-center">
           <span className="font-semibold text-slate-900">
             Sample {moleculeIndex} of {sdfFiles.length - 1}
@@ -283,39 +375,40 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
 
       {/* Viewer */}
       {result.params.sampling_mode === 'Protein-conditioned' ||
-      result.params.sampling_mode === 'Protein+Pharmacophore-conditioned' ? (
+        result.params.sampling_mode === 'Protein+Pharmacophore-conditioned' ||
+        (result.params as any).docking_mode ? (
         <div className="rounded-2xl bg-white shadow-sm">
           {/* Tabs */}
           <div className="flex border-b border-slate-200/60">
             <button
               onClick={() => setActiveTab('3d')}
-              className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${
-                activeTab === '3d'
-                  ? 'text-primary-600 border-b-2 border-primary-600 bg-primary-50/50'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
+              className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${activeTab === '3d'
+                ? 'text-primary-600 border-b-2 border-primary-600 bg-primary-50/50'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
             >
               3D Viewer
             </button>
             <button
               onClick={() => setActiveTab('2d')}
-              className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${
-                activeTab === '2d'
-                  ? 'text-primary-600 border-b-2 border-primary-600 bg-primary-50/50'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
+              className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${activeTab === '2d'
+                ? 'text-primary-600 border-b-2 border-primary-600 bg-primary-50/50'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
             >
               2D Interaction Diagram
             </button>
           </div>
-          
+
           {/* Tab Content */}
           <div className="p-4">
             <div className={activeTab === '3d' ? 'block' : 'hidden'}>
               <MolecularViewer
                 jobId={jobId}
                 filename={currentFile.filename}
-                samplingMode={result.params.sampling_mode}
+                samplingMode={(result.params as any).docking_mode || result.params.sampling_mode}
+                inputFilesList={inputFiles}
+                prefetchedContent={prefetchedMolecules[currentFile.filename]}
               />
             </div>
             <div className={activeTab === '2d' ? 'block' : 'hidden'}>
@@ -331,15 +424,17 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
           <MolecularViewer
             jobId={jobId}
             filename={currentFile.filename}
-            samplingMode={result.params.sampling_mode}
+            samplingMode={(result.params as any).docking_mode || result.params.sampling_mode || 'Unconditional'}
+            pocketSelection={result.params.pocket_selection}
+            inputFilesList={inputFiles}
+            prefetchedContent={prefetchedMolecules[currentFile.filename]}
           />
         </div>
       )}
 
-      {/* Metrics Table */}
       <MetricsTable
         jobId={jobId}
-        samplingMode={result.params.sampling_mode}
+        samplingMode={(result.params as any).docking_mode || result.params.sampling_mode || 'Unconditional'}
         onRowSelect={(index) => {
           setMoleculeIndex(index);
           setInputValue(String(index));

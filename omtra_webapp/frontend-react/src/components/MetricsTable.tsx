@@ -48,24 +48,15 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
     loadMetrics();
   }, [jobId]);
 
-  // Filter out unwanted columns
+  // Filter out unwanted columns  
   const filteredMetrics = metrics.map((m, originalIndex) => {
-    const { logp, tpsa, n_connected_components, molecular_weight, qed, is_invalid, PiStacking, smiles, ...rest } = m;
-    let { invalid_reason, Note, Warning } = rest;
-    if (invalid_reason) {
-      Warning = invalid_reason;
-      delete rest.invalid_reason;
-    }
-    if (Note) {
-      Warning = Note;
-      delete rest.Note;
-    }
-    return { __originalIndex: originalIndex, ...rest, ...(Warning ? { Warning } : {}) };
+    const { tpsa, n_connected_components, molecular_weight, qed, is_invalid, smiles, Warning, PiStacking, ...rest } = m;
+    return { __originalIndex: originalIndex, ...rest };
   });
 
   // Get all available columns
   const allColumns = Object.keys(filteredMetrics[0] || {}).filter((col) => col !== '__originalIndex');
-  
+
   // Check if pb_failing_checks should be shown (only if at least one molecule has failing checks)
   const shouldShowPbFailingChecks = useMemo(() => {
     return filteredMetrics.some((m) => {
@@ -209,9 +200,8 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
                     return (
                       <label
                         key={col}
-                        className={`flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50 rounded ${
-                          isRequired ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
-                        }`}
+                        className={`flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50 rounded ${isRequired ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                          }`}
                       >
                         <input
                           type="checkbox"
@@ -255,27 +245,26 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
               {columns.map((col) => {
                 const isSorted = sortConfig.column === col;
                 return (
-                <th
-                      key={col}
-                      scope="col"
-                      aria-sort={
-                        isSorted ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : 'none'
-                      }
-                      className={`px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-700 ${
-                        col === 'sample_name' ? 'sticky left-0 bg-slate-50 z-10' : ''
+                  <th
+                    key={col}
+                    scope="col"
+                    aria-sort={
+                      isSorted ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : 'none'
+                    }
+                    className={`px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-700 ${col === 'sample_name' ? 'sticky left-0 bg-slate-50 z-10' : ''
                       }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort(col)}
+                      className="flex items-center gap-1.5 hover:text-primary-700 focus:outline-none transition-colors"
                     >
-                      <button
-                        type="button"
-                        onClick={() => handleSort(col)}
-                        className="flex items-center gap-1.5 hover:text-primary-700 focus:outline-none transition-colors"
-                      >
-                        {col}
-                        <span className="text-[10px] text-slate-400">
-                          {isSorted ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}
-                        </span>
-                      </button>
-                    </th>
+                      {col}
+                      <span className="text-[10px] text-slate-400">
+                        {isSorted ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </button>
+                  </th>
                 );
               })}
             </tr>
@@ -285,39 +274,37 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
               const originalIndex = row.__originalIndex ?? 0;
               const isSelected = selectedRow === originalIndex;
               return (
-              <tr
-                    key={originalIndex}
-                    onClick={() => handleRowClick(originalIndex)}
-                    className={`cursor-pointer transition-colors ${
-                      isSelected
-                        ? 'bg-primary-100/70 hover:bg-primary-100/70 border-l-4 border-primary-600'
-                        : 'hover:bg-slate-50'
+                <tr
+                  key={originalIndex}
+                  onClick={() => handleRowClick(originalIndex)}
+                  className={`cursor-pointer transition-colors ${isSelected
+                    ? 'bg-primary-100/70 hover:bg-primary-100/70 border-l-4 border-primary-600'
+                    : 'hover:bg-slate-50'
                     }`}
-                    style={isSelected ? { borderLeftColor: '#0284c7' } : undefined}
-              >
-                {columns.map((col) => (
-                  <td
-                    key={col}
-                    className={`px-4 py-3.5 text-sm text-slate-900 ${
-                      col === 'sample_name'
+                  style={isSelected ? { borderLeftColor: '#0284c7' } : undefined}
+                >
+                  {columns.map((col) => (
+                    <td
+                      key={col}
+                      className={`px-4 py-3.5 text-sm text-slate-900 ${col === 'sample_name'
                         ? `sticky left-0 z-10 font-mono ${isSelected ? 'bg-primary-100/70' : 'bg-white'}`
                         : isSelected ? 'bg-primary-100/70' : ''
-                    }`}
-                  >
-                    {row[col] !== null && row[col] !== undefined
-                      ? typeof row[col] === 'number'
-                        ? Number.isInteger(row[col]) || row[col] % 1 === 0
-                          ? String(Math.round(row[col]))
-                          : row[col].toFixed(4)
-                        : Array.isArray(row[col])
-                        ? row[col].length > 0
-                          ? row[col].join(', ')
-                          : '-'
-                        : String(row[col])
-                      : '-'}
-                  </td>
-                ))}
-              </tr>
+                        }`}
+                    >
+                      {row[col] !== null && row[col] !== undefined
+                        ? typeof row[col] === 'number'
+                          ? Number.isInteger(row[col]) || row[col] % 1 === 0
+                            ? String(Math.round(row[col]))
+                            : row[col].toFixed(4)
+                          : Array.isArray(row[col])
+                            ? row[col].length > 0
+                              ? row[col].join(', ')
+                              : '-'
+                            : String(row[col])
+                        : '-'}
+                    </td>
+                  ))}
+                </tr>
               );
             })}
           </tbody>

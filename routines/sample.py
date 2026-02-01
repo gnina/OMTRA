@@ -346,7 +346,19 @@ def main(args):
 
     # set coms if protein is present, prefer ligand com
     coms = None
-    if g_list is not None and 'protein_identity' in task.groups_present:
+    
+    # Priority 1: Explicit pocket center from CLI/Worker
+    if hasattr(args, 'pocket_center') and args.pocket_center is not None and g_list is not None:
+        target_com = torch.tensor(args.pocket_center, device=device, dtype=torch.float32)
+        # Shift ligand nodes to the pocket center if they exist
+        for g in g_list:
+            if g.num_nodes('lig') > 0:
+                current_com = g.nodes['lig'].data['x_1_true'].mean(dim=0)
+                g.nodes['lig'].data['x_1_true'] += (target_com - current_com)
+        # Set coms to the target center
+        coms = [target_com] * len(g_list)
+        
+    elif g_list is not None and 'protein_identity' in task.groups_present:
         if g_list[0].num_nodes('lig') > 0 and 'x_1_true' in g_list[0].nodes['lig'].data:
             coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
         # fallback protein atom com if present
@@ -367,7 +379,9 @@ def main(args):
         eps=args.eps,
         n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None,
         n_lig_atoms_mean=getattr(args, 'n_lig_atoms_mean', None),
-        n_lig_atoms_std=getattr(args, 'n_lig_atoms_std', None)
+
+        n_lig_atoms_std=getattr(args, 'n_lig_atoms_std', None),
+        pharm_pos_std=getattr(args, 'pharmacophore_tolerance', 0.0)
     )
 
     if args.output_dir is None:

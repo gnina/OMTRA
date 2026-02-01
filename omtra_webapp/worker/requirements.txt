@@ -11,3 +11,6 @@ natsort>=8.0.0
 
 # OMTRA model dependencies (installed separately in Docker)
 # torch, torch-geometric, rdkit, etc. are installed via the main OMTRA environment
+
+# Pocket detection
+pocketeer

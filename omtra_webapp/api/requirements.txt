@@ -11,3 +11,4 @@ Pillow==10.1.0
 rdkit-pypi==2022.9.5
 requests==2.31.0
 biotite>=0.37.0
+pocketeer

@@ -6,20 +6,28 @@ export enum JobStatus {
   CANCELED = 'CANCELED',
 }
 
-export type SamplingMode = 
+export type SamplingMode =
   | 'Unconditional'
   | 'Pharmacophore-conditioned'
   | 'Protein-conditioned'
-  | 'Protein+Pharmacophore-conditioned';
+  | 'Protein+Pharmacophore-conditioned'
+  | 'Rigid Docking'
+  | 'Rigid Docking + Pharmacophore';
 
 export interface SamplingParams {
-  sampling_mode: SamplingMode;
+  sampling_mode?: SamplingMode;
+  docking_mode?: DockingMode;
   seed?: number | null;
   n_samples: number;
   steps: number;
   device?: string;
   n_lig_atoms_mean?: number | null;
   n_lig_atoms_std?: number | null;
+  pocket_selection?: {
+    type: 'center' | 'residues' | 'file';
+    value: [number, number, number] | Array<{ chain: string; res_id: number }> | string;
+    bbox_length?: number;
+  };
 }
 
 export interface JobSubmission {
@@ -110,6 +118,40 @@ export interface JobMetadata {
 
 export interface JobsListResponse {
   jobs: JobMetadata[];
+}
+
+// Docking types
+export type DockingMode = 'Rigid Docking' | 'Rigid Docking + Pharmacophore';
+
+export interface PocketInfo {
+  id: string;
+  center: [number, number, number];
+  bbox_length: number;
+  residues?: Array<{ chain: string; res_id: number }>;
+  score?: number;
+}
+
+export interface DockingParams {
+  docking_mode: DockingMode;
+  seed?: number | null;
+  n_samples: number;
+  steps: number;
+  device?: string;
+  pocket_selection?: {
+    type: 'center' | 'residues' | 'file';
+    value: [number, number, number] | Array<{ chain: string; res_id: number }> | string;
+    bbox_length?: number;
+  };
+}
+
+export interface DockingJobSubmission {
+  params: DockingParams;
+  uploads: string[];
+  job_id?: string;
+}
+
+export interface PocketDetectionResponse {
+  pockets: PocketInfo[];
 }
 
 

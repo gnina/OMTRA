@@ -78,7 +78,7 @@ class OMTRA(pl.LightningModule):
         t_alpha: float = 1.8,
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
-        pharm_var: float = 0.0,
+        pharm_pos_std: float = 0.0,
         lr_warmup_steps: int = 0,
 
     ):
@@ -101,7 +101,7 @@ class OMTRA(pl.LightningModule):
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
-        self.pharm_var = pharm_var
+        self.pharm_pos_std = pharm_pos_std
         self.lr_warmup_steps = lr_warmup_steps
 
         self.total_loss_weights = total_loss_weights
@@ -408,8 +408,9 @@ class OMTRA(pl.LightningModule):
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
         
         # add noise to pharmacophore coordinates
-        if self.pharm_var > 0.0:
-            g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**0.5
+        # apply pharmacophore noise
+        if self.pharm_pos_std > 0.0:
+            g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_pos_std
 
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
@@ -623,7 +624,7 @@ class OMTRA(pl.LightningModule):
         n_lig_atom_margin: Union[float, None] = None,
         n_lig_atoms_mean: Union[float, None] = None,
         n_lig_atoms_std: Union[float, None] = None,
-
+        pharm_pos_std: float = 0.0,
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -683,6 +684,12 @@ class OMTRA(pl.LightningModule):
                     com_i = coms[idx]
 
                 coms_flat.extend([com_i] * n_replicates)
+        
+        # Apply pharmacophore noise if requested
+        if pharm_pos_std > 0.0:
+            for g in g_flat:
+                if g.num_nodes("pharm") > 0:
+                    g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * pharm_pos_std
 
         # TODO: sample number of ligand atoms
         add_ligand = any(group in groups_generated for group in ["ligand_identity", "ligand_identity_condensed"])
@@ -961,6 +968,7 @@ class OMTRA(pl.LightningModule):
         noise_scaler: float = 1.0,
         eps: float = 0.01,
         n_lig_atom_margin: Union[float, None] = None,
+        pharm_pos_std: float = 0.0,
     ) -> List[SampledSystem]:
         
         n_samples = len(g_list) if g_list is not None else 1
@@ -995,6 +1003,7 @@ class OMTRA(pl.LightningModule):
                                             noise_scaler=noise_scaler,
                                             eps=eps,
                                             n_lig_atom_margin=n_lig_atom_margin,
+                                            pharm_pos_std=pharm_pos_std,
                                             )
                 # re-order samples
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):
@@ -1018,6 +1027,7 @@ class OMTRA(pl.LightningModule):
                                             noise_scaler=noise_scaler,
                                             eps=eps,
                                             n_lig_atom_margin=n_lig_atom_margin,
+                                            pharm_pos_std=pharm_pos_std,
                                             )
 
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):

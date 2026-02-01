@@ -42,3 +42,6 @@ node_modules/
 .next/
 out/
 build/
+
+# Worker directory - cli.py is mounted from root, not stored here
+worker/cli.py

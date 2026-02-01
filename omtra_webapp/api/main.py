@@ -1,5 +1,23 @@
 import os
 import sys
+import collections
+import collections.abc
+
+# Monkeypatch collections for Python 3.10+ compatibility
+if not hasattr(collections, 'Mapping'):
+    collections.Mapping = collections.abc.Mapping
+if not hasattr(collections, 'Iterable'):
+    collections.Iterable = collections.abc.Iterable
+if not hasattr(collections, 'Callable'):
+    collections.Callable = collections.abc.Callable
+if not hasattr(collections, 'Sequence'):
+    collections.Sequence = collections.abc.Sequence
+if not hasattr(collections, 'MutableMapping'):
+    collections.MutableMapping = collections.abc.MutableMapping
+if not hasattr(collections, 'MutableSequence'):
+    collections.MutableSequence = collections.abc.MutableSequence
+if not hasattr(collections, 'Set'):
+    collections.Set = collections.abc.Set
 import shutil
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Body
@@ -9,7 +27,7 @@ from typing import List, Optional
 import redis
 from rq import Queue
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import aiofiles
 import time
@@ -22,13 +40,15 @@ sys.path.append(str(Path(__file__).parent.parent))
 from shared.models import (
     JobSubmission, JobResponse, JobStatusResponse, JobResultResponse,
     UploadInitResponse, ArtifactInfo, JobStatus, generate_job_id, 
-    generate_upload_token, SamplingParams
+    generate_upload_token, SamplingParams, DockingJobSubmission, DockingParams
 )
 from shared.file_utils import (
     validate_file_safety, FileValidationError, create_job_directory,
     save_uploaded_file, list_job_outputs, create_zip_archive, get_job_directory,
-    extract_pharmacophore_from_sdf, pharmacophore_list_to_xyz
+    extract_pharmacophore_from_sdf, extract_pharmacophore_from_xyz,
+    extract_pharmacophore_from_json, pharmacophore_list_to_xyz
 )
+from shared.pocket_detection import detect_pockets
 from shared.logging_utils import logger, log_api_request, log_file_upload, log_job_event
 
 try:
@@ -45,7 +65,7 @@ from omtra.utils.checkpoints import (
 # Configuration
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
 API_HOST = os.getenv('API_HOST', '0.0.0.0')
-API_PORT = int(os.getenv('API_PORT', 8000))
+API_PORT = int(os.getenv('API_PORT', 8001))
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 26214400))
 MAX_FILES_PER_JOB = int(os.getenv('MAX_FILES_PER_JOB', 3))
 JOB_TTL_HOURS = int(os.getenv('JOB_TTL_HOURS', 48))
@@ -223,24 +243,35 @@ async def upload_file(upload_token: str, file: UploadFile = File(...)):
 
 @app.post("/extract-pharmacophore")
 async def extract_pharmacophore_endpoint(file: UploadFile = File(...)):
-    """Extract pharmacophore features from an uploaded SDF file"""
+    """Extract pharmacophore features from an uploaded file (SDF, XYZ, or JSON)"""
     
     try:
-        # Validate filename exists and is SDF
+        # Validate filename exists
+        logger.info(f"Extract pharmacophore request: filename={file.filename}, content_type={file.content_type}")
+        
         if not file.filename:
             logger.warning("Extract pharmacophore: No filename provided")
             raise HTTPException(status_code=400, detail="No filename provided")
         
         filename_lower = file.filename.lower()
-        if not filename_lower.endswith('.sdf'):
+        
+        # Determine extraction function based on extension
+        if filename_lower.endswith('.sdf'):
+            extract_func = extract_pharmacophore_from_sdf
+        elif filename_lower.endswith('.xyz'):
+            extract_func = extract_pharmacophore_from_xyz
+        elif filename_lower.endswith('.json'):
+            extract_func = extract_pharmacophore_from_json
+        else:
             logger.warning(f"Extract pharmacophore: Invalid file type - {file.filename}")
             raise HTTPException(
                 status_code=400, 
-                detail=f"File must be an SDF file (got: {file.filename})"
+                detail=f"File must be an SDF, XYZ, or JSON file (got: {file.filename})"
             )
         
         # Read file content
         content = await file.read()
+        logger.info(f"Read {len(content)} bytes from {file.filename}")
         
         if len(content) == 0:
             logger.warning("Extract pharmacophore: Empty file provided")
@@ -255,10 +286,14 @@ async def extract_pharmacophore_endpoint(file: UploadFile = File(...)):
             # Run extraction with timeout protection (120 seconds max)
             # Use run_in_executor for Python 3.10 compatibility
             result = await asyncio.wait_for(
-                loop.run_in_executor(None, extract_pharmacophore_from_sdf, content),
+                loop.run_in_executor(None, extract_func, content),
                 timeout=120.0
             )
-            logger.info(f"Extracted {result.get('n_pharmacophores', 0)} pharmacophore features from {file.filename}")
+            n_ph = result.get('n_pharmacophores', 0)
+            logger.info(f"Extracted {n_ph} pharmacophore features from {file.filename}")
+            if n_ph > 0:
+                first = result['pharmacophores'][0]
+                logger.debug(f"First pharmacophore: type={first.get('type')}, pos={first.get('position')}")
             return result
         except asyncio.TimeoutError:
             logger.error("Extract pharmacophore: Extraction timed out after 120 seconds")
@@ -327,6 +362,89 @@ async def pharmacophore_to_xyz_endpoint(data: dict = Body(...)):
         raise HTTPException(status_code=500, detail=f"XYZ conversion failed: {str(e)}")
 
 
+@app.post("/detect-pockets")
+async def detect_pockets_endpoint(file: UploadFile = File(...)):
+    """Detect pockets in a protein structure using pocketeer"""
+    
+    try:
+        # Validate filename exists and is PDB or CIF
+        if not file.filename:
+            logger.warning("Detect pockets: No filename provided")
+            raise HTTPException(status_code=400, detail="No filename provided")
+        
+        filename_lower = file.filename.lower()
+        if not (filename_lower.endswith('.pdb') or filename_lower.endswith('.cif')):
+            logger.warning(f"Detect pockets: Invalid file type - {file.filename}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File must be a PDB or CIF file (got: {file.filename})"
+            )
+        
+        # Determine format
+        protein_format = 'pdb' if filename_lower.endswith('.pdb') else 'cif'
+        
+        # Read file content
+        content = await file.read()
+        
+        if len(content) == 0:
+            logger.warning("Detect pockets: Empty file provided")
+            raise HTTPException(status_code=400, detail="Empty file provided")
+        
+        # Detect pockets with timeout protection
+        import asyncio
+        from shared.pocket_detection import detect_pockets as detect_pockets_func
+        
+        loop = asyncio.get_event_loop()
+        try:
+            # Run detection with timeout (120 seconds max)
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, detect_pockets_func, content, protein_format),
+                timeout=120.0
+            )
+            
+            # Convert to response format with unique IDs
+            import uuid
+            pockets = []
+            for i, pocket in enumerate(result):
+                pocket_id = f"pocket_{i+1}_{uuid.uuid4().hex[:8]}"
+                pockets.append({
+                    'id': pocket_id,
+                    'center': pocket['center'],
+                    'bbox_length': pocket['bbox_length'],
+                    'score': pocket.get('score'),
+                    'volume': pocket.get('volume'),
+                })
+            
+            logger.info(f"Detected {len(pockets)} pockets in {file.filename}")
+            return {
+                'pockets': pockets
+            }
+        except asyncio.TimeoutError:
+            logger.error("Detect pockets: Detection timed out after 120 seconds")
+            raise HTTPException(
+                status_code=504,
+                detail="Pocket detection timed out. The protein structure might be too large."
+            )
+        except ImportError as e:
+            logger.error(f"Detect pockets: pocketeer not available: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail="Pocket detection is not available. pocketeer package is not installed."
+            )
+        except Exception as e:
+            logger.error(f"Detect pockets: Error during detection: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Pocket detection failed: {str(e)}"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in pocket detection: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Pocket detection failed: {str(e)}")
+
+
 @app.post("/sample", response_model=JobResponse)
 async def submit_job(job_data: JobSubmission):
     """Submit a sampling job"""
@@ -357,6 +475,7 @@ async def submit_job(job_data: JobSubmission):
         
         # Validate upload tokens and move files
         input_files = []
+        token_to_filename = {}
         for upload_token in job_data.uploads:
             if upload_token not in upload_tokens:
                 raise HTTPException(status_code=400, detail=f"Invalid upload token: {upload_token}")
@@ -377,6 +496,7 @@ async def submit_job(job_data: JobSubmission):
                     'path': str(job_file_path),
                     **token_data['validation_result']
                 })
+                token_to_filename[upload_token] = temp_file_path.name
             
             # Clean up upload token
             del upload_tokens[upload_token]
@@ -385,7 +505,7 @@ async def submit_job(job_data: JobSubmission):
         if sampling_mode in ["Pharmacophore-conditioned", "Protein-conditioned", "Protein+Pharmacophore-conditioned"] and len(input_files) == 0:
             raise HTTPException(status_code=400, detail=f"{sampling_mode} requires at least one input file (e.g., pharmacophore .xyz or protein files)")
         
-        # Validate Protein-conditioned mode requires both protein and ligand files
+        # Validate Protein-conditioned mode requires both protein and pocket definition
         if sampling_mode == "Protein-conditioned":
             protein_files = [f for f in input_files if f['filename'].lower().endswith(('.pdb', '.cif'))]
             ligand_files = [f for f in input_files if f['filename'].lower().endswith('.sdf')]
@@ -395,15 +515,27 @@ async def submit_job(job_data: JobSubmission):
                     status_code=400, 
                     detail="Protein-conditioned mode requires a protein file (PDB/CIF format)"
                 )
+            
+            # If no ligand file is provided, we MUST have a pocket_selection with a center
             if not ligand_files:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Protein-conditioned mode requires a reference ligand file (SDF format) to identify the binding pocket"
-                )
+                pocket_selection = job_data.params.pocket_selection
+                if not pocket_selection or (pocket_selection.get('type') != 'center' and pocket_selection.get('type') != 'residues'):
+                    raise HTTPException(
+                        status_code=400, 
+                        detail="Protein-conditioned mode requires either a reference ligand (SDF) or a pocket definition (center/residues)"
+                    )
         
         # Get checkpoint path and add to params
         params_dict = pydantic_to_dict(job_data.params)
         params_dict['checkpoint_path'] = str(checkpoint_path)
+
+        # Resolve pocket_selection token if type is file
+        if params_dict.get('pocket_selection') and params_dict['pocket_selection'].get('type') == 'file':
+            token = params_dict['pocket_selection'].get('value')
+            if token in token_to_filename:
+                params_dict['pocket_selection']['value'] = token_to_filename[token]
+            else:
+                logger.warning(f"Pocket selection token {token} not found in uploads")
         
         # Override n_samples with num_samples from the request if provided
         if hasattr(job_data, 'num_samples') and job_data.num_samples is not None:
@@ -453,9 +585,133 @@ async def submit_job(job_data: JobSubmission):
         
         return JobResponse(job_id=job_id)
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Job submission failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Job submission failed: {str(e)}")
+
+
+@app.post("/docking/submit", response_model=JobResponse)
+async def submit_docking_job(job_data: DockingJobSubmission):
+    """Submit a docking job"""
+    
+    # Use custom job ID if provided, otherwise generate one
+    job_id = job_data.job_id if job_data.job_id else generate_job_id()
+    
+    # Validate custom job ID if provided
+    if job_data.job_id:
+        if not job_data.job_id.strip():
+            raise HTTPException(status_code=400, detail="Custom job ID cannot be empty")
+        if len(job_data.job_id) > 100:
+            raise HTTPException(status_code=400, detail="Custom job ID too long (max 100 characters)")
+        # Check if job ID already exists
+        if redis_conn.exists(f"job:{job_id}"):
+            raise HTTPException(status_code=400, detail=f"Job ID '{job_id}' already exists")
+    
+    try:
+        # Validate docking mode and checkpoint availability
+        docking_mode = job_data.params.docking_mode
+        checkpoint_path = get_checkpoint_path(docking_mode)
+        if checkpoint_path is None:
+            checkpoint_name = CHECKPOINT_MAPPING.get(docking_mode, "unknown")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Checkpoint not available for {docking_mode} mode. Expected: {checkpoint_name}"
+            )
+        
+        # Validate upload tokens and move files
+        input_files = []
+        token_to_filename = {}
+        for upload_token in job_data.uploads:
+            if upload_token not in upload_tokens:
+                raise HTTPException(status_code=400, detail=f"Invalid upload token: {upload_token}")
+            
+            token_data = upload_tokens[upload_token]
+            if not token_data['used'] or 'file_path' not in token_data:
+                raise HTTPException(status_code=400, detail=f"Upload token not used: {upload_token}")
+            
+            # Move file to job directory
+            temp_file_path = Path(token_data['file_path'])
+            if temp_file_path.exists():
+                job_dir = create_job_directory(job_id)
+                job_file_path = job_dir / "inputs" / temp_file_path.name
+                shutil.move(str(temp_file_path), str(job_file_path))
+                
+                input_files.append({
+                    'filename': temp_file_path.name,
+                    'path': str(job_file_path),
+                    **token_data['validation_result']
+                })
+                token_to_filename[upload_token] = temp_file_path.name
+            
+            # Clean up upload token
+            del upload_tokens[upload_token]
+        
+        # Validate required files for docking
+        protein_files = [f for f in input_files if f['filename'].lower().endswith(('.pdb', '.cif'))]
+        ligand_files = [f for f in input_files if f['filename'].lower().endswith('.sdf')]
+        
+        if not protein_files:
+            raise HTTPException(
+                status_code=400,
+                detail="Docking requires a protein file (PDB or CIF format)"
+            )
+        if not ligand_files:
+            raise HTTPException(
+                status_code=400,
+                detail="Docking requires a ligand file (SDF format) to dock"
+            )
+        
+        # Convert params to dict for serialization
+        params_dict = pydantic_to_dict(job_data.params)
+        
+        # Resolve pocket_selection token if type is file
+        if params_dict.get('pocket_selection') and params_dict['pocket_selection'].get('type') == 'file':
+            token = params_dict['pocket_selection'].get('value')
+            if token in token_to_filename:
+                params_dict['pocket_selection']['value'] = token_to_filename[token]
+            else:
+                logger.warning(f"Docking pocket selection token {token} not found in uploads")
+        
+        # Submit job to queue (use same worker task for now, will be updated)
+        result_ttl_seconds = JOB_TTL_HOURS * 3600
+        job = task_queue.enqueue(
+            'worker.docking_task',  # Will create this in worker.py
+            kwargs={
+                'job_id': job_id,
+                'params': params_dict,
+                'input_files': input_files,
+            },
+            job_timeout='600s',
+            result_ttl=result_ttl_seconds
+        )
+        
+        # Store job metadata
+        job_metadata = {
+            'job_id': job_id,
+            'rq_job_id': job.id,
+            'params': params_dict,
+            'input_files': input_files,
+            'created_at': datetime.utcnow().isoformat(),
+            'status': JobStatus.QUEUED
+        }
+        
+        redis_conn.setex(
+            f"job:{job_id}",
+            timedelta(hours=JOB_TTL_HOURS),
+            json.dumps(job_metadata)
+        )
+        
+        log_job_event(logger, job_id, "docking_job_submitted", params=params_dict)
+        
+        return JobResponse(job_id=job_id)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Docking job submission failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Docking job submission failed: {str(e)}")
 
 
 @app.get("/status/{job_id}", response_model=JobStatusResponse)
@@ -479,19 +735,39 @@ async def get_job_status(job_id: str):
             status_mapping = {
                 'queued': JobStatus.QUEUED,
                 'started': JobStatus.RUNNING,
+                'running': JobStatus.RUNNING,
                 'finished': JobStatus.SUCCEEDED,
+                'succeeded': JobStatus.SUCCEEDED,
                 'failed': JobStatus.FAILED,
                 'canceled': JobStatus.CANCELED,
-                'deferred': JobStatus.QUEUED
+                'deferred': JobStatus.QUEUED,
+                # Handle cases where str(enum) is used (e.g. 'jobstatus.started')
+                'jobstatus.queued': JobStatus.QUEUED,
+                'jobstatus.started': JobStatus.RUNNING,
+                'jobstatus.finished': JobStatus.SUCCEEDED,
+                'jobstatus.failed': JobStatus.FAILED,
+                'jobstatus.canceled': JobStatus.CANCELED,
             }
             
             rq_raw_status = None
             try:
                 rq_raw_status = rq_job.get_status()
+                # Try to get value if it's an enum
+                if hasattr(rq_raw_status, 'value'):
+                    rq_raw_status = rq_raw_status.value
             except Exception:
                 # Fallback for older rq
                 rq_raw_status = getattr(rq_job, 'status', None)
+            
+            # Ensure it's a string for mapping
+            if rq_raw_status is not None:
+                rq_raw_status = str(rq_raw_status).lower()
+                
             status = status_mapping.get(rq_raw_status, JobStatus.QUEUED)
+            
+            # Extra safety check: if RQ has started_at but status is still queued/unknown, it's RUNNING
+            if status == JobStatus.QUEUED and getattr(rq_job, 'started_at', None):
+                status = JobStatus.RUNNING
             
             # Calculate progress and timing
             # Progress is not accurately trackable during sampling, so we only show completion
@@ -502,7 +778,17 @@ async def get_job_status(job_id: str):
             elapsed_seconds = None
             
             if started_at:
-                end_time = completed_at or datetime.utcnow()
+                # Ensure started_at is aware
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=timezone.utc)
+                
+                # Use current time as end_time if not completed
+                end_time = completed_at or datetime.now(timezone.utc)
+                
+                # Ensure end_time is aware
+                if end_time.tzinfo is None:
+                    end_time = end_time.replace(tzinfo=timezone.utc)
+                
                 elapsed_seconds = (end_time - started_at).total_seconds()
             
             is_failed = False
@@ -545,9 +831,15 @@ async def get_job_status(job_id: str):
                         else:
                             completed_dt = completed_at
                         
+                        # Ensure both are aware for subtraction
+                        if started_dt.tzinfo is None:
+                            started_dt = started_dt.replace(tzinfo=timezone.utc)
+                        if completed_dt.tzinfo is None:
+                            completed_dt = completed_dt.replace(tzinfo=timezone.utc)
+                            
                         elapsed_seconds = (completed_dt - started_dt).total_seconds()
-                    except Exception:
-                        pass
+                    except Exception as te:
+                        logger.warning(f"Error calculating elapsed time: {te}")
                 
                 # Parse datetime objects
                 if isinstance(started_at, str):
@@ -616,7 +908,7 @@ async def get_job_result(job_id: str):
             return JobResultResponse(
                 job_id=job_id,
                 state=status_response.state,
-                params=SamplingParams(**job_metadata['params']),
+                params=job_metadata['params'],
                 error_message=status_response.message
             )
         
@@ -639,7 +931,7 @@ async def get_job_result(job_id: str):
             state=status_response.state,
             artifacts=artifacts,
             logs_url=f"/logs/{job_id}",
-            params=SamplingParams(**job_metadata['params']),
+            params=job_metadata['params'],  # Return as dict to preserve all fields (docking_mode, sampling_mode, etc.)
             elapsed_seconds=status_response.elapsed_seconds
         )
         

@@ -13,9 +13,7 @@ interface PharmacophoreViewerProps {
   pharmacophores: Array<{
     index: number;
     type: string;
-    x: number;
-    y: number;
-    z: number;
+    position: [number, number, number];
     color: string;
     selected: boolean;
   }>;
@@ -39,35 +37,35 @@ export function PharmacophoreViewer({
 
   useEffect(() => {
     selectionRef.current = new Set(selectedIndices);
-    // Update spheres when selection changes externally (no camera preservation)
-    // Only update if viewer exists and update function is available
+    // Update spheres when selection changes externally
     if (viewerRef.current && (viewerRef.current as any).updateSphereAppearance && (viewerRef.current as any).sphereShapes) {
       const updateFn = (viewerRef.current as any).updateSphereAppearance;
       const sphereShapes = (viewerRef.current as any).sphereShapes;
-      // Only update spheres that exist
       Object.keys(sphereShapes).forEach((idxStr) => {
         const idx = parseInt(idxStr);
+        // We pass the isSelected state from selectedIndices prop
+        // The updateSphereAppearance function inside the viewer will check against internal state
         updateFn(idx, selectedIndices.includes(idx));
       });
     }
-  }, [selectedIndices]); // Removed pharmacophores - we only care about selection changes
+  }, [selectedIndices]);
 
   useEffect(() => {
     if (!containerRef.current || typeof window === 'undefined') return;
-    
+
     // CRITICAL: Only initialize viewer once (global viewer pattern)
     if (viewerRef.current) {
       // Viewer already exists - check if we need to add/update protein
       const viewer = viewerRef.current;
       const hasProtein = (viewer as any)._hasProtein || false;
-      
+
       // If protein data is provided but not loaded yet, load it now
       if (proteinB64 && proteinFormat && !hasProtein) {
         try {
           const proteinData = atob(proteinB64);
           viewer.addModel(proteinData, proteinFormat);
           viewer.setStyle({ chain: 'A' }, { cartoon: { color: 'lightblue' } });
-          
+
           // Add surface for protein
           try {
             const pocketSelection = {
@@ -78,9 +76,9 @@ export function PharmacophoreViewer({
           } catch (err) {
             console.error('Failed to add protein surface:', err);
           }
-          
+
           (viewer as any)._hasProtein = true;
-          
+
           // Update camera clipping planes after adding protein
           const viewerAny = viewer as any;
           if (viewerAny.camera) {
@@ -88,7 +86,7 @@ export function PharmacophoreViewer({
             viewerAny.camera.far = 10000;
             viewerAny.camera.updateProjectionMatrix();
           }
-          
+
           viewer.render();
         } catch (err) {
           console.error('Failed to load protein:', err);
@@ -114,16 +112,16 @@ export function PharmacophoreViewer({
       const viewer = window.$3Dmol.createViewer(containerRef.current, {
         defaultcolors: window.$3Dmol.rasmolElementColors,
       });
-      
+
       const viewerAny = viewer as any;
       if (viewerAny.camera) {
-            viewerAny.camera.near = 0.01;
-            viewerAny.camera.far = 1000000;
+        viewerAny.camera.near = 0.01;
+        viewerAny.camera.far = 1000000;
         viewerAny.camera.updateProjectionMatrix();
       }
-      
+
       viewerRef.current = viewer;
-      
+
       // Load ligand
       try {
         // ligandContent is already base64, decode it
@@ -147,7 +145,7 @@ export function PharmacophoreViewer({
           const proteinData = atob(proteinB64);
           viewer.addModel(proteinData, proteinFormat);
           viewer.setStyle({ chain: 'A' }, { cartoon: { color: 'lightblue' } });
-          
+
           // Add surface for protein
           try {
             const pocketSelection = {
@@ -158,7 +156,7 @@ export function PharmacophoreViewer({
           } catch (err) {
             console.error('Failed to add protein surface:', err);
           }
-          
+
           (viewer as any)._hasProtein = true;
         } catch (err) {
           console.error('Failed to load protein:', err);
@@ -173,48 +171,44 @@ export function PharmacophoreViewer({
         const sphereInfo = sphereShapes[index];
         if (!sphereInfo || !viewer) return;
 
-        // Check if the visual state already matches (avoid unnecessary updates)
-        const newWireframe = !isSelected;
-        const newAlpha = isSelected ? 1.0 : 1.0;
-        if (sphereInfo.wireframe === newWireframe && sphereInfo.alpha === newAlpha) {
-          return; // Already in the correct state
+        // Check if internal state matches requested state
+        if (sphereInfo.isSelected === isSelected) return;
+
+        // Remove old shape(s)
+        if (sphereInfo.shapes) {
+          sphereInfo.shapes.forEach((s: any) => { try { viewer.removeShape(s); } catch (e) { } });
+        }
+        if (sphereInfo.shape) {
+          try { viewer.removeShape(sphereInfo.shape); } catch (e) { }
         }
 
-        // Remove old sphere
-        if (sphereInfo.shape) {
-          try {
-            viewer.removeShape(sphereInfo.shape);
-          } catch (e) {
-            console.log('Could not remove shape:', e);
-          }
-        }
-        
         const pharm = pharmacophores.find((p) => p.index === index);
         if (!pharm) return;
 
-        // Create sphere options (reuse existing click handler)
+        const center = sphereInfo.center;
+
         const sphereOptions: any = {
-          center: sphereInfo.center,
-          radius: sphereInfo.radius || 2.0,
+          center,
+          radius: 1.0,
           color: sphereInfo.color,
           clickable: true,
           callback: sphereInfo.clickHandler,
         };
 
         if (isSelected) {
-          // Smooth, opaque sphere for selected
-          sphereOptions.alpha = 1.0; // Fully opaque
-          // No wireframe = smooth sphere
+          // Selected: Solid opaque sphere + Always on top
+          sphereOptions.alpha = 1.0;
+          sphereOptions.wireframe = false;
         } else {
-          // Wireframe for unselected
+          // Unselected: Wireframe only
           sphereOptions.wireframe = true;
           sphereOptions.linewidth = 1.5;
         }
 
         const newShape = viewer.addSphere(sphereOptions);
 
-        // Try to disable depth testing for smooth spheres so they render on top
-        if (isSelected && newShape && newShape.material) {
+        // Apply always-on-top to ALL pharmacophores
+        if (newShape && newShape.material) {
           try {
             const materials = Array.isArray(newShape.material) ? newShape.material : [newShape.material];
             materials.forEach((mat: any) => {
@@ -222,26 +216,22 @@ export function PharmacophoreViewer({
                 mat.depthTest = false;
                 mat.depthWrite = false;
                 mat.transparent = true;
-                mat.opacity = 1.0;
+                if (isSelected) mat.opacity = 1.0;
               }
             });
-          } catch (e) {
-            console.log('Could not modify sphere material:', e);
-          }
+          } catch (e) { console.warn(e); }
         }
 
         // Update tracking
         sphereShapes[index] = {
           shape: newShape,
+          shapes: [newShape], // keep array structure just in case
           center: sphereInfo.center,
-          radius: sphereInfo.radius || 1.0, // Match MolecularViewer size
           color: sphereInfo.color,
           clickHandler: sphereInfo.clickHandler,
-          alpha: newAlpha,
-          wireframe: newWireframe,
+          isSelected: isSelected
         };
-        
-        // Re-render (no camera preservation needed)
+
         viewer.render();
       };
 
@@ -249,76 +239,73 @@ export function PharmacophoreViewer({
       pharmacophores.forEach((pharm) => {
         const isSelected = selectionRef.current.has(pharm.index);
         const clickHandler = () => {
-          // Toggle selection
           const newSelection = new Set(selectionRef.current);
-          if (newSelection.has(pharm.index)) {
-            newSelection.delete(pharm.index);
-          } else {
-            newSelection.add(pharm.index);
-          }
+          if (newSelection.has(pharm.index)) newSelection.delete(pharm.index);
+          else newSelection.add(pharm.index);
+
           selectionRef.current = newSelection;
           onSelectionChange(Array.from(newSelection));
 
-          // Update only the clicked sphere
           updateSphereAppearance(pharm.index, newSelection.has(pharm.index));
         };
-        
-        // Create sphere options
+
+        const center = { x: pharm.position[0], y: pharm.position[1], z: pharm.position[2] };
+
         const sphereOptions: any = {
-          center: { x: pharm.x, y: pharm.y, z: pharm.z },
-          radius: 1.0, // Match MolecularViewer size
+          center,
+          radius: 1.0,
           color: pharm.color,
           clickable: true,
-          callback: clickHandler,
+          callback: clickHandler
         };
 
         if (isSelected) {
+          // Selected: Solid opaque sphere
           sphereOptions.alpha = 1.0;
+          sphereOptions.wireframe = false;
         } else {
+          // Unselected: Wireframe
           sphereOptions.wireframe = true;
           sphereOptions.linewidth = 1.5;
         }
 
-        const sphereShape = viewer.addSphere(sphereOptions);
+        const shape = viewer.addSphere(sphereOptions);
 
-        // Try to disable depth testing for smooth spheres
-        if (isSelected && sphereShape && sphereShape.material) {
+        // Apply always-on-top to ALL pharmacophores
+        if (shape && shape.material) {
           try {
-            const materials = Array.isArray(sphereShape.material) ? sphereShape.material : [sphereShape.material];
+            const materials = Array.isArray(shape.material) ? shape.material : [shape.material];
             materials.forEach((mat: any) => {
               if (mat) {
                 mat.depthTest = false;
                 mat.depthWrite = false;
                 mat.transparent = true;
-                mat.opacity = 1.0;
+                if (isSelected) mat.opacity = 1.0;
               }
             });
-          } catch (e) {
-            console.log('Could not modify sphere material:', e);
-          }
+          } catch (e) { console.warn(e); }
         }
 
         // Store sphere info for updates
         sphereShapes[pharm.index] = {
-          shape: sphereShape,
-          center: { x: pharm.x, y: pharm.y, z: pharm.z },
-          radius: 1.0, // Match MolecularViewer size
+          shape: shape,
+          shapes: [shape],
+          center,
           color: pharm.color,
           clickHandler: clickHandler,
-          alpha: isSelected ? 1.0 : 1.0,
-          wireframe: !isSelected,
+          isSelected
         };
       });
 
       // Only zoom on initial load (zoom to ligand model 0)
       viewer.zoomTo({ model: 0 });
-      
+
       if (viewerAny.camera) {
         viewerAny.camera.near = 0.01;
         viewerAny.camera.far = 1000000;
         viewerAny.camera.updateProjectionMatrix();
       }
-      
+
       viewer.render();
 
       // Store viewer and update function for later use
@@ -334,7 +321,7 @@ export function PharmacophoreViewer({
       // Only cleanup if component is actually unmounting (not just re-rendering)
       // We'll let React handle the DOM cleanup
     };
-  }, [ligandContent, proteinB64, proteinFormat]); // Include protein props so we can add protein if it arrives later
+  }, [ligandContent, proteinB64, proteinFormat, onSelectionChange, pharmacophores]);
 
   return (
     <div
@@ -344,4 +331,3 @@ export function PharmacophoreViewer({
     />
   );
 }
-

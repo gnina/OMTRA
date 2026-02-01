@@ -3,131 +3,132 @@
 export function HelpTab() {
   return (
     <div className="prose max-w-none">
-      <div className="mb-8">
-        <h2 className="text-3xl font-semibold text-slate-900 mb-2">
-          How to Use OMTRA Molecule Sampler
+      <div className="mb-8 border-b border-slate-200 pb-6 text-center">
+        <h2 className="text-4xl font-extrabold text-slate-900 mb-2 tracking-tight">
+          OMTRA Help Center
         </h2>
-        <p className="text-slate-600">Step-by-step guide</p>
+        <p className="text-slate-500 text-lg">Master the sampling and docking workflows</p>
       </div>
 
-      <div className="space-y-8">
-        <section className="bg-slate-50/70 rounded-2xl p-6 shadow-sm">
-          <h3 className="text-xl font-semibold text-slate-900 mb-3">1. Set Parameters</h3>
-          <ul className="list-disc list-inside space-y-2 text-slate-700">
-            <li>
-              <strong>Sampling Mode</strong>: Choose from:
-              <ul className="list-disc list-inside ml-6 mt-1 space-y-1">
-                <li><strong>Unconditional</strong>: Generate molecules without constraints</li>
-                <li><strong>Pharmacophore-conditioned</strong>: Generate molecules matching specific pharmacophore features</li>
-                <li><strong>Protein-conditioned</strong>: Generate molecules for a specific protein binding site</li>
-                <li><strong>Protein+Pharmacophore-conditioned</strong>: Combine protein and pharmacophore constraints</li>
-              </ul>
-            </li>
-            <li>
-              <strong>Random Seed</strong>: Set for reproducible results (0 to 2³¹-1). Use the same seed to regenerate identical molecules.
-            </li>
-            <li>
-              <strong>Number of Samples</strong>: Number of molecules to generate (1-100).
-            </li>
-            <li>
-              <strong>Sampling Steps</strong>: 200-250 for best results
-            </li>
-            <li>
-              <strong>Atom Count Distribution (Optional)</strong>: Control the size of generated molecules:
-              <ul className="list-disc list-inside ml-6 mt-1 space-y-1">
-                <li>Mean: Average number of atoms per molecule (minimum 4)</li>
-                <li>Standard Deviation: Variability in atom count (minimum 0.1)</li>
-              </ul>
-            </li>
-          </ul>
-        </section>
-
-        <section className="bg-slate-50/70 rounded-2xl p-6 shadow-sm">
-          <h3 className="text-xl font-semibold text-slate-900 mb-3">2. Upload Input Files</h3>
-          <div className="space-y-3 text-slate-700">
-            <div>
-              <strong>Unconditional Mode</strong>: No files required
+      <div className="space-y-10">
+        {/* 1. Workflow Modes */}
+        <section className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm">
+          <h3 className="text-2xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <span className="p-1.5 bg-primary-100 text-primary-600 rounded-lg text-sm">01</span>
+            Workflow Modes
+          </h3>
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
+                🚀 De Novo Design
+              </h4>
+              <p className="text-sm text-slate-600">
+                Generate new chemical structures from scratch or matching specific constraints.
+              </p>
             </div>
-            <div>
-              <strong>Pharmacophore-conditioned Mode</strong>:
-              <ul className="list-disc list-inside ml-6 mt-1 space-y-1">
-                <li>Upload <strong>XYZ pharmacophore files</strong> directly, or</li>
-                <li>Upload <strong>SDF ligand files</strong> to automatically extract pharmacophore features</li>
-                <li>Accepted formats: .xyz, .sdf</li>
-              </ul>
-            </div>
-            <div>
-              <strong>Protein-conditioned Mode</strong>:
-              <ul className="list-disc list-inside ml-6 mt-1 space-y-1">
-                <li>Requires <strong>both</strong> a protein structure file (PDB or CIF) and a reference ligand file (SDF)</li>
-                <li>The ligand is used to identify the binding pocket location</li>
-                <li>Accepted formats: .pdb, .cif, .sdf</li>
-              </ul>
-            </div>
-            <div>
-              <strong>Protein+Pharmacophore-conditioned Mode</strong>:
-              <ul className="list-disc list-inside ml-6 mt-1 space-y-1">
-                <li>Upload a protein structure file (PDB or CIF)</li>
-                <li>Upload either pharmacophore XYZ files or ligand SDF files (for extraction)</li>
-                <li>Accepted formats: .pdb, .cif, .xyz, .sdf</li>
-              </ul>
-            </div>
-            <div className="mt-3 p-3 bg-blue-50 rounded-lg text-sm">
-              <strong>File Limits:</strong> Maximum 3 files, 25MB per file
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
+                🧬 Docking
+              </h4>
+              <p className="text-sm text-slate-600">
+                Dock existing ligands into a protein pocket using GNINA minimization.
+              </p>
             </div>
           </div>
         </section>
 
-        <section className="bg-slate-50/70 rounded-2xl p-6 shadow-sm">
-          <h3 className="text-xl font-semibold text-slate-900 mb-3">3. Select Pharmacophore Features</h3>
-          <p className="text-slate-700 mb-2">
-            If you uploaded an SDF file for pharmacophore extraction, the system will automatically detect 
-            pharmacophore features. You can then interactively select which features to use:
-          </p>
-          <ul className="list-disc list-inside space-y-2 text-slate-700">
-            <li>Click on spheres in the viewer to select/deselect features</li>
-            <li>You must select at least one feature before submitting</li>
-          </ul>
-          <div className="mt-3 p-3 bg-amber-50 rounded-lg text-sm text-amber-800">
-            <strong>Note:</strong> If you upload XYZ files directly, pharmacophore selection is not needed as 
-            all features in the file will be used.
-          </div>
-        </section>
-
-        <section className="bg-slate-50/70 rounded-2xl p-6 shadow-sm">
-          <h3 className="text-xl font-semibold text-slate-900 mb-3">4. Configure Job Settings (Optional)</h3>
-          <ul className="list-disc list-inside space-y-2 text-slate-700">
-            <li>
-              <strong>Custom Job ID</strong>: Optionally specify a custom identifier for your job. 
-              If not provided, a unique ID will be automatically generated.
+        {/* 2. Pocket Selection */}
+        <section className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm">
+          <h3 className="text-2xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <span className="p-1.5 bg-emerald-100 text-emerald-600 rounded-lg text-sm">02</span>
+            Defining the Pocket
+          </h3>
+          <ul className="space-y-4">
+            <li className="flex gap-4">
+              <div className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-sm">A</div>
+              <div>
+                <strong className="text-slate-900">Detected Pockets</strong>
+                <p className="text-sm text-slate-600 mt-1">
+                  Upload a protein to auto-detect binding sites (yellow boxes). Click a box to select it.
+                </p>
+              </div>
+            </li>
+            <li className="flex gap-4">
+              <div className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-sm">B</div>
+              <div>
+                <strong className="text-slate-900">Reference Ligand</strong>
+                <p className="text-sm text-slate-600 mt-1">
+                  Upload a simplified ligand file (.sdf). The pocket is defined within 8Å of this ligand.
+                </p>
+              </div>
+            </li>
+            <li className="flex gap-4">
+              <div className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-sm">C</div>
+              <div>
+                <strong className="text-slate-900">Manual Coordinates</strong>
+                <p className="text-sm text-slate-600 mt-1">
+                  Manually set X, Y, Z center and box size.
+                </p>
+              </div>
             </li>
           </ul>
         </section>
 
-        <section className="bg-slate-50/70 rounded-2xl p-6 shadow-sm">
-          <h3 className="text-xl font-semibold text-slate-900 mb-3">5. Submit Job</h3>
-          <p className="text-slate-700 mb-2">
-            Click &quot;🚀 Run Sampling&quot; to submit your job.
-          </p>
-          <ul className="list-disc list-inside space-y-2 text-slate-700">
-            <li>For 10 samples, protein conditioned tasks take ~2-3 minutes to complete, unconditional tasks take &lt;1 minute.</li>
-          </ul>
-
+        {/* 3. Sampling Conditions */}
+        <section className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm">
+          <h3 className="text-2xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <span className="p-1.5 bg-amber-100 text-amber-600 rounded-lg text-sm">03</span>
+            Sampling & Pharmacophores
+          </h3>
+          <div className="space-y-4 text-slate-700">
+            <p className="text-sm">
+              You can constrain generation using pharmacophores derived from a reference ligand.
+            </p>
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <h4 className="font-bold text-slate-900 mb-2">3D Viewer Interaction</h4>
+              <ul className="list-disc pl-5 text-sm space-y-1">
+                <li><strong>Unselected Pharmacophores</strong>: Displayed as <strong>Wireframe</strong> spheres.</li>
+                <li><strong>Selected Pharmacophores</strong>: Click to select. We recommend selecting less than 8 pharmacophores as conditioning information.</li>
+                <li><strong>Visibility</strong>: All pharmacophores are &quot;Always On Top&quot; and visible through the protein surface.</li>
+              </ul>
+            </div>
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <h4 className="font-bold text-slate-900 mb-2">Key Parameters</h4>
+              <ul className="list-disc pl-5 text-sm space-y-1">
+                <li><strong>Sampling Steps</strong>: Controls denoising iterations. Higher values (e.g., 200) improve quality.</li>
+                <li><strong>Pharmacophores</strong>: Select a subset (&lt; 8 recommended) as structural constraints.</li>
+                <li><strong>Atom Distribution</strong>: Sets the target element composition for the generated molecules.</li>
+              </ul>
+            </div>
+          </div>
         </section>
 
-        <section className="bg-slate-50/70 rounded-2xl p-6 shadow-sm">
-          <h3 className="text-xl font-semibold text-slate-900 mb-3">6. View Results</h3>
-          <ul className="list-disc list-inside space-y-2 text-slate-700">
-            <li><strong>Job List</strong>: Monitor all your jobs and their status in the Jobs tab</li>
-            <li><strong>3D Molecular Viewer</strong>: Interactively view generated molecules</li>
-            <li><strong>Poseview Diagram</strong>: For protein-conditioned modes, view 2D interaction diagrams showing how the molecule interacts with the protein binding site. Note: The diagram may not generate if PoseView cannot detect any interactions or if the molecule is not properly positioned in the binding site</li>
-            <li><strong>Navigation</strong>: Use previous/next buttons or sample selector to browse through generated molecules</li>
-            <li><strong>Metrics Table</strong>: View computed properties for each molecule; click on any row in the metrics table to jump directly to that molecule in the viewer</li>
-            <li><strong>Downloads</strong>: Download individual molecule files (SDF format) or all outputs as a ZIP archive</li>
-          </ul>
+        {/* 4. Output Data */}
+        <section className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm">
+          <h3 className="text-2xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+            <span className="p-1.5 bg-purple-100 text-purple-600 rounded-lg text-sm">04</span>
+            Job Output
+          </h3>
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
+                📄 Generated Molecules
+              </h4>
+              <p className="text-sm text-slate-600">
+                Download top-ranked molecules in SDF format. Results include confidence scores and property predictions.
+              </p>
+            </div>
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
+                📊 Analysis
+              </h4>
+              <p className="text-sm text-slate-600">
+                View 2D interaction diagrams (PoseView) and 3D binding poses directly in the browser.
+              </p>
+            </div>
+          </div>
         </section>
       </div>
     </div>
   );
 }
-

@@ -1,5 +1,23 @@
 import os
 import sys
+import collections
+import collections.abc
+
+# Monkeypatch collections for Python 3.10+ compatibility (Mapping, Iterable, etc. moved to collections.abc)
+if not hasattr(collections, 'Mapping'):
+    collections.Mapping = collections.abc.Mapping
+if not hasattr(collections, 'Iterable'):
+    collections.Iterable = collections.abc.Iterable
+if not hasattr(collections, 'Callable'):
+    collections.Callable = collections.abc.Callable
+if not hasattr(collections, 'Sequence'):
+    collections.Sequence = collections.abc.Sequence
+if not hasattr(collections, 'MutableMapping'):
+    collections.MutableMapping = collections.abc.MutableMapping
+if not hasattr(collections, 'MutableSequence'):
+    collections.MutableSequence = collections.abc.MutableSequence
+if not hasattr(collections, 'Set'):
+    collections.Set = collections.abc.Set
 import time
 import json
 import traceback
@@ -39,6 +57,16 @@ from omtra.utils.checkpoints import WEBAPP_TO_CHECKPOINT
 # Configuration
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
 CHECKPOINT_DIR = Path(os.getenv('CHECKPOINT_DIR', '/srv/app/checkpoints'))
+
+# Define modes that involve a protein (conditioned or docking)
+# These modes should have protein-ligand metrics (vina score, clashes, etc.) computed
+# and should have interaction diagrams generated if possible.
+PROTEIN_INVOLVING_MODES = [
+    'Protein-conditioned', 
+    'Protein+Pharmacophore-conditioned', 
+    'Rigid Docking', 
+    'Rigid Docking + Pharmacophore'
+]
 
 # Setup logging
 logger = setup_logging(
@@ -136,6 +164,41 @@ def _poll_job(job_id: str, poll_url: str, poll_interval: int = 1, max_polls: int
         status = job.get('status', '')
         current_poll += 1
     return job
+
+
+def _strip_hetatm_from_pdb(pdb_file: Path, output_file: Optional[Path] = None) -> Path:
+    """Strip all HETATM records from a PDB file.
+    
+    This is useful for protein-conditioned sampling where co-crystallized ligands
+    in HETATM records can cause issues with PoseCheck/GNINA and aren't needed
+    since the reference ligand is provided separately.
+    
+    Args:
+        pdb_file: Path to input PDB file
+        output_file: Optional path for output. If None, creates a temp file.
+    
+    Returns:
+        Path to cleaned PDB file (may be same as input if no HETATM found)
+    """
+    with open(pdb_file, 'r') as f:
+        lines = f.readlines()
+    
+    # Filter out HETATM lines, keep ATOM, HEADER, TITLE, etc.
+    cleaned_lines = [line for line in lines if not line.startswith('HETATM')]
+    
+    # If no HETATM were found, return original file
+    if len(cleaned_lines) == len(lines):
+        return pdb_file
+    
+    # Write cleaned PDB
+    if output_file is None:
+        # Create temp file in same directory as original
+        output_file = pdb_file.parent / f"{pdb_file.stem}_no_hetatm.pdb"
+    
+    with open(output_file, 'w') as f:
+        f.writelines(cleaned_lines)
+    
+    return output_file
 
 
 def _is_blank_svg(svg: str) -> bool:
@@ -401,6 +464,221 @@ def sampling_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[st
         raise
 
 
+def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Execute a docking job.
+    Similar to sampling_task but for docking workflows.
+    """
+    job_logger = logging.getLogger(f"job.{job_id}")
+    job_logger.info(f"Starting docking job {job_id}")
+    
+    try:
+        # Get job directory
+        job_dir = get_job_directory(job_id)
+        if not job_dir or not job_dir.exists():
+            raise ValueError(f"Job directory not found for job {job_id}")
+        
+        outputs_dir = job_dir / "outputs"
+        outputs_dir.mkdir(exist_ok=True)
+        
+        # Extract parameters
+        docking_mode = params.get('docking_mode', 'Rigid Docking')
+        n_samples = params.get('n_samples', 10)
+        n_timesteps = params.get('steps', 100)
+        seed = params.get('seed')
+        pocket_selection = params.get('pocket_selection')
+        
+        # Get checkpoint path
+        from omtra.utils.checkpoints import get_checkpoint_path_for_webapp
+        checkpoint_path = get_checkpoint_path_for_webapp(docking_mode, CHECKPOINT_DIR)
+        if not checkpoint_path or not checkpoint_path.exists():
+            raise ValueError(f"Checkpoint not found for {docking_mode}")
+        
+        # Map docking mode to task name
+        docking_task_mapping = {
+            'Rigid Docking': 'rigid_docking_condensed',
+            'Rigid Docking + Pharmacophore': 'rigid_docking_pharmacophore_condensed'
+        }
+        
+        task_name = docking_task_mapping.get(docking_mode, 'rigid_docking_condensed')
+        
+        # Use the same run_omtra_sampler infrastructure
+        # Create mock args similar to sampling_task
+        class MockArgs:
+            def __init__(self):
+                self.checkpoint = Path(checkpoint_path)
+                self.task = task_name
+                self.dataset = "pharmit"
+                self.n_samples = n_samples
+                self.n_replicates = 1
+                self.dataset_start_idx = 0
+                self.n_timesteps = n_timesteps
+                self.visualize = False
+                self.output_dir = outputs_dir
+                self.pharmit_path = None
+                self.plinder_path = None
+                self.split = 'val'
+                self.stochastic_sampling = False
+                self.noise_scaler = 1.0
+                self.eps = 0.01
+                self.use_gt_n_lig_atoms = False
+                self.n_lig_atom_margin = 0.15
+                self.n_lig_atoms_mean = None
+                self.n_lig_atoms_mean = None
+                self.n_lig_atoms_std = None
+                self.pharmacophore_tolerance = params.get('pharmacophore_tolerance', 0.0)
+                self.metrics = False
+                self.protein_file = None
+                self.ligand_file = None
+                self.pharmacophore_file = None
+                self.pocket_ligand = None
+                self.pocket_center = None
+                self.pocket_residues = None
+                self.bbox_length = 23.0
+                self.input_files_dir = None
+                self.g_list_from_files = None
+        
+        # Handle input files
+        if not input_files:
+            raise ValueError("Docking requires input files (protein and ligand)")
+        
+        protein_file = None
+        main_ligand_file = None
+        pharmacophore_file = None
+        
+        # Track all SDF files to resolve pocket_ligand if needed
+        all_sdfs = {} # filename -> path
+        
+        for file_info in input_files:
+            file_path = Path(file_info['path'])
+            filename = file_info['filename']
+            filename_lower = filename.lower()
+            
+            if filename_lower.endswith(('.pdb', '.cif')):
+                protein_file = file_path
+            elif filename_lower.endswith('.sdf'):
+                all_sdfs[filename] = file_path
+                # Default main ligand is the first SDF found, 
+                # but we might refine this after identifying pocket_ligand
+                if main_ligand_file is None:
+                    main_ligand_file = file_path
+            elif filename_lower.endswith('.xyz'):
+                pharmacophore_file = file_path
+        
+        if not protein_file:
+            raise ValueError("Docking requires a protein file (PDB or CIF)")
+        
+        # Handle pocket selection first to identify pocket_ligand
+        args = MockArgs()
+        args.protein_file = protein_file
+        
+        if pocket_selection:
+            pocket_type = pocket_selection.get('type')
+            if pocket_type == 'center':
+                center = pocket_selection.get('value')
+                if isinstance(center, list) and len(center) == 3:
+                    args.pocket_center = f"{center[0]},{center[1]},{center[2]}"
+                    args.bbox_length = pocket_selection.get('bbox_length', 23.0)
+            elif pocket_type == 'residues':
+                residues = pocket_selection.get('value', [])
+                if residues:
+                    res_strs = [f"{r['chain']}:{r['res_id']}" for r in residues]
+                    args.pocket_residues = ','.join(res_strs)
+            elif pocket_type == 'file':
+                pocket_filename = pocket_selection.get('value')
+                if pocket_filename in all_sdfs:
+                    args.pocket_ligand = all_sdfs[pocket_filename]
+                else:
+                    # Fallback or error
+                    args.pocket_ligand = main_ligand_file
+                    job_logger.warning(f"Pocket ligand filename {pocket_filename} not in all_sdfs, falling back to {main_ligand_file}")
+        
+        # Now identify the main ligand (to be docked)
+        # It should be the one that is NOT the pocket ligand, if possible.
+        if len(all_sdfs) > 1 and args.pocket_ligand:
+            for fname, fpath in all_sdfs.items():
+                if fpath != args.pocket_ligand:
+                    main_ligand_file = fpath
+                    break
+        
+        if not main_ligand_file:
+             raise ValueError("Docking requires a ligand file (SDF) to dock")
+        
+        args.ligand_file = main_ligand_file
+        args.pharmacophore_file = pharmacophore_file
+        
+        if args.pocket_ligand:
+             job_logger.info(f"Targeting pocket defined by reference ligand: {args.pocket_ligand.name}")
+        job_logger.info(f"Main ligand to dock: {args.ligand_file.name}")
+        
+        # Run docking
+        job_logger.info(f"Starting docking: {docking_mode}, {n_samples} samples, {n_timesteps} steps")
+        
+        summary = run_omtra_sampler(
+            args=args,
+            job_id=job_id,
+            params=params,
+            input_files=input_files,
+            job_logger=job_logger,
+            outputs_dir=outputs_dir,
+            sampling_mode=docking_mode
+        )
+        
+        job_logger.info("Docking completed successfully")
+        
+        # Update job status in Redis to SUCCEEDED
+        try:
+            redis_conn = redis.from_url(REDIS_URL)
+            job_data = redis_conn.get(f"job:{job_id}")
+            if job_data:
+                job_metadata = json.loads(job_data)
+                # Update job_metadata['params'] from summary['parameters_used']
+                # But only if summary has data and we don't have better data already
+                if summary and summary.get('parameters_used'):
+                    job_params = job_metadata.get('params', {})
+                    # Only update if the summary params have actual useful info (like docking_mode)
+                    if summary['parameters_used'].get('docking_mode') or summary['parameters_used'].get('sampling_mode'):
+                        job_params.update(summary['parameters_used'])
+                        job_metadata['params'] = job_params
+                
+                # Ensure status is SUCCEEDED and completed_at is set
+                job_metadata['status'] = 'SUCCEEDED'
+                job_metadata['completed_at'] = datetime.utcnow().isoformat()
+
+                redis_conn.setex(
+                    f"job:{job_id}",
+                    timedelta(hours=48),  # JOB_TTL_HOURS
+                    json.dumps(job_metadata)
+                )
+        except Exception as e:
+            job_logger.warning(f"Failed to update job status in Redis: {e}")
+            
+        return summary
+        
+    except Exception as e:
+        error_msg = f"Docking failed: {str(e)}"
+        job_logger.error(error_msg, exc_info=True)
+        
+        # Update job status in Redis to FAILED
+        try:
+            redis_conn = redis.from_url(REDIS_URL)
+            job_data = redis_conn.get(f"job:{job_id}")
+            if job_data:
+                job_metadata = json.loads(job_data)
+                job_metadata['status'] = 'FAILED'
+                job_metadata['error'] = error_msg
+                job_metadata['failed_at'] = datetime.utcnow().isoformat()
+                redis_conn.setex(
+                    f"job:{job_id}",
+                    timedelta(hours=48),  # JOB_TTL_HOURS
+                    json.dumps(job_metadata)
+                )
+        except Exception as redis_e:
+            job_logger.warning(f"Failed to update job status in Redis: {redis_e}")
+            
+        raise
+
+
 def _run_gnina_score_only(lig_file, prot_file, env=None):
     """
     Run GNINA with --score_only flag to compute VINA and CNN scores.
@@ -418,10 +696,14 @@ def _run_gnina_score_only(lig_file, prot_file, env=None):
     from rdkit import Chem
     
     # Find GNINA binary - check standard installation location
-    gnina_binary = Path('/usr/local/bin/gnina.1.3.2')
+    possible_paths = [
+        Path('/usr/local/bin/gnina'),
+        Path('/usr/local/bin/gnina.1.3.2'),
+    ]
+    gnina_binary = next((p for p in possible_paths if p.exists()), None)
     
-    if not gnina_binary.exists():
-        logging.error(f"GNINA binary not found at {gnina_binary}")
+    if gnina_binary is None:
+        logging.error(f"GNINA binary not found in {possible_paths}")
         return None
     
     # Create temporary output SDF file
@@ -513,8 +795,9 @@ def _run_gnina_score_only(lig_file, prot_file, env=None):
                     logging.warning(f"GNINA stderr: {cmd_result.stderr[:500]}")
                     logging.warning(f"GNINA stdout: {cmd_result.stdout[:500]}")
                     return None
-            else:
                 logging.warning(f"GNINA scoring failed for {lig_file} (return code {cmd_result.returncode})")
+                logging.warning(f"GNINA stdout: {cmd_result.stdout[:1000]}")
+                logging.warning(f"GNINA stderr: {cmd_result.stderr[:1000]}")
                 return None
         
         # Read scores from output SDF
@@ -567,6 +850,9 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
     from rdkit import Chem
     from rdkit.Chem import Descriptors
     
+    # Store a copy of the molecule for PoseCheck before any sanitization attempts
+    mol_to_preserve = Chem.Mol(mol) if mol is not None else None
+    
     metrics = {
         'sample_name': sample_name,
         'n_atoms': 0,
@@ -582,14 +868,13 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
     }
 
     # If protein-conditioned, ensure interaction metric keys are present
-    if sampling_mode in ['Protein-conditioned', 'Protein+Pharmacophore-conditioned']:
+    if sampling_mode in PROTEIN_INVOLVING_MODES:
         metrics.update({
             'vina_score': None,
             'clashes': None,
             'HBAcceptor': None,
             'HBDonor': None,
             'Hydrophobic': None,
-            'PiStacking': None,
         })
     
     if mol is None:
@@ -751,12 +1036,12 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                     except Exception:
                         pass
                     if not error_msg:
-                        error_msg = "pb_runtime_error"
+                        error_msg = str(e) if "No module named" in str(e) else "pb_runtime_error"
                     metrics['pb_failing_checks'] = [error_msg] if error_msg and len(error_msg) > 0 and error_msg != "error" else ['error']
                     logging.warning(f"Failed to compute pb_valid for {sample_name}: {e}")
             # Only compute protein-ligand interaction metrics for protein-involving jobs
             # Ignore pharmacophore when computing metrics (same as protein-conditioned)
-            if sampling_mode in ['Protein-conditioned', 'Protein+Pharmacophore-conditioned']:
+            if sampling_mode in PROTEIN_INVOLVING_MODES:
                 try:
                     # PoseCheck requires PDB files; skip interaction metrics for CIF
                     if not str(protein_file).lower().endswith('.pdb'):
@@ -765,9 +1050,22 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                     else:
                         from posecheck import PoseCheck
                         import logging as _logging
-                        pc = PoseCheck()
-                        pc.load_protein_from_pdb(str(protein_file))
-                        pc.load_ligands_from_mols([mol])
+                        try:
+                            pc = PoseCheck()
+                            pc.load_protein_from_pdb(str(protein_file))
+                        except Exception as pc_e:
+                            logging.warning(f"PoseCheck initialization failed for {sample_name}: {pc_e}")
+                            # Try to catch hydride output if possible by running it manually
+                            try:
+                                h_res = subprocess.run(f"hydride -i {protein_file} -o /tmp/test_h.pdb", shell=True, capture_output=True, text=True)
+                                logging.warning(f"Manual hydride test return code: {h_res.returncode}")
+                                logging.warning(f"Manual hydride test stderr: {h_res.stderr[:500]}")
+                            except Exception:
+                                pass
+                            raise pc_e
+                        # Use mol_to_preserve (un-sanitized) so PoseCheck can still compute 
+                        # metrics even if RDKit sanitization failed for some reasons.
+                        pc.load_ligands_from_mols([mol_to_preserve])
                         
                         # Clashes - compute separately so it works even if interactions fail
                         try:
@@ -788,7 +1086,6 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                                 'HBAcceptor': ['HBAcceptor', 'HBondAcceptor', 'HydrogenAcceptor', 'Acceptor'],
                                 'HBDonor': ['HBDonor', 'HBondDonor', 'HydrogenDonor', 'Donor'],
                                 'Hydrophobic': ['Hydrophobic'],
-                                'PiStacking': ['PiStacking', 'Pi-Stacking', 'Pi_Stacking']
                             }
                             def column_matches(col, keywords):
                                 try:
@@ -815,38 +1112,40 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                         except Exception as int_e:
                             logging.warning(f"Failed to compute interaction metrics for {sample_name}: {int_e}")
                             # Leave interaction metrics as None (already initialized)
-                        
-                        # Compute gnina scores
-                        if (str(protein_file).lower().endswith('.pdb') or str(protein_file).lower().endswith('.cif')):
-                            try:
-                                # Save molecule to temporary SDF file for GNINA
-                                with tempfile.NamedTemporaryFile(mode='w', suffix='.sdf', delete=False) as tmp_lig:
-                                    tmp_lig_path = Path(tmp_lig.name)
-                                    from omtra.eval.system import write_mols_to_sdf
-                                    write_mols_to_sdf([mol], str(tmp_lig_path))
-                                
-                                try:
-                                    gnina_scores = _run_gnina_score_only(
-                                        lig_file=str(tmp_lig_path),
-                                        prot_file=str(protein_file),
-                                        env=None
-                                    )
-                                    
-                                    if gnina_scores:
-                                        metrics['vina_score'] = gnina_scores.get('minimizedAffinity')
-                                    else:
-                                        _logging.warning(f"GNINA scoring returned no scores for {sample_name}")
-                                finally:
-                                    # Clean up temporary ligand file
-                                    try:
-                                        tmp_lig_path.unlink(missing_ok=True)
-                                    except Exception:
-                                        pass
-                            except Exception as gnina_e:
-                                logging.warning(f"Failed to compute GNINA scores for {sample_name}: {gnina_e}")
-                                # Leave gnina scores as None
                 except Exception as e:
                     logging.warning(f"PoseCheck initialization failed for {sample_name}: {e}")
+            
+            # Compute gnina scores - reached for both PDB and CIF (if converted to PDB)
+            # This is now outside the PDB-only PoseCheck block
+            if protein_file and (str(protein_file).lower().endswith('.pdb') or str(protein_file).lower().endswith('.cif')):
+                try:
+                    # Save molecule to temporary SDF file for GNINA
+                    # Use mol_to_preserve to avoid issues with sanitized molecules
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.sdf', delete=False) as tmp_lig:
+                        tmp_lig_path = Path(tmp_lig.name)
+                        from omtra.eval.system import write_mols_to_sdf
+                        write_mols_to_sdf([mol_to_preserve], str(tmp_lig_path))
+                    
+                    try:
+                        gnina_scores = _run_gnina_score_only(
+                            lig_file=str(tmp_lig_path),
+                            prot_file=str(protein_file),
+                            env=None
+                        )
+                        
+                        if gnina_scores:
+                            metrics['vina_score'] = gnina_scores.get('minimizedAffinity')
+                        else:
+                            _logging.warning(f"GNINA scoring returned no scores for {sample_name}")
+                    finally:
+                        # Clean up temporary ligand file
+                        try:
+                            tmp_lig_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                except Exception as gnina_e:
+                    logging.warning(f"Failed to compute GNINA scores for {sample_name}: {gnina_e}")
+                    # Leave gnina scores as None
         else:
             # No protein file: compute pb_valid using 'dock' config for unconditional/pharmacophore jobs
             # Skip PoseBusters if molecule is disconnected (already set pb_valid=False above)
@@ -915,7 +1214,7 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                         except Exception:
                             pass
                         if not error_msg:
-                            error_msg = "pb_runtime_error"
+                            error_msg = str(e) if "No module named" in str(e) else "pb_runtime_error"
                         metrics['pb_failing_checks'] = [error_msg] if error_msg and len(error_msg) > 0 and error_msg != "error" else ['error']
                     else:
                         metrics['pb_failing_checks'] = []  # No error if sanitization passed
@@ -942,8 +1241,14 @@ def load_omtra_model(checkpoint_path: str, sampling_mode: str):
             return None
         
         # Add OMTRA modules to path
+        # Add OMTRA modules to path
+        # Try /omtra first (Docker), then relative path (Local)
         omtra_root = Path('/omtra')
-        sys.path.insert(0, str(omtra_root))
+        if not omtra_root.exists():
+             omtra_root = Path(__file__).resolve().parent.parent.parent
+        
+        if str(omtra_root) not in sys.path:
+            sys.path.insert(0, str(omtra_root))
         
         # Import OMTRA modules
         from omtra.load.quick import omtra_from_checkpoint
@@ -967,19 +1272,34 @@ def load_omtra_model(checkpoint_path: str, sampling_mode: str):
 
 def run_omtra_sampler(
     job_id: str, 
-    params: Dict[str, Any], 
-    input_files: List[Dict[str, Any]], 
-    model, 
-    job_logger: logging.Logger
+    params: Dict[str, Any] = None, 
+    input_files: List[Dict[str, Any]] = None, 
+    model = None, 
+    job_logger: logging.Logger = None,
+    args = None,
+    outputs_dir = None,
+    sampling_mode: str = None
 ) -> Dict[str, Any]:
     """
     Run OMTRA sampling using the CLI approach
     """
-    job_dir = get_job_directory(job_id)
-    outputs_dir = job_dir / "outputs"
-    outputs_dir.mkdir(exist_ok=True)
+    if job_logger:
+        job_logger.info(f"run_omtra_sampler called with job_id={job_id}, sampling_mode={sampling_mode}")
+        job_logger.info(f"params keys: {list(params.keys()) if params else 'None'}")
+        job_logger.info(f"input_files count: {len(input_files) if input_files else 0}")
     
-    try:
+
+    if args is not None:
+        # Pre-configured args provided (e.g. from docking task)
+        task_name = args.task
+        chosen_prot_for_metrics = str(args.protein_file) if getattr(args, 'protein_file', None) else None
+        n_samples = args.n_samples
+    else:
+        # Standard flow from params
+        job_dir = get_job_directory(job_id)
+        outputs_dir = job_dir / "outputs"
+        outputs_dir.mkdir(exist_ok=True)
+        
         # Get parameters
         sampling_mode = params.get('sampling_mode', 'Unconditional')
         n_samples = params.get('n_samples', 10)
@@ -988,6 +1308,7 @@ def run_omtra_sampler(
         seed = params.get('seed')
         n_lig_atoms_mean = params.get('n_lig_atoms_mean')
         n_lig_atoms_std = params.get('n_lig_atoms_std')
+        pocket_selection = params.get('pocket_selection')
         
         # Set random seed for reproducibility
         if seed is not None:
@@ -1032,13 +1353,45 @@ def run_omtra_sampler(
                 self.use_gt_n_lig_atoms = False
                 self.n_lig_atom_margin = 0.15
                 self.n_lig_atoms_mean = n_lig_atoms_mean
+                self.n_lig_atoms_mean = n_lig_atoms_mean
                 self.n_lig_atoms_std = n_lig_atoms_std
+                self.pharmacophore_tolerance = params.get('pharmacophore_tolerance', 0.0)
                 self.metrics = False
                 self.protein_file = None
                 self.ligand_file = None
                 self.pharmacophore_file = None
+                self.pocket_ligand = None
+                self.pocket_center = None
+                self.pocket_residues = None
+                self.bbox_length = 23.0
                 self.input_files_dir = None
                 self.g_list_from_files = None
+        
+        # Set up args based on sampling mode
+        args = MockArgs()
+        
+        # Initialize variables that might be used later
+        # These need to be None if we are in docking mode (where args is pre-filled and we skip this block)
+        # But wait, this is the else block (for non-pre-filled args).
+        # We need to initialize them OUTSIDE this block or handle them correctly.
+        # Actually, let's just ensure they are initialized if not set.
+        pass
+        # Store pocket ligand filename for later resolution (after file mapping is created)
+        pocket_ligand_filename = None
+        if pocket_selection:
+            pocket_type = pocket_selection.get('type')
+            if pocket_type == 'center':
+                center = pocket_selection.get('value')
+                if isinstance(center, list) and len(center) == 3:
+                    args.pocket_center = f"{center[0]},{center[1]},{center[2]}"
+                    args.bbox_length = pocket_selection.get('bbox_length', 23.0)
+            elif pocket_type == 'residues':
+                residues = pocket_selection.get('value', [])
+                if residues:
+                    res_strs = [f"{r['chain']}:{r['res_id']}" for r in residues]
+                    args.pocket_residues = ','.join(res_strs)
+            elif pocket_type == 'file':
+                pocket_ligand_filename = pocket_selection.get('value') # Store for later resolution
         
         # Handle input files for conditional sampling
         if sampling_mode != 'Unconditional' and input_files:
@@ -1050,6 +1403,7 @@ def run_omtra_sampler(
             pharmacophore_file = None
             sdf_files = []
             xyz_files = []
+            filename_to_tempfile = {}  # Map original filename to temp file path
             
             for i, file_info in enumerate(input_files):
                 file_path = file_info['path']
@@ -1057,15 +1411,25 @@ def run_omtra_sampler(
                 temp_file = temp_input_dir / f"input_{i:03d}{Path(file_path).suffix}"
                 shutil.copy2(file_path, temp_file)
                 
+                # Store mapping from original filename to temp file path
+                filename_to_tempfile[filename] = temp_file
+                
                 # Categorize files
                 if filename.endswith('.xyz'):
                     xyz_files.append(temp_file)
                 elif filename.endswith('.sdf'):
                     sdf_files.append(temp_file)
             
+            # Resolve pocket ligand filename to temp file path
+            if pocket_ligand_filename and pocket_ligand_filename in filename_to_tempfile:
+                args.pocket_ligand = str(filename_to_tempfile[pocket_ligand_filename])
+                job_logger.info(f"Resolved pocket ligand '{pocket_ligand_filename}' to '{args.pocket_ligand}'")
+            elif pocket_ligand_filename:
+                job_logger.warning(f"Pocket ligand file '{pocket_ligand_filename}' not found in input files")
+            
             # For pharmacophore-conditioned sampling, prioritize XYZ files
             # If no XYZ file but SDF files exist, extract pharmacophores from SDF
-            if sampling_mode in ['Pharmacophore-conditioned', 'Protein+Pharmacophore-conditioned']:
+            if sampling_mode in ['Pharmacophore-conditioned', 'Protein+Pharmacophore-conditioned', 'Rigid Docking + Pharmacophore']:
                 if xyz_files:
                     # Use existing XYZ file
                     pharmacophore_file = xyz_files[0]
@@ -1110,329 +1474,353 @@ def run_omtra_sampler(
                 else:
                     raise ValueError("No pharmacophore files (XYZ) or ligand files (SDF) provided for pharmacophore-conditioned sampling")
             
-            # Set up args based on sampling mode
-            args = MockArgs()
             # Initialize protein file for metrics (used later when splitting SDF)
             chosen_prot_for_metrics = None
-            if sampling_mode in ['Pharmacophore-conditioned', 'Protein+Pharmacophore-conditioned'] and pharmacophore_file:
+            if sampling_mode in ['Pharmacophore-conditioned', 'Protein+Pharmacophore-conditioned', 'Rigid Docking + Pharmacophore'] and pharmacophore_file:
                 args.pharmacophore_file = pharmacophore_file
-            if sampling_mode in ['Protein-conditioned', 'Protein+Pharmacophore-conditioned']:
-
+            
+            if sampling_mode in PROTEIN_INVOLVING_MODES:
                 # Find first protein file (PDB preferred) from temp_input_dir
                 pdbs = list(temp_input_dir.glob('*.pdb'))
                 cifs = list(temp_input_dir.glob('*.cif'))
                 chosen_prot = pdbs[0] if pdbs else (cifs[0] if cifs else None)
                 if chosen_prot is None:
-                    raise ValueError("No protein file (.pdb/.cif) found for Protein-conditioned sampling")
+                    raise ValueError(f"No protein file (.pdb/.cif) found for {sampling_mode}")
                 args.protein_file = chosen_prot
                 
-                # For Protein-conditioned mode, find and use the reference ligand file
-                if sampling_mode == 'Protein-conditioned':
-                    sdf_files = list(temp_input_dir.glob('*.sdf'))
-                    if sdf_files:
-                        args.ligand_file = sdf_files[0]
-                    else:
-                        raise ValueError("No reference ligand file (.sdf) found for Protein-conditioned sampling. A ligand file is required to identify the binding pocket.")
+            # Handle pocket ligand file path resolving for sampling
+            if args.pocket_ligand and not os.path.isabs(str(args.pocket_ligand)):
+                # Look in temp_input_dir for the filename
+                pocket_ligand_path = temp_input_dir / str(args.pocket_ligand)
+                if pocket_ligand_path.exists():
+                    args.pocket_ligand = pocket_ligand_path
+                    job_logger.info(f"Using pocket ligand from {args.pocket_ligand}")
+                else:
+                    job_logger.warning(f"Pocket ligand file {args.pocket_ligand} not found in temp_input_dir")
 
-                    args.n_samples = n_samples  # CLI will convert this to n_replicates and set n_samples=1
-                elif sampling_mode == 'Protein+Pharmacophore-conditioned':
-                    sdf_files = list(temp_input_dir.glob('*.sdf'))
+            # Final validation check before CLI call
+            # Guard this block: only run if temp_input_dir is defined (i.e. we are NOT in pre-configured docking mode)
+            if 'temp_input_dir' in locals() and sampling_mode in PROTEIN_INVOLVING_MODES:
+                sdf_files = list(temp_input_dir.glob('*.sdf'))
+                has_pocket = bool(getattr(args, 'pocket_center', None) or getattr(args, 'pocket_residues', None) or (getattr(args, 'pocket_ligand', None) and os.path.exists(str(args.pocket_ligand))))
+                
+                if sampling_mode in ['Protein-conditioned', 'Rigid Docking']:
                     if sdf_files:
                         args.ligand_file = sdf_files[0]
-                        job_logger.info(f"Using SDF file {sdf_files[0].name} to define binding pocket from ligand atoms")
+                    elif not has_pocket:
+                        raise ValueError(f"No reference ligand file (.sdf) found for {sampling_mode}. A ligand file or pocket selection is required to identify the binding pocket.")
                 
-                # Keep exact same protein path for downstream metrics to avoid any alignment/file differences
+                elif sampling_mode in ['Protein+Pharmacophore-conditioned', 'Rigid Docking + Pharmacophore']:
+                    if sdf_files:
+                        args.ligand_file = sdf_files[0]
+                    
+                    if not has_pocket and not getattr(args, 'ligand_file', None):
+                         raise ValueError(f"{sampling_mode} requires a pocket definition (center/residues) or a reference ligand file.")
+                    
+                    if not getattr(args, 'pharmacophore_file', None):
+                         raise ValueError(f"{sampling_mode} requires a pharmacophore file (.xyz or .sdf).")
+
+                args.n_samples = n_samples
                 chosen_prot_for_metrics = str(chosen_prot)
-            else:
+            elif 'temp_input_dir' in locals():
                 args.input_files_dir = temp_input_dir
             
-            if sampling_mode != 'Protein-conditioned':
+            if sampling_mode not in ['Protein-conditioned', 'Rigid Docking']:
                 args.n_samples = n_samples
                 args.n_replicates = 1  # 1 replicate per sample
+            
         else:
             args = MockArgs()
             # Initialize protein file for metrics (used later when splitting SDF)
             chosen_prot_for_metrics = None
         
-        # Import and call the CLI's run_sample function
-        from cli import run_sample
-        run_sample(args)
+    # Import and call the CLI's run_sample function
+    from cli import run_sample
+    run_sample(args)
+    
+    # Split the combined SDF file into individual sample files
+    molecules = []
+    all_molecule_metrics = []
+    
+    try:
+        from rdkit import Chem
+        from omtra.eval.system import write_mols_to_sdf
         
-        # Split the combined SDF file into individual sample files
+        # Find the generated SDF file - check sys_0_gt directory first
+        sdf_files = []
+        sys_gt_dir = outputs_dir / "sys_0_gt"
+        if sys_gt_dir.exists():
+            sdf_files = list(sys_gt_dir.glob("gen_ligands.sdf"))
+        
+        # Fallback to looking in outputs directory
+        if not sdf_files:
+            sdf_files = list(outputs_dir.glob("*_lig.sdf"))
+        
+        if not sdf_files:
+            job_logger.error("No SDF file found after CLI sampling")
+            raise Exception("No SDF file generated")
+        
+        combined_sdf = sdf_files[0]
+        
+        # Read all molecules from the combined file
+        # Don't sanitize on read to see raw parsing issues, we'll sanitize manually
+        supplier = Chem.SDMolSupplier(str(combined_sdf), sanitize=False)
         molecules = []
-        all_molecule_metrics = []
+        failed_indices = []
+        failed_reasons = []
         
-        try:
-            from rdkit import Chem
-            from omtra.eval.system import write_mols_to_sdf
-            
-            # Find the generated SDF file - check sys_0_gt directory first
-            sdf_files = []
-            sys_gt_dir = outputs_dir / "sys_0_gt"
-            if sys_gt_dir.exists():
-                sdf_files = list(sys_gt_dir.glob("gen_ligands.sdf"))
-            
-            # Fallback to looking in outputs directory
-            if not sdf_files:
-                sdf_files = list(outputs_dir.glob("*_lig.sdf"))
-            
-            if not sdf_files:
-                job_logger.error("No SDF file found after CLI sampling")
-                raise Exception("No SDF file generated")
-            
-            combined_sdf = sdf_files[0]
-            
-            # Read all molecules from the combined file
-            # Don't sanitize on read to see raw parsing issues, we'll sanitize manually
-            supplier = Chem.SDMolSupplier(str(combined_sdf), sanitize=False)
-            molecules = []
-            failed_indices = []
-            failed_reasons = []
-            
-            for idx, mol in enumerate(supplier):
-                if mol is not None:
-                    # Try to sanitize to check if it's actually valid
-                    try:
-                        Chem.SanitizeMol(mol)
-                        molecules.append(mol)
-                    except Exception as sanitize_err:
-                        # Molecule parsed but failed sanitization - still include it but mark as invalid
-                        failed_indices.append(idx)
-                        failed_reasons.append(f"Sanitization failed: {str(sanitize_err)}")
-                        job_logger.warning(f"Molecule at index {idx} failed sanitization: {sanitize_err}")
-                        # Mark molecule as invalid and include it anyway
-                        try:
-                            mol.SetProp("_Invalid", str(sanitize_err))
-                        except Exception:
-                            pass
-                        molecules.append(mol)
-                else:
-                    # Get the last error from the supplier if available
-                    error_msg = supplier.GetLastErrorText() if hasattr(supplier, 'GetLastErrorText') else "Unknown parsing error"
-                    failed_indices.append(idx)
-                    failed_reasons.append(f"Parse failed: {error_msg}")
-                    job_logger.warning(f"Molecule at index {idx} in SDF file failed to parse: {error_msg}")
-            
-            # Check if we got fewer molecules than expected
-            expected_samples = n_samples
-            if len(molecules) < expected_samples:
-                job_logger.warning(
-                    f"Expected {expected_samples} molecules but only found {len(molecules)} molecules in SDF (some may be invalid). "
-                    f"Failed molecule indices: {failed_indices}"
-                )
-                for idx, reason in zip(failed_indices, failed_reasons):
-                    job_logger.warning(f"  Index {idx}: {reason}")
-            
-            job_logger.info(f"Found {len(molecules)} molecules (including {len(failed_indices)} invalid) out of {expected_samples} expected in combined SDF")
-            
-            # Find protein file from inputs for any task (pb_valid/metrics can use it)
-            protein_file = None
-            if chosen_prot_for_metrics:
-                protein_file = chosen_prot_for_metrics
-            elif input_files:
-                # Prefer PDB over CIF for PoseBusters stability
-                pdb_path = None
-                cif_path = None
-                for file_info in input_files:
-                    filename = file_info['filename']
-                    lower_name = filename.lower()
-                    if lower_name.endswith('.pdb') and pdb_path is None:
-                        pdb_path = file_info['path']
-                    elif lower_name.endswith('.cif') and cif_path is None:
-                        cif_path = file_info['path']
-                protein_file = pdb_path or cif_path
-
-            # If only CIF is available, try converting to temporary PDB for PoseBusters/PoseCheck
-            if protein_file and str(protein_file).lower().endswith('.cif'):
+        for idx, mol in enumerate(supplier):
+            if mol is not None:
+                # Try to sanitize to check if it's actually valid
                 try:
-                    # Use biotite like the rest of OMTRA codebase (see omtra/utils/file_to_graph.py)
-                    from biotite.structure.io import pdb
-                    from biotite.structure.io.pdbx import CIFFile, get_structure
+                    Chem.SanitizeMol(mol)
+                    molecules.append(mol)
+                except Exception as sanitize_err:
+                    # Molecule parsed but failed sanitization - still include it but mark as invalid
+                    failed_indices.append(idx)
+                    failed_reasons.append(f"Sanitization failed: {str(sanitize_err)}")
+                    job_logger.warning(f"Molecule at index {idx} failed sanitization: {sanitize_err}")
+                    # Mark molecule as invalid and include it anyway
+                    try:
+                        mol.SetProp("_Invalid", str(sanitize_err))
+                    except Exception:
+                        pass
+                    molecules.append(mol)
+            else:
+                # Get the last error from the supplier if available
+                error_msg = supplier.GetLastErrorText() if hasattr(supplier, 'GetLastErrorText') else "Unknown parsing error"
+                failed_indices.append(idx)
+                failed_reasons.append(f"Parse failed: {error_msg}")
+                job_logger.warning(f"Molecule at index {idx} in SDF file failed to parse: {error_msg}")
+        
+        # Check if we got fewer molecules than expected
+        expected_samples = n_samples
+        if len(molecules) < expected_samples:
+            job_logger.warning(
+                f"Expected {expected_samples} molecules but only found {len(molecules)} molecules in SDF (some may be invalid). "
+                f"Failed molecule indices: {failed_indices}"
+            )
+            for idx, reason in zip(failed_indices, failed_reasons):
+                job_logger.warning(f"  Index {idx}: {reason}")
+        
+        job_logger.info(f"Found {len(molecules)} molecules (including {len(failed_indices)} invalid) out of {expected_samples} expected in combined SDF")
+        
+        # Find protein file from inputs for any task (pb_valid/metrics can use it)
+        protein_file = None
+        if chosen_prot_for_metrics:
+            protein_file = chosen_prot_for_metrics
+        elif input_files:
+            # Prefer PDB over CIF for PoseBusters stability
+            pdb_path = None
+            cif_path = None
+            for file_info in input_files:
+                filename = file_info['filename']
+                lower_name = filename.lower()
+                if lower_name.endswith('.pdb') and pdb_path is None:
+                    pdb_path = file_info['path']
+                elif lower_name.endswith('.cif') and cif_path is None:
+                    cif_path = file_info['path']
+            protein_file = pdb_path or cif_path
+
+        # If only CIF is available, try converting to temporary PDB for PoseBusters/PoseCheck
+        if protein_file and str(protein_file).lower().endswith('.cif'):
+            try:
+                # Use biotite like the rest of OMTRA codebase (see omtra/utils/file_to_graph.py)
+                from biotite.structure.io import pdb
+                from biotite.structure.io.pdbx import CIFFile, get_structure
+                
+                # Read CIF file using biotite (same method as OMTRA uses elsewhere)
+                cif_file = CIFFile.read(str(protein_file))
+                st = get_structure(cif_file, model=1, include_bonds=False)
+                
+                # Remove waters and hydrogens 
+                st = st[st.res_name != "HOH"]
+                st = st[st.element != "H"]
+                st = st[st.element != "D"]
+                
+                total_atoms = len(st)
+                
+                if total_atoms == 0:
+                    job_logger.warning(f"CIF file has no atoms after filtering, cannot convert to PDB")
+                    # Keep original CIF file
+                else:
+                    # Write temporary PDB using biotite
+                    tmp_pdb = outputs_dir / "protein_from_cif.pdb"
+                    pdb_file = pdb.PDBFile()
+                    pdb_file.set_structure(st)
+                    pdb_file.write(str(tmp_pdb))
                     
-                    # Read CIF file using biotite (same method as OMTRA uses elsewhere)
-                    cif_file = CIFFile.read(str(protein_file))
-                    st = get_structure(cif_file, model=1, include_bonds=False)
+                    # Validate the converted PDB has ATOM records
+                    with open(tmp_pdb, 'r') as fh:
+                        pdb_content = fh.read()
                     
-                    # Remove waters and hydrogens (same as OMTRA does)
-                    st = st[st.res_name != "HOH"]
-                    st = st[st.element != "H"]
-                    st = st[st.element != "D"]
-                    
-                    total_atoms = len(st)
-                    
-                    if total_atoms == 0:
-                        job_logger.warning(f"CIF file has no atoms after filtering, cannot convert to PDB")
-                        # Keep original CIF file
+                    has_atoms = 'ATOM' in pdb_content or 'HETATM' in pdb_content
+                    atom_count = pdb_content.count('\nATOM') + pdb_content.count('\nHETATM')
+                    if has_atoms and atom_count > 0:
+                        protein_file = str(tmp_pdb)
                     else:
-                        # Write temporary PDB using biotite
-                        tmp_pdb = outputs_dir / "protein_from_cif.pdb"
-                        pdb_file = pdb.PDBFile()
-                        pdb_file.set_structure(st)
-                        pdb_file.write(str(tmp_pdb))
-                        
-                        # Validate the converted PDB has ATOM records
-                        with open(tmp_pdb, 'r') as fh:
-                            pdb_content = fh.read()
-                        
-                        has_atoms = 'ATOM' in pdb_content or 'HETATM' in pdb_content
-                        atom_count = pdb_content.count('\nATOM') + pdb_content.count('\nHETATM')
-                        if has_atoms and atom_count > 0:
-                            protein_file = str(tmp_pdb)
-                        else:
-                            job_logger.warning(f"CIF→PDB conversion produced empty PDB (no ATOM records), keeping original CIF file")
-                            # Don't use the empty PDB, keep original CIF
-                except ImportError:
-                    job_logger.warning("biotite not available, cannot convert CIF to PDB")
-                except Exception as conv_e:
-                    job_logger.warning(f"CIF→PDB conversion failed: {conv_e}", exc_info=True)
+                        job_logger.warning(f"CIF→PDB conversion produced empty PDB (no ATOM records), keeping original CIF file")
+                        # Don't use the empty PDB, keep original CIF
+            except ImportError:
+                job_logger.warning("biotite not available, cannot convert CIF to PDB")
+            except Exception as conv_e:
+                job_logger.warning(f"CIF→PDB conversion failed: {conv_e}", exc_info=True)
+        
+        # Strip HETATM records from PDB files to avoid issues with PoseCheck/GNINA
+        # Co-crystallized ligands in HETATM aren't needed since reference ligand is provided separately
+        if protein_file and str(protein_file).lower().endswith('.pdb'):
+            try:
+                original_protein_file = protein_file
+                cleaned_protein_file = _strip_hetatm_from_pdb(Path(protein_file))
+                if cleaned_protein_file != Path(protein_file):
+                    protein_file = str(cleaned_protein_file)
+                    job_logger.info(f"Stripped HETATM records from protein file, using cleaned version: {cleaned_protein_file.name}")
+            except Exception as strip_e:
+                job_logger.warning(f"Failed to strip HETATM from PDB file: {strip_e}, using original file")
+        
+        # Prepare for parallel diagram generation
+        diagram_threads = []
+        diagram_lock = threading.Lock()
+        diagram_results = {}  # Track which diagrams succeeded/failed
+        
+        def generate_diagram_for_sample(sdf_file_path: Path, protein_file_path: Optional[str], sample_idx: int):
+            """Generate diagram for a single sample in a background thread"""
+            if not protein_file_path or sampling_mode not in PROTEIN_INVOLVING_MODES:
+                return
             
-            # Prepare for parallel diagram generation
-            diagram_threads = []
-            diagram_lock = threading.Lock()
-            diagram_results = {}  # Track which diagrams succeeded/failed
-            
-            def generate_diagram_for_sample(sdf_file_path: Path, protein_file_path: Optional[str], sample_idx: int):
-                """Generate diagram for a single sample in a background thread"""
-                if not protein_file_path or sampling_mode not in ['Protein-conditioned', 'Protein+Pharmacophore-conditioned']:
+            try:
+                # Convert protein_file_path to Path if it's a string
+                protein_path = Path(protein_file_path) if isinstance(protein_file_path, str) else protein_file_path
+                
+                diagram_filename = f"{sdf_file_path.name}_diagram.svg"
+                error_filename = f"{sdf_file_path.name}_diagram_error.json"
+                cached_diagram_path = outputs_dir / diagram_filename
+                error_path = outputs_dir / error_filename
+                
+                # Skip if already exists
+                if cached_diagram_path.exists() or error_path.exists():
+                    with diagram_lock:
+                        diagram_results[sample_idx] = 'skipped'
                     return
                 
-                try:
-                    # Convert protein_file_path to Path if it's a string
-                    protein_path = Path(protein_file_path) if isinstance(protein_file_path, str) else protein_file_path
-                    
-                    diagram_filename = f"{sdf_file_path.name}_diagram.svg"
-                    error_filename = f"{sdf_file_path.name}_diagram_error.json"
-                    cached_diagram_path = outputs_dir / diagram_filename
-                    error_path = outputs_dir / error_filename
-                    
-                    # Skip if already exists
-                    if cached_diagram_path.exists() or error_path.exists():
-                        with diagram_lock:
-                            diagram_results[sample_idx] = 'skipped'
-                        return
-                    
-                    svg, error_msg = _generate_interaction_diagram(sdf_file_path, protein_path, job_logger)
-                    
-                    if svg and not error_msg:
-                        with open(cached_diagram_path, 'w') as f:
-                            f.write(svg)
-                        with diagram_lock:
-                            diagram_results[sample_idx] = 'success'
-                        job_logger.info(f"Generated diagram for {sdf_file_path.name}")
-                    else:
-                        # Save error file
-                        error_detail = error_msg or "Failed to generate interaction diagram. PoseView could not detect any interactions. This can happen if the ligand is too far from the protein binding site or the coordinate systems don't align."
-                        error_data = {
-                            "statusCode": 503,
-                            "message": error_detail.split('.')[0] if error_detail else "Failed",
-                            "detail": error_detail
-                        }
-                        with open(error_path, 'w') as f:
-                            json.dump(error_data, f)
-                        with diagram_lock:
-                            diagram_results[sample_idx] = 'failed'
-                        job_logger.warning(f"Failed to generate diagram for {sdf_file_path.name}: {error_detail}")
-                except Exception as e:
-                    # Save error file for unexpected exceptions
-                    error_path = outputs_dir / f"{sdf_file_path.name}_diagram_error.json"
+                svg, error_msg = _generate_interaction_diagram(sdf_file_path, protein_path, job_logger)
+                
+                if svg and not error_msg:
+                    with open(cached_diagram_path, 'w') as f:
+                        f.write(svg)
+                    with diagram_lock:
+                        diagram_results[sample_idx] = 'success'
+                    job_logger.info(f"Generated diagram for {sdf_file_path.name}")
+                else:
+                    # Save error file
+                    error_detail = error_msg or "Failed to generate interaction diagram. PoseView could not detect any interactions. This can happen if the ligand is too far from the protein binding site or the coordinate systems don't align."
                     error_data = {
-                        "statusCode": 500,
-                        "message": "Failed",
-                        "detail": f"Failed to generate interaction diagram: {str(e)}"
+                        "statusCode": 503,
+                        "message": error_detail.split('.')[0] if error_detail else "Failed",
+                        "detail": error_detail
                     }
                     with open(error_path, 'w') as f:
                         json.dump(error_data, f)
                     with diagram_lock:
-                        diagram_results[sample_idx] = 'error'
-                    job_logger.warning(f"Error generating diagram for {sdf_file_path.name}: {e}")
+                        diagram_results[sample_idx] = 'failed'
+                    job_logger.warning(f"Failed to generate diagram for {sdf_file_path.name}: {error_detail}")
+            except Exception as e:
+                # Save error file for unexpected exceptions
+                error_path = outputs_dir / f"{sdf_file_path.name}_diagram_error.json"
+                error_data = {
+                    "statusCode": 500,
+                    "message": "Failed",
+                    "detail": f"Failed to generate interaction diagram: {str(e)}"
+                }
+                with open(error_path, 'w') as f:
+                    json.dump(error_data, f)
+                with diagram_lock:
+                    diagram_results[sample_idx] = 'error'
+                job_logger.warning(f"Error generating diagram for {sdf_file_path.name}: {e}")
+        
+        # Save individual sample files and compute metrics
+        for i, mol in enumerate(molecules):
+            individual_file = outputs_dir / f"sample_{i:03d}.sdf"
+            write_mols_to_sdf([mol], str(individual_file))
             
-            # Save individual sample files and compute metrics
-            for i, mol in enumerate(molecules):
-                individual_file = outputs_dir / f"sample_{i:03d}.sdf"
-                write_mols_to_sdf([mol], str(individual_file))
-                
-                # Check if molecule is invalid (marked with _Invalid property)
-                is_invalid = False
-                invalid_reason = None
-                try:
-                    if mol.HasProp("_Invalid"):
-                        is_invalid = True
-                        invalid_reason = mol.GetProp("_Invalid")
-                except Exception:
-                    pass
-                
-                if is_invalid:
-                    job_logger.warning(f"Saved sample {i+1} (INVALID - {invalid_reason}): {individual_file}")
-                
-                # Compute fast metrics for this molecule
-                sample_name = f"sample_{i:03d}"
-                metrics = compute_fast_molecule_metrics(
-                    mol, 
-                    sample_name=sample_name,
-                    sampling_mode=sampling_mode,
-                    protein_file=protein_file
+            # Check if molecule is invalid (marked with _Invalid property)
+            is_invalid = False
+            invalid_reason = None
+            try:
+                if mol.HasProp("_Invalid"):
+                    is_invalid = True
+                    invalid_reason = mol.GetProp("_Invalid")
+            except Exception:
+                pass
+            
+            if is_invalid:
+                job_logger.warning(f"Saved sample {i+1} (INVALID - {invalid_reason}): {individual_file}")
+            
+            # Compute fast metrics for this molecule
+            sample_name = f"sample_{i:03d}"
+            metrics = compute_fast_molecule_metrics(
+                mol, 
+                sample_name=sample_name,
+                sampling_mode=sampling_mode,
+                protein_file=protein_file
+            )
+            
+            # Mark invalid molecules in metrics with Warning
+            if is_invalid:
+                metrics['Warning'] = invalid_reason
+            
+            all_molecule_metrics.append(metrics)
+            
+            # Start diagram generation in background thread
+            if sampling_mode in PROTEIN_INVOLVING_MODES and protein_file:
+                thread = threading.Thread(
+                    target=generate_diagram_for_sample,
+                    args=(individual_file, protein_file, i),
+                    daemon=False
                 )
-                
-                # Mark invalid molecules in metrics with Warning
-                if is_invalid:
-                    metrics['Warning'] = invalid_reason
-                
-                all_molecule_metrics.append(metrics)
-                
-                # Start diagram generation in background thread
-                if sampling_mode in ['Protein-conditioned', 'Protein+Pharmacophore-conditioned'] and protein_file:
-                    thread = threading.Thread(
-                        target=generate_diagram_for_sample,
-                        args=(individual_file, protein_file, i),
-                        daemon=False
-                    )
-                    thread.start()
-                    diagram_threads.append(thread)
-            
-            # Wait for all diagram generation threads to complete
-            if diagram_threads:
-                job_logger.info(f"Waiting for {len(diagram_threads)} diagram generation threads to complete...")
-                for thread in diagram_threads:
-                    thread.join()
-            
-            # Save per-molecule metrics to JSON file
-            if all_molecule_metrics:
-                metrics_file = outputs_dir / "per_molecule_metrics.json"
-                with open(metrics_file, 'w') as f:
-                    json.dump(all_molecule_metrics, f, indent=2)
-            
-            # Remove the combined file created by CLI to keep only individual files
-            if combined_sdf.exists():
-                combined_sdf.unlink()
-            
-        except Exception as e:
-            job_logger.error(f"Failed to split SDF files: {e}")
-            job_logger.error(f"Traceback: {traceback.format_exc()}")
+                thread.start()
+                diagram_threads.append(thread)
         
-        # Generate summary
-        num_molecules = len(molecules)
-        summary = {
-            'samples_generated': num_molecules,
-            'input_files': len(input_files),
-            'parameters_used': params,
-            'task_name': task_name,
-            'sampling_mode': sampling_mode,
-            'processing_time_seconds': 0
-        }
+        # Wait for all diagram generation threads to complete
+        if diagram_threads:
+            job_logger.info(f"Waiting for {len(diagram_threads)} diagram generation threads to complete...")
+            for thread in diagram_threads:
+                thread.join()
         
-        # Save summary as JSON
-        summary_file = outputs_dir / "summary.json"
-        with open(summary_file, 'w') as f:
-            json.dump(summary, f, indent=2)
+        # Save per-molecule metrics to JSON file
+        if all_molecule_metrics:
+            metrics_file = outputs_dir / "per_molecule_metrics.json"
+            with open(metrics_file, 'w') as f:
+                json.dump(all_molecule_metrics, f, indent=2)
         
-        job_logger.info("OMTRA sampling completed successfully")
-        return summary
+        # Remove the combined file created by CLI to keep only individual files
+        if combined_sdf.exists():
+            combined_sdf.unlink()
         
     except Exception as e:
-        job_logger.error(f"OMTRA sampling failed: {e}")
+        job_logger.error(f"Failed to split SDF files: {e}")
         job_logger.error(f"Traceback: {traceback.format_exc()}")
-        # Re-raise the exception so it's caught by the outer try-except in sampling_task
-        raise
+    
+    # Generate summary
+    num_molecules = len(molecules)
+    summary = {
+        'samples_generated': num_molecules,
+        'input_files': len(input_files) if input_files else 0,
+        'parameters_used': params if params else {},
+        'task_name': task_name,
+        'sampling_mode': sampling_mode,
+        'processing_time_seconds': 0
+    }
+    
+    # Save summary as JSON
+    summary_file = outputs_dir / "summary.json"
+    with open(summary_file, 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    job_logger.info("OMTRA sampling completed successfully")
+    return summary
+        
+
 
 
 def main():

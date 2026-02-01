@@ -80,7 +80,7 @@ export function JobList({ onJobSelect }: JobListProps) {
   if (jobs.length === 0) {
     return (
       <div className="p-8 text-center text-gray-500">
-        <p>No jobs submitted yet. Use the sidebar to start sampling!</p>
+        <p>No jobs submitted yet. Use the Submit Job tab!</p>
       </div>
     );
   }
@@ -114,17 +114,17 @@ export function JobList({ onJobSelect }: JobListProps) {
           const elapsed = job.elapsed_seconds
             ? formatElapsedTime(job.elapsed_seconds)
             : null;
-          const nSamples = job.params?.n_samples || 'N/A';
+          const nSamples = (job.params as any)?.n_samples || (job.params as any)?.num_samples || 'N/A';
+          const mode = job.params?.docking_mode || job.params?.sampling_mode || 'Unconditional';
 
           return (
             <div
               key={job.job_id}
               onClick={() => handleJobClick(job.job_id)}
-              className={`p-5 rounded-2xl cursor-pointer transition-all ${
-                selectedJobId === job.job_id
-                  ? 'bg-primary-50/70 ring-2 ring-primary-200 shadow-md'
-                  : 'bg-white shadow-sm hover:shadow-md'
-              }`}
+              className={`p-5 rounded-2xl cursor-pointer transition-all ${selectedJobId === job.job_id
+                ? 'bg-primary-50/70 ring-2 ring-primary-200 shadow-md'
+                : 'bg-white shadow-sm hover:shadow-md'
+                }`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex-1 min-w-0">
@@ -140,8 +140,8 @@ export function JobList({ onJobSelect }: JobListProps) {
                     </span>
                   </div>
                   <div className="text-sm text-slate-600">
-                    {nSamples} samples • {job.params?.sampling_mode}
-                    {elapsed && ` • ${elapsed}`}
+                    {nSamples} samples • {mode}
+                    {elapsed && ` • ${elapsed}`} <span className="text-[10px] text-slate-300 opacity-30">v4</span>
                   </div>
                   <div className="text-xs text-slate-500 mt-1">
                     {(() => {
@@ -156,16 +156,16 @@ export function JobList({ onJobSelect }: JobListProps) {
                         // No timezone - assume UTC and convert to local
                         createdDate = new Date(timestamp + 'Z');
                       }
-                      
+
                       const now = new Date();
                       const diffMs = now.getTime() - createdDate.getTime();
-                      
+
                       // If date appears to be in the future (more than 1 hour ahead), 
                       // it's likely a timezone parsing issue - show absolute time
                       if (diffMs < -3600000) {
                         return createdDate.toLocaleString();
                       }
-                      
+
                       // Otherwise show relative time
                       return formatDistanceToNow(createdDate, { addSuffix: true });
                     })()}

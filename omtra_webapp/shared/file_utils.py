@@ -33,7 +33,7 @@ def calculate_file_hash(content: bytes) -> str:
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_EXTENSIONS = ['.sdf', '.cif', '.mol2', '.pdb', '.xyz']
+ALLOWED_EXTENSIONS = ['.sdf', '.cif', '.mol2', '.pdb', '.xyz', '.json']
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 26214400))  # 25MB default
 MAX_FILES_PER_JOB = int(os.getenv('MAX_FILES_PER_JOB', 3))
 
@@ -159,11 +159,24 @@ def validate_molecular_format(filename: str, content: bytes) -> None:
         ext = Path(filename).suffix.lower()
         
         if ext == '.sdf':
-            # Try to parse as SDF
-            supplier = Chem.SDMolSupplier()
-            supplier.SetData(text_content)
-            if not any(mol for mol in supplier if mol is not None):
-                raise ValueError("No valid molecules found in SDF")
+            try:
+                # Basic SDF header check (first 4 lines)
+                lines = text_content.split('\n')
+                if len(lines) >= 4:
+                    # Line 4 should contain atom count and bond count in specific positions
+                    counts_line = lines[3]
+                    if len(counts_line) >= 6:
+                        atom_count_str = counts_line[:3].strip()
+                        if not (atom_count_str.isdigit() or not atom_count_str):
+                             raise ValueError(f"Malformed SDF header: Line 4 ('{counts_line[:10]}...') does not start with a valid atom count. SDF files must have 3 header lines followed by a counts line.")
+                
+                supplier = Chem.SDMolSupplier()
+                supplier.SetData(text_content)
+                if not any(mol for mol in supplier if mol is not None):
+                    raise ValueError("No valid molecules found in SDF. Please ensure it has a proper 4-line header and valid atom/bond blocks.")
+            except Exception as e:
+                # Log detailed RDKit error if possible, but the supplier usually prints to stderr
+                raise ValueError(f"SDF parsing failed: {str(e)}. This often happens if the header (first 4 lines) is missing or malformed.")
                 
         elif ext == '.mol2':
             # Basic MOL2 validation - check for required sections
@@ -464,6 +477,82 @@ def extract_pharmacophore_from_sdf(sdf_content: bytes) -> dict:
         raise ValueError(f"RDKit or omtra modules not available: {e}")
     except Exception as e:
         raise ValueError(f"Failed to extract pharmacophore: {str(e)}")
+
+
+def extract_pharmacophore_from_xyz(xyz_content: bytes) -> dict:
+    """Extract pharmacophore features from uploaded XYZ content"""
+    try:
+        from .pharmacophore_extraction import (
+            load_pharmacophore_xyz,
+            ph_idx_to_elem,
+            ph_idx_to_type,
+        )
+        
+        content_str = xyz_content.decode('utf-8')
+        P, X = load_pharmacophore_xyz(content_str)
+        
+        if len(P) == 0:
+            raise ValueError("No pharmacophore features extracted from XYZ")
+            
+        pharmacophores = []
+        for i in range(len(P)):
+            type_idx = int(X[i])
+            ptype = ph_idx_to_type[type_idx]
+            element = ph_idx_to_elem[type_idx]
+            pos = P[i]
+            
+            pharmacophores.append({
+                'type': ptype,
+                'element': element,
+                'position': [float(pos[0]), float(pos[1]), float(pos[2])],
+                'index': i,
+                'selected': True
+            })
+            
+        return {
+            'pharmacophores': pharmacophores,
+            'n_pharmacophores': len(pharmacophores)
+        }
+    except Exception as e:
+        raise ValueError(f"Failed to extract pharmacophore from XYZ: {str(e)}")
+
+
+def extract_pharmacophore_from_json(json_content: bytes) -> dict:
+    """Extract pharmacophore features from uploaded JSON content"""
+    try:
+        from .pharmacophore_extraction import (
+            load_pharmacophore_json,
+            ph_idx_to_elem,
+            ph_idx_to_type,
+        )
+        
+        content_str = json_content.decode('utf-8')
+        P, X = load_pharmacophore_json(content_str)
+        
+        if len(P) == 0:
+            raise ValueError("No pharmacophore features extracted from JSON")
+            
+        pharmacophores = []
+        for i in range(len(P)):
+            type_idx = int(X[i])
+            ptype = ph_idx_to_type[type_idx]
+            element = ph_idx_to_elem[type_idx]
+            pos = P[i]
+            
+            pharmacophores.append({
+                'type': ptype,
+                'element': element,
+                'position': [float(pos[0]), float(pos[1]), float(pos[2])],
+                'index': i,
+                'selected': True
+            })
+            
+        return {
+            'pharmacophores': pharmacophores,
+            'n_pharmacophores': len(pharmacophores)
+        }
+    except Exception as e:
+        raise ValueError(f"Failed to extract pharmacophore from JSON: {str(e)}")
 
 
 def pharmacophore_list_to_xyz(pharmacophores: list, selected_indices: set = None, center: bool = True) -> str:
