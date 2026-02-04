@@ -60,7 +60,7 @@ class SystemProcessor:
         npnde_atom_map: List[str] = npnde_atom_type_map,
         pocket_cutoff: float = 8.0,
         n_cpus: int = 1,
-        raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
+        raw_data: str = "/net/galaxy/home/koes/jmgupta/.local/share/plinder/2024-06/v2",
     ):
         logger.debug("Initializing StructureProcessor with cutoff=%f", pocket_cutoff)
         self.ligand_atom_map = ligand_atom_map
@@ -470,11 +470,11 @@ class SystemProcessor:
             ligands_data[key] = LigandData(
                 sdf=str(raw_sdf),
                 ccd=ccd,
-                coords=np.array(xace_mols[i].positions, dtype=np.float32),
-                atom_types=xace_mols[i].atom_types,
-                atom_charges=xace_mols[i].atom_charges,
-                bond_types=xace_mols[i].bond_types,
-                bond_indices=xace_mols[i].bond_idxs,
+                coords=np.array(xace_mols[i].x, dtype=np.float32),
+                atom_types=xace_mols[i].a,
+                atom_charges=xace_mols[i].c,
+                bond_types=xace_mols[i].e,
+                bond_indices=xace_mols[i].edge_idxs,
                 is_covalent=is_covalent,
                 linkages=linkages,
             )
@@ -524,11 +524,11 @@ class SystemProcessor:
             npnde_data[key] = LigandData(
                 sdf=str(raw_sdf),
                 ccd=ccd,
-                coords=np.array(xace_mols[i].positions, dtype=np.float32),
-                atom_types=xace_mols[i].atom_types,
-                atom_charges=xace_mols[i].atom_charges,
-                bond_types=xace_mols[i].bond_types,
-                bond_indices=xace_mols[i].bond_idxs,
+                coords=np.array(xace_mols[i].x, dtype=np.float32),
+                atom_types=xace_mols[i].a,
+                atom_charges=xace_mols[i].c,
+                bond_types=xace_mols[i].e,
+                bond_indices=xace_mols[i].edge_idxs,
                 is_covalent=is_covalent,
                 linkages=linkages,
             )
