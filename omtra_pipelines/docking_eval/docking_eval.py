@@ -5,33 +5,29 @@ import argparse
 import pandas as pd
 import torch
 import numpy as np
-import subprocess
 import os
 import dgl
 import gc
 import multiprocessing as mp
-import tempfile
 import sys
 import time
-from collections import defaultdict
-from scipy.spatial.distance import cdist
 from natsort import natsorted
 
 from rdkit import Chem
-import posebusters as pb
-from posebusters.modules.rmsd import check_rmsd
-from posecheck import PoseCheck
-from posecheck.utils.chem import remove_radicals
 
-
-from omtra.utils import omtra_root
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.load.quick import datamodule_from_config
 import omtra.load.quick as quick_load
 from omtra.eval.system import SampledSystem, write_arrays_to_pdb, write_mols_to_sdf
-from routines.sample import write_ground_truth, generate_sample_names, group_samples_by_system 
-from omtra.data.pharmacophores import get_pharmacophores
+from omtra.eval.metrics import (
+    ligand_rmsd,
+    pharmacophore_match_from_dict,
+    pb_validate,
+    gnina_score_and_minimize,
+    posecheck_all,
+)
+from routines.sample import write_ground_truth, generate_sample_names, group_samples_by_system
 from omtra.constants import ph_idx_to_elem
 
 
@@ -94,202 +90,6 @@ def parse_args():
     return args
 
 
-def pb_valid(
-    gen_ligs,
-    true_lig,
-    prot_file,
-    task: Task,
-    pb_workers=0
-) -> List[bool]:
-    
-    if ('ligand_identity' in task.groups_generated) or ('ligand_identity_condensed' in task.groups_generated):  # de novo design
-        config = 'dock'
-        true_lig = None
-    elif true_lig is None:  # ground truth ligand case
-        config = 'dock'
-    else:   # ligand conformer
-        config = 'redock'
-
-    if not gen_ligs:
-        return None
-
-    buster = pb.PoseBusters(config=config, max_workers=pb_workers)
-    df_pb = buster.bust(gen_ligs, true_lig, prot_file)
-    df_pb.columns = [f"pb_{col}" for col in df_pb.columns]
-    df_pb['pb_valid'] = df_pb[df_pb['pb_sanitization'] == True].values.astype(bool).all(axis=1)
-    
-    return df_pb
-
-
-def _run_gnina(lig_file, prot_file, env, minimization):
-
-    gnina_binary = Path(omtra_root()) / "gnina.1.3.2"
-
-    # Check if it exists and is a file
-    if not gnina_binary.is_file():
-        print(f"Could not find GNINA pre-built binary under path {omtra_root()}.")
-        print("Please download file at https://github.com/gnina/gnina/releases/tag/v1.3.2 and try again.")
-
-    
-    with tempfile.NamedTemporaryFile(suffix=".sdf", delete=False) as tmp:
-        output_sdf = Path(tmp.name)
-    
-    try:
-        if not minimization:
-            scores = {'minimizedAffinity': {},  # VINA score
-                      'CNNscore': {},
-                      'CNNaffinity': {},
-                      'CNNaffinity_variance': {}}
-            
-            vina_cmd = ['./gnina.1.3.2',
-                        '-r', prot_file,
-                        '-l', lig_file,
-                        '--score_only',
-                        '-o', output_sdf,
-                        '--seed', '42']
-        else:
-            scores = {'minimizedAffinity': {}}
-
-            vina_cmd = ['./gnina.1.3.2',
-                        '-r', prot_file,
-                        '-l', lig_file,
-                        '-o', output_sdf,
-                        '--minimize', 
-                        '--seed', '42']
-
-        cmd_result = subprocess.run(vina_cmd, capture_output=True, text=True, env=env)
-
-        if cmd_result.returncode != 0:
-            print("Error running GNINA:", flush=True)
-            print(cmd_result.stderr)
-            return None
-
-        supplier = Chem.SDMolSupplier(output_sdf, sanitize=False, removeHs=False)
-
-        for lig in supplier:
-            if lig is None:
-                continue
-            lig_id = lig.GetProp('_Name')
-
-            for name, vals in scores.items():
-                vals[lig_id] = float(lig.GetProp(name))
-    
-    finally:
-        output_sdf.unlink(missing_ok=True)
-
-    return scores
-
-
-def gnina(lig_file, prot_file, env):
-    results = {}
-
-    vina_results = _run_gnina(lig_file, prot_file, env, minimization=False)
-
-    if vina_results is not None:
-        results.update(vina_results)
-
-    vina_min_results =  _run_gnina(lig_file, prot_file, env, minimization=True)
-    if vina_min_results is not None:
-        results['vina_min'] = vina_min_results['minimizedAffinity']
-    
-    return results
-
-
-def posecheck(ligs, prot_file, true_lig=None, true_prot_file=None, interaction_recovery=False, disable_strain=False):
-    
-    # initialize the PoseCheck object
-    pc = PoseCheck()
-    
-    interaction_types = ['HBAcceptor', 'HBDonor', 'Hydrophobic', 'PiStacking']
-
-    results = {}
-
-    # load a protein from a PDB file (will run reduce in the background)
-    pc.load_protein_from_pdb(prot_file)
-
-    # load RDKit molecules directly
-    pc.load_ligands_from_mols(ligs)
-
-    results['clashes'] = pc.calculate_clashes()
-    if not disable_strain:
-        results['strain'] = pc.calculate_strain_energy()
-
-    interactions = pc.calculate_interactions()
-
-    n_lig_atoms = [lig.GetNumAtoms() for lig in ligs]
-
-    for i_type in interaction_types:
-        cols = [col for col in interactions.columns if col[2] == i_type]
-        i_sum = interactions[cols].sum(axis=1) 
-        results[i_type] = [n_interactions / n_atoms for (n_interactions, n_atoms) in zip(i_sum, n_lig_atoms)]  # number of interactions normalized by the number of ligand atoms
-
-    if interaction_recovery:
-        fingerprint_interaction_types = ['HBAcceptor', 'HBDonor', 'PiStacking', 'XBDonor', 'CationPi', 'PiCation', 'Cationic', 'Anionic']
-
-        pc = PoseCheck()
-        pc.load_protein_from_pdb(true_prot_file)
-        pc.load_ligands_from_mols([true_lig])
-        true_interactions = pc.calculate_interactions()
-        cols = [col for col in true_interactions.columns if col[2] in fingerprint_interaction_types]
-        true_interactions_filtered = true_interactions[cols]
-
-        cols = [col for col in interactions.columns if col[2] in fingerprint_interaction_types]
-        interactions_filtered = interactions[cols]
-
-        recovery = pd.DataFrame(False,  index=interactions_filtered.index, columns=true_interactions_filtered.columns)
-        common_cols = interactions_filtered.columns.intersection(true_interactions_filtered.columns)
-        recovery[common_cols] = interactions_filtered[common_cols]
-
-        results['interaction_recovery'] = (recovery.sum(axis=1) / recovery.shape[1]).to_list()
-
-    return results
-
-
-def rmsd(gen_lig, true_lig):
-    res = check_rmsd(mol_pred=gen_lig, mol_true=true_lig)
-    res = res.get("results", {})
-    rmsd = res.get("rmsd", -1.0)
-    return rmsd
-
-
-def compute_pharmacophore_match(gen_ligs, true_pharm, threshold=1.0):
-    results = {"perfect_pharm_match": [],
-               "frac_true_pharms_matched": []}
-    
-    for gen_lig in gen_ligs:
-        try:
-            gen_coords, gen_types, _, _ = get_pharmacophores(gen_lig)
-            gen_coords = np.array(gen_coords) # has shape (n_gen_pharms, 3)
-            gen_types = np.array(gen_types) # has shape (n_gen_pharms)
-
-        except Exception as e:
-            print(f"Failed to get pharmacophores for generated ligand: {e}")
-            results['perfect_pharm_match'].append(None)
-            results['frac_true_pharms_matched'].append(None)
-            continue
-
-        true_coords = true_pharm['coords']
-        true_types = true_pharm['types_idx']
-
-        # convert to numpy arrays
-        true_coords = np.array(true_coords) # has shape (n_true_pharms, 3)
-        true_types = np.array(true_types) # has shape (n_true_pharms)
-
-        d = cdist(true_coords, gen_coords)
-        same_type_mask = true_types[:, None] == gen_types[None, :]
-
-        matching_pharms = (d < threshold) & same_type_mask
-
-        n_true_pharms = true_coords.shape[0]
-        all_true_matched = matching_pharms.any(axis=1).all()
-
-        if n_true_pharms == 0:
-            n_true_pharms = 1
-
-        results['perfect_pharm_match'].append(all_true_matched)
-        results['frac_true_pharms_matched'].append(matching_pharms.any(axis=1).sum() / n_true_pharms)
-
-    return results
 
 
 def run_with_timeout(func, *args, timeout, **kwargs):
@@ -329,19 +129,12 @@ def repair_and_sanitize(lig, i):
         return None
     return lig
 
-def compute_metrics(system_pairs: List[SampledSystem], 
-                    task: Task, 
-                    metrics_to_run: Dict[str, bool], 
+def compute_metrics(system_pairs: List[SampledSystem],
+                    pb_mode: str,
+                    metrics_to_run: Dict[str, bool],
                     timeout: int,
                     disable_strain: bool = False,
                     ):
-    
-    env = os.environ.copy()
-    # # Use PyTorch's bundled cuDNN libraries for GNINA compatibility
-    # import torch
-    # torch_lib_path = str(Path(torch.__file__).parent / "lib")
-    # existing_ld_path = env.get('LD_LIBRARY_PATH', '')
-    # env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
 
     # dataframe for metrics
     rows = []
@@ -353,11 +146,11 @@ def compute_metrics(system_pairs: List[SampledSystem],
                     'protein_id': data['gen_prot_id'],
                     'gen_ligand_id': lig_id
                 })
-    
+
     metrics = pd.DataFrame(rows)
     metrics.set_index(['sys_id', 'protein_id', 'gen_ligand_id'], inplace=True)
 
-    
+
     for sys_id, pairs in system_pairs.items():
         for pair_id, data in pairs.items():
 
@@ -374,7 +167,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 if lig is not None:
                     valid_gen_ligs.append(lig)
                     valid_gen_lig_ids.append(data['gen_ligs_ids'][i])
-            
+
 
             # Sanitize ground truth ligand
             true_lig = data['true_lig']
@@ -387,45 +180,48 @@ def compute_metrics(system_pairs: List[SampledSystem],
 
             all_indices = pd.MultiIndex.from_product([[sys_id], [data['gen_prot_id']], data['gen_ligs_ids']], names=['sys_id', 'protein_id', 'gen_ligand_id'])
             valid_lig_indices = pd.MultiIndex.from_product([[sys_id], [data['gen_prot_id']], valid_gen_lig_ids], names=['sys_id', 'protein_id', 'gen_ligand_id'])
-            
+
             metrics.loc[all_indices, 'RDKit_valid'] = False
             metrics.loc[valid_lig_indices, 'RDKit_valid'] = True
+
+            # Resolve pb args: for de novo tasks, don't pass true_lig
+            pb_true_lig = true_lig if pb_mode == "redock" else None
 
             # PoseBusters valid
             if metrics_to_run['pb_valid']:
 
-                pb_results = run_with_timeout(pb_valid, 
-                                              timeout=timeout, 
+                pb_results = run_with_timeout(pb_validate,
+                                              timeout=timeout,
                                               gen_ligs=valid_gen_ligs,
-                                              true_lig=true_lig, 
-                                              prot_file=data['gen_prot_file'], 
-                                              task=task)
-                
+                                              mode=pb_mode,
+                                              true_lig=pb_true_lig,
+                                              prot_file=data['gen_prot_file'])
+
                 if pb_results is not None:
                     pb_results.index = valid_lig_indices
                     metrics.loc[valid_lig_indices, pb_results.columns] = pb_results
                 else:
                     for i, gen_lig in enumerate(valid_gen_ligs):
-                        pb_result_single = run_with_timeout(pb_valid, 
-                                                            timeout=120, 
+                        pb_result_single = run_with_timeout(pb_validate,
+                                                            timeout=120,
                                                             gen_ligs=gen_lig,
-                                                            true_lig=true_lig, 
-                                                            prot_file=data['gen_prot_file'], 
-                                                            task=task)
-                        
+                                                            mode=pb_mode,
+                                                            true_lig=pb_true_lig,
+                                                            prot_file=data['gen_prot_file'])
+
                         if pb_result_single is not None:
                             metrics.loc[(sys_id, data['gen_prot_id'], valid_gen_lig_ids[i]), pb_result_single.columns] = pb_result_single.iloc[0].values
                         else:
                             print(f"Could not resolve PoseBusters eval on single generated ligand {valid_gen_lig_ids[i]}\n")
-                
+
                 if metrics_to_run['ground_truth']:
-                    pb_true_results = run_with_timeout(pb_valid,
+                    pb_true_results = run_with_timeout(pb_validate,
                                                        timeout=120,
                                                        gen_ligs=true_lig,
+                                                       mode="dock",
                                                        true_lig=None,
-                                                       prot_file=data['true_prot_file'],
-                                                       task=task)
-                    
+                                                       prot_file=data['true_prot_file'])
+
                     if pb_true_results is not None:
                         pb_true_results = pd.DataFrame([pb_true_results.iloc[0].values] * len(all_indices), columns=pb_true_results.columns, index=all_indices)
                         pb_true_results.columns = [f"{col}_true" for col in pb_true_results.columns]
@@ -434,103 +230,97 @@ def compute_metrics(system_pairs: List[SampledSystem],
             # PoseCheck
             if metrics_to_run['posecheck']:
 
-                if sys_id == 'sys_227_gt':  # TODO: remove this after posebusters processing
-                    continue
-
                 # generated ligand
-                posechk_results = run_with_timeout(posecheck, 
+                posechk_results = run_with_timeout(posecheck_all,
                                                 timeout=timeout,
                                                 ligs=valid_gen_ligs,
                                                 prot_file=data['gen_prot_file'],
                                                 true_lig=true_lig,
                                                 true_prot_file=data['true_prot_file'],
-                                                interaction_recovery=metrics_to_run['interaction_recovery'],
-                                                disable_strain=disable_strain)
-                
+                                                include_strain=not disable_strain,
+                                                include_interaction_recovery=metrics_to_run['interaction_recovery'])
+
                 if posechk_results is not None:
                     posechk_results = pd.DataFrame(posechk_results, index=valid_lig_indices)
                     metrics.loc[valid_lig_indices, posechk_results.columns] = posechk_results
                 else:
                     for i, gen_lig in enumerate(valid_gen_ligs):
-                        posechk_result_single = run_with_timeout(posecheck, 
+                        posechk_result_single = run_with_timeout(posecheck_all,
                                                             timeout=120,
                                                             ligs=[gen_lig],
                                                             prot_file=data['gen_prot_file'],
                                                             true_lig=true_lig,
                                                             true_prot_file=data['true_prot_file'],
-                                                            interaction_recovery=metrics_to_run['interaction_recovery'],
-                                                            disable_strain=disable_strain
-                                                                )
+                                                            include_strain=not disable_strain,
+                                                            include_interaction_recovery=metrics_to_run['interaction_recovery'])
 
                         if posechk_result_single is not None:
                             metrics.loc[(sys_id, data['gen_prot_id'], valid_gen_lig_ids[i]), list(posechk_result_single.keys())] = pd.Series({k: v[0] for k, v in posechk_result_single.items()})
                         else:
-                            print(f"Could not resolve PoseCheck eval on single generated ligand {valid_gen_lig_ids[i]}\n")  
+                            print(f"Could not resolve PoseCheck eval on single generated ligand {valid_gen_lig_ids[i]}\n")
 
                 # ground truth ligand
                 if metrics_to_run['ground_truth']:
-                    posechk_true_results = run_with_timeout(posecheck,
+                    posechk_true_results = run_with_timeout(posecheck_all,
                                                             timeout=120,
                                                             ligs=[true_lig],
                                                             prot_file=data['true_prot_file'],
-                                                            disable_strain=disable_strain)
-                    
+                                                            include_strain=not disable_strain)
+
                     if posechk_true_results is not None:
                         flat_row = {k: v[0] for k, v in posechk_true_results.items()}
                         posechk_true_results = pd.DataFrame([flat_row]*len(all_indices), index=all_indices)
                         posechk_true_results.columns =  [f"{col}_true" for col in posechk_true_results.keys()]
                         metrics.loc[all_indices, posechk_true_results.columns] = posechk_true_results
-        
+
             # GNINA
             if metrics_to_run['gnina']:
                 # generated ligand
-                gnina_results = run_with_timeout(gnina,
+                gnina_results = run_with_timeout(gnina_score_and_minimize,
                                                  timeout=timeout,
                                                  lig_file=data['gen_ligs_file'],
-                                                 prot_file=data['gen_prot_file'], 
-                                                 env=env)
+                                                 prot_file=data['gen_prot_file'])
 
                 if gnina_results is not None:
                     gnina_results = pd.DataFrame(gnina_results)
                     gnina_results.index = pd.MultiIndex.from_product([[sys_id], [data['gen_prot_id']], gnina_results.index], names=['sys_id', 'protein_id', 'gen_ligand_id'])
                     metrics.loc[gnina_results.index, gnina_results.columns] = gnina_results
-                
+
                 #  ground truth ligand
                 if metrics_to_run['ground_truth']:
-                    gnina_true_results = run_with_timeout(gnina,
+                    gnina_true_results = run_with_timeout(gnina_score_and_minimize,
                                                           timeout=timeout,
                                                           lig_file=data['true_lig_file'],
-                                                          prot_file=data['true_prot_file'], 
-                                                          env=env)
-                    
+                                                          prot_file=data['true_prot_file'])
+
                     if gnina_true_results is not None:
                         flat_row = {k: v[true_lig.GetProp('_Name')] for k, v in gnina_true_results.items()}
                         gnina_true_results = pd.DataFrame([flat_row]*len(all_indices), index=all_indices)
                         gnina_true_results.columns = [f"{col}_true" for col in gnina_true_results.columns]
                         metrics.loc[all_indices, gnina_true_results.columns] = gnina_true_results
-            
+
             # RMSD
             if metrics_to_run['rmsd']:
                 for i, gen_lig in enumerate(data['gen_ligs']):
-                    rmsd_results = None
-                    rmsd_results = run_with_timeout(rmsd,
+                    rmsd_result = run_with_timeout(ligand_rmsd,
                                                     timeout=120,
                                                     gen_lig=gen_lig,
                                                     true_lig=true_lig)
-                
-                    if rmsd_results is not None: 
-                        metrics.loc[(sys_id, data['gen_prot_id'], data['gen_ligs_ids'][i]), 'rmsd'] = rmsd_results
-            
-            # pharmacophroe matching
+
+                    if rmsd_result is not None:
+                        metrics.loc[(sys_id, data['gen_prot_id'], data['gen_ligs_ids'][i]), 'rmsd'] = rmsd_result
+
+            # pharmacophore matching
             if metrics_to_run['pharm_match']:
-                pharm_results = run_with_timeout(compute_pharmacophore_match,
+                pharm_results = run_with_timeout(pharmacophore_match_from_dict,
                                                  timeout=timeout,
-                                                 gen_ligs=valid_gen_ligs,   # TODO: will this work if we pass all ligands not just the RDKit valid ones?
+                                                 gen_ligs=valid_gen_ligs,
                                                  true_pharm=data['true_pharm'])
-                
-                pharm_results = pd.DataFrame(pharm_results, index=valid_lig_indices)
-                metrics.loc[valid_lig_indices, pharm_results.columns] = pharm_results
-            
+
+                if pharm_results is not None:
+                    pharm_results = pd.DataFrame(pharm_results, index=valid_lig_indices)
+                    metrics.loc[valid_lig_indices, pharm_results.columns] = pharm_results
+
     return metrics
 
 
@@ -1018,6 +808,14 @@ def main(args):
                                               n_replicates=args.n_replicates)
     
     if not args.sample_only:
+        # Resolve PoseBusters mode from task: "redock" when ligand identity is
+        # fixed (docking/conformer), "dock" for de novo design
+        if ('ligand_identity_condensed' not in task.groups_generated
+                and 'ligand_identity' not in task.groups_generated):
+            pb_mode = "redock"
+        else:
+            pb_mode = "dock"
+
         metrics_to_run = {'pb_valid': not args.disable_pb_valid,
                         'gnina': not args.disable_gnina,
                         'posecheck': not args.disable_posecheck,
@@ -1025,9 +823,9 @@ def main(args):
                         'interaction_recovery': not args.disable_interaction_recovery,
                         'pharm_match': (not args.disable_pharm_match) and ('pharmacophore' in task.groups_present),
                         'ground_truth': not args.disable_ground_truth_metrics}
-        
+
         metrics = compute_metrics(system_pairs=system_pairs,
-                                task=task,
+                                pb_mode=pb_mode,
                                 metrics_to_run=metrics_to_run,
                                 timeout=args.timeout,
                                 disable_strain=args.disable_strain

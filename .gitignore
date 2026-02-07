@@ -197,6 +197,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# Research notes (Oppy's development logs)
+research_notes/
+
 # Hydra outputs
 outputs/**
 omtra_webapp/models/
