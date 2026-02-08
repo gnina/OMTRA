@@ -1,0 +1,64 @@
+# OMTRA Distributed Sampling Pipeline — CLI Mode Configuration
+# Usage: python -m omtra_pipelines.distributed_sampling.launch_pipeline --config this_file.yaml
+#
+# CLI mode distributes replicates of a single system (specified via input files)
+# across SLURM array jobs, then runs metrics and aggregation.
+
+mode: cli
+
+# --- Required ---
+task: fixed_protein_ligand_denovo_condensed
+output_dir: /path/to/pipeline_output
+
+# Input files — same args as the `omtra` CLI
+input_files:
+  protein_file: /path/to/protein.pdb
+  ligand_file: /path/to/ligand.sdf             # optional, for ground truth / RMSD
+  pharmacophore_file: /path/to/pharm.json       # optional (Pharmit JSON, XYZ, or ligand SDF)
+
+  # Pocket definition — exactly one of the following:
+  pocket_ligand: /path/to/pocket_ref.sdf        # define pocket around ligand atoms
+  # pocket_center: "1.0,2.0,3.0"               # define pocket by center coords
+  # pocket_residues: "A:123-125,B:200"          # define pocket by residue list
+
+# Checkpoint — optional; omtra CLI auto-resolves from task if omitted
+# checkpoint: /path/to/last.ckpt
+
+# --- Replicate distribution ---
+n_replicates_total: 1000
+replicates_per_chunk: 100                        # yields 10 SLURM array tasks
+
+# --- Sampling options (passed to omtra CLI) ---
+sampling:
+  n_timesteps: 250
+  stochastic_sampling: false
+  # noise_scaler: 1.0
+  # eps: 0.01
+
+# --- Metrics options (passed to docking_eval.py --samples_dir) ---
+# Optional dataset/split for metrics that need dataset context
+# dataset: plinder
+# split: test
+
+metrics:
+  timeout: 2700
+  disable_gnina: false
+  disable_pb_valid: false
+  disable_posecheck: false
+  disable_rmsd: false
+  disable_strain: false
+  disable_interaction_recovery: true
+  disable_pharm_match: false
+  disable_ground_truth_metrics: false
+
+# --- SLURM configuration ---
+slurm:
+  partition_gpu: dept_gpu
+  partition_cpu: dept_cpu
+  cpus_per_task: 4
+  mem: 32G
+  time_sampling: "4:00:00"
+  time_metrics: "8:00:00"
+  time_aggregate: "0:30:00"
+  conda_env: omtra
+  extra_sbatch_args: ""  # e.g. "#SBATCH --account=myaccount"
