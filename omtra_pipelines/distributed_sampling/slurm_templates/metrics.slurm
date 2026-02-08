@@ -12,7 +12,8 @@ source ~/.bashrc
 conda activate $conda_env
 
 TASK_ID=$$SLURM_ARRAY_TASK_ID
-CMD=$$(sed -n "$${TASK_ID}p" $metrics_commands_file)
+LINE_NUM=$$((TASK_ID + 1))
+CMD=$$(sed -n "$${LINE_NUM}p" $metrics_commands_file)
 
 echo "=== OMTRA Metrics Pipeline ==="
 echo "Job ID: $$SLURM_JOB_ID | Array Task: $$SLURM_ARRAY_TASK_ID"

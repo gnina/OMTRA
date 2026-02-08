@@ -1,0 +1,45 @@
+# Test config for distributed sampling CLI mode
+# Using Astex diverse set system 1J3J_CP6
+
+mode: cli
+
+task: fixed_protein_ligand_denovo_condensed
+output_dir: /net/galaxy/home/koes/icd3/moldiff/OMTRA/test_cli_pipeline_output
+
+# Explicit checkpoint (auto-resolve needs OMTRA_CHECKPOINT_DIR or trained_models/)
+checkpoint: /net/galaxy/home/koes/icd3/moldiff/OMTRA/outputs/2025-12-17/protformer_2025-12-17_14-51-473373/checkpoints/batch_2350000.ckpt
+
+input_files:
+  protein_file: /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/astex_diverse_set/1J3J_CP6/1J3J_CP6_protein.pdb
+  ligand_file: /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/astex_diverse_set/1J3J_CP6/1J3J_CP6_ligand.sdf
+  pocket_ligand: /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/astex_diverse_set/1J3J_CP6/1J3J_CP6_ligand.sdf
+
+# Small test: 20 replicates, 10 per chunk = 2 SLURM array tasks
+n_replicates_total: 20
+replicates_per_chunk: 10
+
+sampling:
+  n_timesteps: 250
+  stochastic_sampling: false
+
+metrics:
+  timeout: 2700
+  disable_gnina: false
+  disable_pb_valid: false
+  disable_posecheck: false
+  disable_rmsd: false
+  disable_strain: false
+  disable_interaction_recovery: true
+  disable_pharm_match: true
+  disable_ground_truth_metrics: false
+
+slurm:
+  partition_gpu: dept_gpu
+  partition_cpu: dept_cpu
+  cpus_per_task: 4
+  mem: 32G
+  time_sampling: "1:00:00"
+  time_metrics: "2:00:00"
+  time_aggregate: "0:30:00"
+  conda_env: omtra
+  extra_sbatch_args: ""
