@@ -149,10 +149,22 @@ def parse_args():
         help='Which data split to use'
     )
     p.add_argument(
-        "--metrics", 
-        action="store_true", 
+        "--metrics",
+        action="store_true",
         help="If set, compute metrics for the samples"
     )
+
+    # Docking evaluation metrics
+    p.add_argument("--eval", nargs='*', default=None, metavar='METRIC',
+        help="Compute per-sample eval metrics after sampling. "
+             "No args = all applicable. "
+             "Choices: posebusters, gnina, posecheck, rmsd, pharmacophore")
+    p.add_argument("--eval-timeout", type=int, default=600,
+        help="Timeout per metric computation in seconds (default: 600)")
+    p.add_argument("--eval-no-strain", action="store_true",
+        help="Skip strain energy in posecheck")
+    p.add_argument("--eval-interaction-recovery", action="store_true",
+        help="Include interaction recovery analysis")
 
     return p.parse_args()
 
@@ -231,10 +243,11 @@ def write_ground_truth(
         n_systems: int,
         n_replicates: int,
         task: Task,
-        output_dir: Path, 
+        output_dir: Path,
         sampled_systems,
         g_list,
-        prot_cif: bool = True
+        prot_cif: bool = True,
+        also_write_pdb: bool = False,
     ):
     for cond_idx in range(n_systems):
         # get an example system containing the ground truth information of interest
@@ -248,8 +261,8 @@ def write_ground_truth(
         # write the ground truth ligand
         gt_lig_file = sys_gt_dir / "ligand.sdf"
         sys.write_ligand(
-            gt_lig_file, 
-            ground_truth=True, 
+            gt_lig_file,
+            ground_truth=True,
             g=g_list[cond_idx].to('cpu'),
         )
 
@@ -258,6 +271,8 @@ def write_ground_truth(
             if prot_cif:
                 gt_prot_file = sys_gt_dir / "protein.cif"
                 sys.write_protein(gt_prot_file, ground_truth=True)
+                if also_write_pdb:
+                    sys.write_protein_pdb(sys_gt_dir, filename='protein', ground_truth=True)
             else:
                 sys.write_protein_pdb(sys_gt_dir, filename='protein', ground_truth=True)
 
@@ -502,9 +517,82 @@ def main(args):
                 system.write_pharmacophore(pharm_xt_file, trajectory=True, endpoint=False)
                 system.write_pharmacophore(pharm_xhat_file, trajectory=True, endpoint=True)
 
+    # --- Docking evaluation metrics ---
+    if getattr(args, 'eval', None) is not None:
+        if task.unconditional:
+            print("Warning: --eval is not supported for unconditional tasks. Skipping.")
+        elif 'protein_identity' not in task.groups_present:
+            print("Warning: --eval requires protein-conditioned tasks. Skipping.")
+        elif args.visualize:
+            print("Warning: --eval is not supported with --visualize. Skipping.")
+        elif hasattr(args, 'g_list_from_files') and args.g_list_from_files is not None:
+            print("Warning: --eval is not yet supported with file inputs. Skipping.")
+        else:
+            import pandas as pd
+            from omtra.eval.metrics.compute import (
+                compute_metrics, system_pairs_from_path,
+                determine_applicable_metrics, determine_pb_mode,
+                VALID_EVAL_METRICS,
+            )
+
+            # Validate requested metrics
+            requested = args.eval if args.eval else None
+            if requested:
+                invalid = set(requested) - VALID_EVAL_METRICS
+                if invalid:
+                    print(f"Unknown eval metrics: {invalid}. "
+                          f"Valid: {sorted(VALID_EVAL_METRICS)}")
+                    import sys as _sys
+                    _sys.exit(1)
+
+            metrics_to_run = determine_applicable_metrics(task, requested)
+            metrics_to_run['interaction_recovery'] = (
+                getattr(args, 'eval_interaction_recovery', False)
+                and metrics_to_run.get('posecheck', False)
+            )
+
+            # Ensure PDB files exist for gnina/posecheck
+            needs_pdb = metrics_to_run.get('gnina') or metrics_to_run.get('posecheck') or metrics_to_run.get('pb_valid')
+            if needs_pdb and g_list is not None:
+                for cond_idx in range(n_systems):
+                    sys_obj = sampled_systems[cond_idx * n_replicates]
+                    sys_gt_dir = output_dir / f"sys_{cond_idx}_gt"
+                    pdb_path = sys_gt_dir / "protein_0.pdb"
+                    if not pdb_path.exists():
+                        sys_obj.write_protein_pdb(sys_gt_dir, filename='protein',
+                                                  ground_truth=True)
+
+            # Build system_pairs from disk
+            system_pairs = system_pairs_from_path(
+                samples_dir=output_dir, task=task,
+                n_samples=n_systems, sample_start_idx=0,
+                n_replicates=n_replicates,
+            )
+
+            pb_mode = determine_pb_mode(task)
+            eval_timeout = getattr(args, 'eval_timeout', 600)
+            eval_no_strain = getattr(args, 'eval_no_strain', False)
+            eval_df = compute_metrics(
+                system_pairs=system_pairs, pb_mode=pb_mode,
+                metrics_to_run=metrics_to_run, timeout=eval_timeout,
+                disable_strain=eval_no_strain,
+            )
+
+            eval_df = eval_df.reset_index()
+            eval_csv = output_dir / "eval_metrics.csv"
+            eval_df.to_csv(str(eval_csv), index=False)
+            print(f"\nEval metrics written to {eval_csv}")
+
+            # Print summary
+            numeric_cols = eval_df.select_dtypes(include='number').columns
+            summary = eval_df[numeric_cols].mean()
+            for k, v in summary.items():
+                if not pd.isna(v):
+                    print(f"  {k}: {v:.4f}")
+
     if args.metrics:
         # use config from default.yaml not ckpt
-        default_eval_path = Path(omtra_root()) / 'configs' / 'eval' / 'default.yaml'    
+        default_eval_path = Path(omtra_root()) / 'configs' / 'eval' / 'default.yaml'
         default_eval_cfg = OmegaConf.load(default_eval_path)
 
         metrics = {}
