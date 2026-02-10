@@ -138,6 +138,14 @@ class SampledSystem:
             n_lig_atoms -= n_fake_atoms
         return n_lig_atoms
 
+    def get_n_fixed_atoms(self) -> int:
+        try:
+            mask = self.g.nodes['lig'].data['atom_mask_1_true']
+            return int(mask.sum())
+        except Exception as e:
+            print("Partial modality conditioning not enabled for this system.")
+            return 0
+
     def get_atom_arr(self, reference: bool = False):
         """
         Get the system data represented as Biotite AtomArray

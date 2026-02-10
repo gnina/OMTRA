@@ -16,6 +16,7 @@ import time
 from collections import defaultdict
 from scipy.spatial.distance import cdist
 from natsort import natsorted
+import torch
 
 from rdkit import Chem
 import posebusters as pb
@@ -337,8 +338,8 @@ def compute_metrics(system_pairs: List[SampledSystem],
                     ):
     
     env = os.environ.copy()
-    # # Use PyTorch's bundled cuDNN libraries for GNINA compatibility
-    # import torch
+    env['LD_LIBRARY_PATH'] = "/net/galaxy/home/koes/dkoes/local/miniconda/envs/cuda/lib/"
+    # Use PyTorch's bundled cuDNN libraries for GNINA compatibility
     # torch_lib_path = str(Path(torch.__file__).parent / "lib")
     # existing_ld_path = env.get('LD_LIBRARY_PATH', '')
     # env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
@@ -531,6 +532,10 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 pharm_results = pd.DataFrame(pharm_results, index=valid_lig_indices)
                 metrics.loc[valid_lig_indices, pharm_results.columns] = pharm_results
             
+            # number of fixed atoms for partial modality conditioning
+            if len(task.partial_modalities_fixed) > 0:
+                metrics.loc[all_indices, 'n_fixed_atoms'] = data['n_fixed_atoms']
+            
     return metrics
 
 
@@ -601,6 +606,7 @@ def sample_system(ckpt_path: Path,
         sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in range(sys_info.shape[0])]
         sys_info['n_gt_lig_atoms'] =  sys_info['lig_atom_end'] - sys_info['lig_atom_start']
         sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'n_gt_lig_atoms', 'sys_id']]
+
 
     elif dataset == 'crossdocked':
 
@@ -696,6 +702,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
         sys_gt_dir = output_dir / sys_name
 
         gen_ligs = [s.get_rdkit_ligand() for s in replicates]
+        num_fixed_atoms = [s.get_n_fixed_atoms() for s in replicates]
 
         for i, lig in enumerate(gen_ligs):
             lig.SetProp("_Name", f"gen_ligands_{i}")
@@ -725,6 +732,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
                 # true ligand 
                 pair['true_lig'] = true_lig
                 pair['true_lig_file'] = true_lig_file
+                pair['n_fixed_atoms'] = num_fixed_atoms[i]
                 
                 # generated protein
                 pair["gen_prot_file"] = sys_gt_dir / f"gen_prot_{i}.pdb"
@@ -757,6 +765,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
             # true ligand 
             pair['true_lig'] = true_lig
             pair['true_lig_file'] = sys_gt_dir / f"ligand.sdf"
+            pair['n_fixed_atoms'] = num_fixed_atoms[0]
 
             # set generated protein to reference protein
             pair['gen_prot_file'] = true_prot_file
