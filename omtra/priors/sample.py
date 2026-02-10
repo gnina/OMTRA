@@ -13,7 +13,7 @@ def sample_priors(
         prior_fns: dict, 
         training: bool, 
         com: torch.Tensor = None,
-        fake_atoms: bool = False
+        fake_atoms: bool = False,
         ):
     for modality_name in prior_fns:
         prior_name, prior_func = prior_fns[modality_name] # get prior name and function
@@ -78,6 +78,19 @@ def sample_priors(
         # add the prior sample to the graph
         g_data_loc[modality.entity_name].data[f'{modality.data_key}_0'] = prior_sample
 
+        # if modality in task_class.partial_modalities_fixed:
+        #     if modality.is_node: 
+        #         entity = g.nodes[modality.entity_name]
+        #         mask = entity.data['atom_mask_1_true'].bool()
+        #     else:
+        #         entity = g.edges[modality.entity_name]
+        #         mask = entity.data['edge_mask_1_true'].bool()
+
+        #     gt = entity.data[f'{modality.data_key}_1_true']
+        #     prior = entity.data[f'{modality.data_key}_0']
+        #     prior[mask] = gt[mask]
+        #     entity.data[f'{modality.data_key}_0'] = prior
+
 
     # if pharmacophore and ligand structure are being generated
     # move pharmacophore prior COM to the ligand prior COM
@@ -105,9 +118,24 @@ def sample_priors(
         g.nodes['lig'].data['x_0'] += (com - current_lig_com)[node_batch_idxs]
 
     if not training and pharm_gen:
+        raise NotImplementedError('i think this behavior is problematic but we dont support pharmacophore generation anyways at the moment')
         if g.num_nodes('pharm') > 0:
             node_batch_idxs = get_node_batch_idxs_ntype(g, 'pharm')
             current_pharm_com = dgl.readout_nodes(g, feat='x_0', op='mean', ntype='pharm')
             g.nodes['pharm'].data['x_0'] += (com - current_pharm_com)[node_batch_idxs]
+    
+    for modality_name in task_class.partial_modalities_fixed:
+        modality = name_to_modality(modality_name)
+        if modality.is_node: 
+            entity = g.nodes[modality.entity_name]
+            mask = entity.data['atom_mask_1_true'].bool()
+        else:
+            entity = g.edges[modality.entity_name]
+            mask = entity.data['edge_mask_1_true'].bool()
+
+        gt = entity.data[f'{modality.data_key}_1_true']
+        prior = entity.data[f'{modality.data_key}_0']
+        prior[mask] = gt[mask]
+        entity.data[f'{modality.data_key}_0'] = prior
 
     return g

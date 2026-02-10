@@ -177,7 +177,8 @@ class PlinderDataset(ZarrDataset):
                    include_pharmacophore: bool, 
                    include_protein: bool, 
                    include_extra_feats: bool, 
-                   condensed_atom_typing: bool
+                   condensed_atom_typing: bool,
+                   partial_modality_conditioning: bool,
     ) -> SystemData:
         system_info = self.system_lookup[
             self.system_lookup["system_idx"] == index
@@ -387,6 +388,22 @@ class PlinderDataset(ZarrDataset):
             ligand.atom_hyb=lig_extra_feats_dict['hyb']
             ligand.atom_ring=lig_extra_feats_dict['ring']
             ligand.atom_chiral=lig_extra_feats_dict['chiral']
+
+        if partial_modality_conditioning:
+            frags = self.slice_array(f'ligand/extra_feats', lig_atom_start, lig_atom_end)[:, -1]
+            frag_ids = np.unique(frags)
+            n_frags = frag_ids.shape[0]
+
+            if n_frags <= 1:
+                fixed_frags = []
+            else:
+                # Uniformly sample between 1 and # frags-1 fragments to fix 
+                num_frags_fixed = np.random.randint(1, n_frags)
+                fixed_frags = np.random.choice(frag_ids, size=num_frags_fixed, replace=False)
+
+            ligand.fixed_atom_mask = torch.from_numpy(np.isin(frags, fixed_frags).astype(np.int64))
+            ligand.fixed_edge_mask = (ligand.fixed_atom_mask[ligand.bond_indices[:, 0]] 
+                                            & ligand.fixed_atom_mask[ligand.bond_indices[:, 1]]).long()
 
         if include_pharmacophore:
             pharm_start, pharm_end = (
@@ -674,6 +691,7 @@ class PlinderDataset(ZarrDataset):
         task: Task,
         include_extra_feats: bool,
         condensed_atom_typing: bool,
+        partial_modality_conditioning: bool,
         pocket: Optional[StructureData] = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
@@ -681,7 +699,7 @@ class PlinderDataset(ZarrDataset):
         Dict[str, Dict[str, torch.Tensor]],
     ]:
 
-        lig_xace = ligand.to_xace_mol(dense=True)
+        lig_xace = ligand.to_xace_mol(dense=False)
 
         denovo_ligand = any(group in task.groups_generated for group in ['ligand_identity',  'ligand_identity_condensed'])
 
@@ -691,6 +709,9 @@ class PlinderDataset(ZarrDataset):
                 lig_xace = add_fake_atoms(lig_xace, self.fake_atom_p, cond_a_typer)
             else:
                 lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
+
+        # note: very important to densify AFTER adding fake atoms
+        lig_xace = lig_xace.sparse_to_dense()
         
         node_data = {
             "lig": {
@@ -722,6 +743,11 @@ class PlinderDataset(ZarrDataset):
         edge_idxs = {
             "lig_to_lig": lig_xace.edge_idxs,
         }
+
+        if partial_modality_conditioning:
+            node_data["lig"]["atom_mask_1_true"] = lig_xace.fixed_atom_mask
+            edge_data["lig_to_lig"]["edge_mask_1_true"] = lig_xace.fixed_edge_mask
+                             
         if ligand.is_covalent and ligand.linkages and pocket is not None:
             prot_atom_to_lig_tensor, prot_res_to_lig_tensor = self.infer_covalent_bonds(
                 ligand, pocket, lig_atom_type_map
@@ -909,7 +935,8 @@ class PlinderDataset(ZarrDataset):
         include_pharmacophore: bool, 
         include_protein: bool,
         include_extra_feats: bool,
-        condensed_atom_typing: bool
+        condensed_atom_typing: bool,
+        partial_modality_conditioning: bool
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -952,6 +979,7 @@ class PlinderDataset(ZarrDataset):
             task=task,
             include_extra_feats=include_extra_feats,
             condensed_atom_typing=condensed_atom_typing,
+            partial_modality_conditioning=partial_modality_conditioning,
             pocket=system.pocket
         )
         node_data.update(lig_node_data)
@@ -981,12 +1009,15 @@ class PlinderDataset(ZarrDataset):
             or "protein_structure" in task_class.groups_present
         )
 
+        partial_modality_conditioning = len(task_class.partial_modalities_fixed) > 0
+
         system = self.get_system(
             idx,
             include_pharmacophore=include_pharmacophore,
             include_protein=include_protein,
             include_extra_feats=include_extra_feats,
             condensed_atom_typing=condensed_atom_typing,
+            partial_modality_conditioning=partial_modality_conditioning
         )
 
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
@@ -996,7 +1027,8 @@ class PlinderDataset(ZarrDataset):
                 include_pharmacophore=include_pharmacophore,
                 include_protein=include_protein,
                 include_extra_feats=include_extra_feats,
-                condensed_atom_typing=condensed_atom_typing
+                condensed_atom_typing=condensed_atom_typing,
+                partial_modality_conditioning=partial_modality_conditioning
             )
         )
 

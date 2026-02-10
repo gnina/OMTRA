@@ -28,7 +28,7 @@ from omtra.eval.system import SampledSystem
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
-from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
+from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map, num_condensed_atom_types
 from omtra.models.conditional_paths.path_factory import get_conditional_path_fns
 from omtra.models.vector_field import VectorField
 from omtra.models.interpolant_scheduler import InterpolantScheduler
@@ -73,15 +73,19 @@ class OMTRA(pl.LightningModule):
         og_run_dir: Optional[str] = None,
         fake_atom_p: float = 0.0,
         distort_p: float = 0.0,
+        distort_t: float = 0.5,
         eval_config: Optional[DictConfig] = None,
         zero_bo_loss_weight: float = 1.0,
         train_t_dist: str = 'uniform',
         t_alpha: float = 1.8,
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
+        pharm_pos_std: float = 0.0,
         pharm_var: float = 0.0,
         scheduler_config: Optional[DictConfig] = None,
         lr_warmup_steps: int = 0,
+        prot_pos_std: float = 0.0, #standard deviation for adding noise to protein atom positions
+
     ):
         super().__init__()
 
@@ -99,12 +103,15 @@ class OMTRA(pl.LightningModule):
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = self.fake_atom_p > 0
         self.distort_p = distort_p
+        self.distort_t = distort_t
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
+        self.pharm_pos_std = pharm_pos_std
         self.pharm_var = pharm_var
         self.lr_warmup_steps = lr_warmup_steps
         self.scheduler_config = scheduler_config
+        self.prot_pos_std = prot_pos_std
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -143,7 +150,7 @@ class OMTRA(pl.LightningModule):
         self.n_categories_dict = {
             "lig_a": len(lig_atom_type_map),
             "lig_c": len(charge_map),
-            "lig_cond_a": 1,
+            "lig_cond_a": num_condensed_atom_types,
             "lig_e": 4,  # hard-coded assumption of 4 bond types (none, single, double, triple)
             "lig_e_condensed": 4,
             "pharm_a": len(ph_idx_to_type),
@@ -338,7 +345,9 @@ class OMTRA(pl.LightningModule):
             g_list = dgl.unbatch(g)
             n_replicates = 2
 
-        if (any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"])) and 'protein_identity' in task.groups_present:
+        ligand_present = any(group in task.groups_present for group in ["ligand_identity", "ligand_identity_condensed"])
+        if ligand_present:
+            # TODO: this makes an optimistic eval, should be setting COM to something offcenter
             coms = dgl.readout_nodes(g, feat='x_1_true', op='mean', ntype='lig')
             coms = [ coms[i] for i in range(g.batch_size) ]
         else:
@@ -405,15 +414,52 @@ class OMTRA(pl.LightningModule):
         )
 
         if self.distort_p > 0.0:
-            t_mask = (t > 0.5)[node_batch_idxs["lig"]]
+            t_mask = (t > self.distort_t)[node_batch_idxs["lig"]]
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
-            distort_mask = distort_mask & t_mask.unsqueeze(-1)
+            if "lig_x" in task_class.partial_modalities_fixed:
+                distort_mask = distort_mask & t_mask.unsqueeze(-1) & (~g.nodes["lig"].data['atom_mask_1_true'].unsqueeze(-1)) # don't apply geometry distortion to fixed atoms if ligand coordinate modality is partially fixed
+            else: 
+                distort_mask = distort_mask & t_mask.unsqueeze(-1)
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
         
         # add noise to pharmacophore coordinates
-        if self.pharm_var > 0.0:
-            g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**0.5
+        has_pharmacophores = "pharmacophore" in task_class.groups_present #groups_present instead of groups_fixed
+        has_non_zero_pharms = g.num_nodes("pharm") > 0
+        if has_pharmacophores and has_non_zero_pharms and self.pharm_pos_std > 0.0:
+            x = g.nodes["pharm"].data['x_1_true'] #ground truth positions
+            
+            # sample sigma (st dev) from uniform(0, pharm_pos_std)
+            sigma_scalar = torch.rand(x.shape[0], 1, device=x.device) * self.pharm_pos_std
+            sigma = sigma_scalar.expand_as(x) # expand to all dim of x (3 coords)
 
+            #sample episilon from normal(0, sigma)
+            eps = torch.randn_like(x) * sigma #noise at each position
+
+            #add this noise to the true pharmacophore positions
+            g.nodes["pharm"].data['x_1_true'] = x + eps
+
+            #store the standard deviation used for each pharmacophore
+            g.nodes["pharm"].data['pharm_pos_std'] = sigma_scalar #(num_nodes,1)
+
+        # add noise to the protein atom positions
+        has_protein = "protein_structure" in task_class.groups_present
+        if has_protein and self.prot_pos_std > 0.0:
+            # get ground truth positions
+            x = g.nodes["prot_atom"].data['x_1_true']
+
+            # sample sigma (st dev) from uniform(0, prot_pos_std)
+            sigma_scalar = torch.rand(x.shape[0], 1, device=x.device) * self.prot_pos_std
+            sigma = sigma_scalar.expand_as(x) # expand to all dim of x (3 coords)
+
+            #sample episilon from normal(0, sigma)
+            eps = torch.randn_like(x) * sigma #noise at each position
+
+            #add this noise to the true protein atom positions
+            g.nodes["prot_atom"].data['x_1_true'] = x + eps
+
+            #store the standard deviation used for each protein atom
+            g.nodes["prot_atom"].data['prot_pos_std'] = sigma_scalar #(num_nodes,1)
+        
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
             g,
@@ -478,7 +524,6 @@ class OMTRA(pl.LightningModule):
             else:
                 mod_weight = 1.0
 
-
             inp = vf_output[modality.name]
             target = targets[modality.name]
 
@@ -514,6 +559,7 @@ class OMTRA(pl.LightningModule):
                 )
             if self.time_scaled_loss:
                 aux_loss = aux_loss.mean()
+            
             losses[aux_loss_name] = aux_loss
 
         return losses
@@ -626,6 +672,12 @@ class OMTRA(pl.LightningModule):
         for modality in task_class.modalities_fixed:
             data_src = g.nodes if modality.is_node else g.edges
             dk = modality.data_key
+            
+            #check if the number of nodes of node type is 0
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                # print(f"Skipping fixed modality as there are no nodes of type {modality.entity_name}")
+                continue
+
             data_src[modality.entity_name].data[f"{dk}_t"] = data_src[
                 modality.entity_name
             ].data[f"{dk}_1_true"]
@@ -654,14 +706,17 @@ class OMTRA(pl.LightningModule):
         eps: float = 0.01,
         # use_gt_n_lig_atoms: bool = False,
         n_lig_atom_margin: Union[float, None] = None,
+        pharm_pos_std: Optional[torch.Tensor] = None, #std deviation for noise to be added to pharm positions
         n_lig_atoms_mean: Union[float, None] = None,
         n_lig_atoms_std: Union[float, None] = None,
+        prot_pos_std: Optional[torch.Tensor] = None,
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
         groups_present = task.groups_present
         groups_fixed = task.groups_fixed
+        partial_modality_conditioning = len(task.partial_modalities_fixed) > 0
 
         # TODO: user-supplied n_atoms dict?
 
@@ -686,9 +741,13 @@ class OMTRA(pl.LightningModule):
                 f"Task {task_name} requires a user-provided graphs with conditional information, but none was provided."
             )
 
+        if g_list is not None and coms is None:
+            print('WARNING: no COM was explicitly set when sampling. Will try to infer a COM but this is likely to impair results.')
+
         # if this is purely unconditional sampling
         # we create initial graphs with no data
         protein_present = "protein_structure" in groups_present
+        pharm_present = 'pharmacophore' in groups_present
         g_flat: List[dgl.DGLHeteroGraph] = []
         if g_list is None:
             g_flat = []
@@ -710,6 +769,8 @@ class OMTRA(pl.LightningModule):
 
                 if coms is None and protein_present:
                     com_i = g_i.nodes["prot_atom"].data["x_1_true"].mean(dim=0)
+                elif coms is None and pharm_present:
+                    com_i = g_i.nodes["pharm"].data["x_1_true"].mean(dim=0)
                 elif coms is None and not protein_present:
                     com_i = torch.zeros(3, dtype=float)
                 else:
@@ -725,12 +786,17 @@ class OMTRA(pl.LightningModule):
         if add_ligand and use_gt_n_lig_atoms and self.fake_atom_p > 0.0:
             n_fake_atoms_gt = []
             for g in g_flat:
-                if 'cond_a_1_true' not in g.nodes['lig'].data:
-                    raise NotImplementedError('expected there to be a ground-truth ligand, and expected condensed atom types to be used')
-
-                n_fake_atoms_gt.append(
-                    (g.nodes['lig'].data['cond_a_1_true'] == self.cond_a_typer.fake_atom_idx).sum().item()
-                )
+                if 'cond_a_1_true' in g.nodes['lig'].data:
+                    # raise NotImplementedError('expected there to be a ground-truth ligand, and expected condensed atom types to be used')
+                    n_fake_atoms_gt.append(
+                        (g.nodes['lig'].data['cond_a_1_true'] == self.cond_a_typer.fake_atom_idx).sum().item()
+                    )
+                elif 'a_1_true' in g.nodes['lig'].data:
+                    n_fake_atoms_gt.append(
+                        (g.nodes['lig'].data['a_1_true'] == len(lig_atom_type_map)).sum().item()
+                    )
+                else:
+                    raise NotImplementedError('expected there to be a ground-truth ligand')
             n_fake_atoms_gt = torch.tensor(n_fake_atoms_gt)
         else:
             n_fake_atoms_gt = torch.zeros(len(g_flat), dtype=torch.long)
@@ -751,10 +817,14 @@ class OMTRA(pl.LightningModule):
                     std=torch.tensor(n_lig_atoms_std).expand(n_samples)
                 )
                 n_lig_atoms = torch.clamp(n_lig_atoms.round().long(), min=4)
-            
+
+                # sampling from truncated normal distribution ensures number of lig atoms >= number of fixed lig atoms
+                if partial_modality_conditioning:
+                    n_fixed_atoms = torch.tensor([g.nodes['lig'].data['atom_mask_1_true'].bool().sum().item() for g in g_flat])
+                    n_lig_atoms = torch.maximum(n_lig_atoms, n_fixed_atoms)
+
             # use ground truth number of lig atoms
             elif use_gt_n_lig_atoms:
-
                 base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
                 base_n_atoms = base_n_atoms - n_fake_atoms_gt
                 max_margins = torch.clamp(base_n_atoms * n_lig_atom_margin, min=0).int()
@@ -766,8 +836,14 @@ class OMTRA(pl.LightningModule):
                 random_offsets = margins * offset_sign
                 n_lig_atoms = base_n_atoms + random_offsets
                 n_lig_atoms = torch.clamp(n_lig_atoms, min=4)
+
+                if partial_modality_conditioning:
+                    n_fixed_atoms = torch.tensor([g.nodes['lig'].data['atom_mask_1_true'].bool().sum().item() for g in g_flat])
+                    n_lig_atoms = torch.maximum(n_lig_atoms, n_fixed_atoms)
             
             else:
+                if partial_modality_conditioning:
+                    raise NotImplementedError('cannot sample from marginal plinder distribution for partial modality conditioning')
                 n_lig_atoms = sample_n_lig_atoms_plinder(
                     n_prot_atoms=n_prot_atoms, n_pharms=n_pharms
                 )
@@ -791,6 +867,11 @@ class OMTRA(pl.LightningModule):
                 )
                 n_lig_atoms = torch.clamp(n_lig_atoms.round().long(), min=4)
 
+                # sampling from truncated normal distribution ensures number of lig atoms >= number of fixed atoms
+                if partial_modality_conditioning:
+                    n_fixed_atoms = torch.tensor([g.nodes['lig'].data['atom_mask_1_true'].bool().sum().item() for g in g_flat])
+                    n_lig_atoms = torch.maximum(n_lig_atoms, n_fixed_atoms)
+
             # use ground truth number of lig atoms
             elif use_gt_n_lig_atoms:
                 base_n_atoms = torch.tensor([g.num_nodes("lig") for g in g_flat])
@@ -802,11 +883,19 @@ class OMTRA(pl.LightningModule):
                 n_lig_atoms = base_n_atoms + random_offsets
                 n_lig_atoms = torch.clamp(n_lig_atoms, min=4)
 
+                if partial_modality_conditioning:
+                    n_fixed_atoms = torch.tensor([g.nodes['lig'].data['atom_mask_1_true'].bool().sum().item() for g in g_flat])
+                    n_lig_atoms = torch.maximum(n_lig_atoms, n_fixed_atoms)
+
             elif unconditional_n_atoms_dist == "plinder":
+                if partial_modality_conditioning:
+                    raise NotImplementedError('cannot sample from marginal plinder distribution for partial modality conditioning')
                 n_lig_atoms = sample_n_lig_atoms_plinder(
                     n_pharms=n_pharms, n_samples=n_samples
                 )
             elif unconditional_n_atoms_dist == "pharmit":
+                if partial_modality_conditioning:
+                    raise NotImplementedError('cannot sample from marginal pharmit distribution for partial modality conditioning')
                 n_lig_atoms = sample_n_lig_atoms_pharmit(
                     n_pharms=n_pharms, n_samples=n_samples
                 )
@@ -825,6 +914,8 @@ class OMTRA(pl.LightningModule):
                 n_real_atoms = n_real_atoms + num_fake_atoms
 
             for g_idx, g_i in enumerate(g_flat):
+                g_i_copy = g_i.clone()
+
                 # clear ligand nodes (and edges) if they exist
                 if g_i.num_nodes("lig") > 0:
                     lig_node_ids = torch.arange(g_i.num_nodes("lig"), device=g_i.device)
@@ -842,6 +933,40 @@ class OMTRA(pl.LightningModule):
                 )
                 assert edge_idxs.shape[0] == 2
                 g_i.add_edges(u=edge_idxs[0], v=edge_idxs[1], etype="lig_to_lig")
+
+                if partial_modality_conditioning:
+                    atom_mask_old = g_i_copy.nodes['lig'].data['atom_mask_1_true'].bool()
+
+                    n_fixed_atoms = atom_mask_old.sum().item()
+                    atom_mask_new = torch.zeros(n_lig_atoms[g_idx], dtype=torch.bool, device=g_i.device) 
+                    atom_mask_new[:n_fixed_atoms] = True
+
+                    # if n_lig_atoms[g_idx].item() > atom_mask_old.shape[0]:
+                    #     atom_pad = torch.zeros(n_lig_atoms[g_idx].item() - atom_mask_old.shape[0], dtype=torch.bool, device=atom_mask_old.device)
+                    #     atom_mask_new = torch.cat([atom_mask_old, atom_pad])
+                    # else:
+                    #     atom_mask_new = atom_mask_old[:n_lig_atoms[g_idx].item()]
+                    g_i.nodes['lig'].data['atom_mask_1_true'] = atom_mask_new.long()
+
+                    src, dst = edge_idxs
+                    edge_mask_new = atom_mask_new[src] & atom_mask_new[dst]
+
+                    n_gt_lig_atoms =  atom_mask_old.shape[0] - n_fake_atoms_gt[g_idx]
+                    src_old, dst_old = build_lig_edge_idxs(n_gt_lig_atoms)
+                    edge_mask_old = atom_mask_old[src_old] & atom_mask_old[dst_old]
+                    g_i.edges['lig_to_lig'].data['edge_mask_1_true'] = edge_mask_new.long()
+
+                    for m_name in task.partial_modalities_fixed:
+                        m = name_to_modality(m_name)
+                        if m.is_node:
+                            dks = [dk for dk in g.nodes['lig'].data.keys() if m.data_key in dk]
+                            for dk in dks:
+                                g_i.nodes['lig'].data[dk][atom_mask_new] = g_i_copy.nodes['lig'].data[dk][atom_mask_old]
+                        else:
+                            dks = [dk for dk in g.edges['lig_to_lig'].data.keys() if m.data_key in dk]
+                            for dk in dks:
+                                g_i.edges['lig_to_lig'].data[dk][edge_mask_new] = g_i_copy.edges['lig_to_lig'].data[dk][edge_mask_old]
+
         
         add_pharm = "pharmacophore" in groups_generated
         if protein_present and add_pharm:
@@ -914,6 +1039,16 @@ class OMTRA(pl.LightningModule):
             dk = m.data_key
             data_src.data[f"{dk}_t"] = data_src.data[f"{dk}_0"]
 
+            if m.name in task.partial_modalities_fixed:
+                if m.is_node:
+                    mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
+                    gt_labels = g.nodes[m.entity_name].data[f'{m.data_key}_1_true']
+                else:
+                    # Take upper triangle for edge modalities
+                    mask = g.edges[m.entity_name].data['edge_mask_1_true'].bool()
+                    gt_labels = g.edges[m.entity_name].data[f'{m.data_key}_1_true']
+                data_src.data[f"{dk}_t"][mask] = gt_labels[mask]
+
         # set x_1_true to x_t for modalities fixed
         for m in task.modalities_fixed:
             if not m.is_node:
@@ -936,6 +1071,29 @@ class OMTRA(pl.LightningModule):
         itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing, stochastic_sampling=stochastic_sampling, noise_scaler=noise_scaler, eps=eps)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
+        
+        # Set protein std for sampling
+        if 'prot_atom' in g.ntypes and g.num_nodes('prot_atom') > 0:
+            if prot_pos_std is None:
+                #Default to zeros
+                g.nodes['prot_atom'].data['prot_pos_std'] = torch.zeros(
+                    g.num_nodes('prot_atom'), 1, device=device
+                )
+            else:
+                #Use the provided standard deviation
+                g.nodes['prot_atom'].data['prot_pos_std'] = prot_pos_std
+
+        # Set pharmacophore std for sampling
+        if 'pharm' in g.ntypes and g.num_nodes('pharm') > 0:
+            if pharm_pos_std is None:
+                #Default to zeros
+                g.nodes['pharm'].data['pharm_pos_std'] = torch.zeros(
+                    g.num_nodes('pharm'), 1, device=device
+                )
+            else:
+                #Use the provided standard deviation
+                g.nodes['pharm'].data['pharm_pos_std'] = pharm_pos_std
+
 
         # pass graph to vector field..
         itg_result = self.vector_field.integrate(
