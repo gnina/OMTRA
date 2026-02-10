@@ -76,10 +76,12 @@ class MolXACE:
 
         fixed_edge_mask = None
 
-        if self.fixed_edge_mask is not None:
-            fixed_adj = torch.zeros((n_atoms, n_atoms), dtype=self.fixed_edge_mask.dtype)
-            fixed_adj[self.edge_idxs[:, 0], self.edge_idxs[:, 1]] = self.fixed_edge_mask.long()
-            upper_fixed_mask = fixed_adj[upper_edge_idxs[0],upper_edge_idxs[1]]
+        if self.fixed_atom_mask is not None:
+            # Derive edge mask from atom mask: an edge is fixed iff both endpoints are fixed
+            fm = self.fixed_atom_mask.bool()
+            fixed_adj = (fm.unsqueeze(1) & fm.unsqueeze(0)).long()
+            fixed_adj.fill_diagonal_(0)
+            upper_fixed_mask = fixed_adj[upper_edge_idxs[0], upper_edge_idxs[1]]
             fixed_edge_mask = torch.cat((upper_fixed_mask, upper_fixed_mask), dim=0)
        
         if self.cond_a is not None:     # condensed atom typing
