@@ -103,6 +103,20 @@ class RigidDockingCondensed(Task):
 - `task_phases`: defines task mixture over training phases
 - `dataset_task_coupling`: maps tasks to datasets with probabilities
 
+### Eval Metrics Module
+
+`omtra/eval/metrics/` — Standalone metric functions for evaluating sampled molecules. Accepts standard inputs (RDKit Mol, file paths, numpy arrays), returns per-ligand results. No timeout/multiprocessing wrapping — that's the caller's concern.
+
+**Public API:**
+- `ligand_rmsd(mol, ref_mol)` — RMSD between generated and reference ligand
+- `pharmacophore_match(mol, ref_mol)` / `pharmacophore_match_from_dict(mol, pharm_dict)` — pharmacophore feature recovery
+- `gnina_score(mol, protein_path)` / `gnina_minimize(...)` / `gnina_score_and_minimize(...)` — CNN scoring and minimization via gnina
+- `pb_validate(mol, protein_path)` — PoseBusters validity checks
+- `posecheck_clashes(...)` / `posecheck_strain(...)` / `posecheck_interactions(...)` / `posecheck_interaction_recovery(...)` / `posecheck_all(...)` — PoseCheck suite
+- `compute_metrics(...)` — orchestrates multiple metrics over a set of sampled systems
+
+Separate from the train-time eval system in `omtra/eval/evals.py` (which operates on `SampledSystem` lists).
+
 ## Directory Structure
 
 ```
@@ -134,7 +148,14 @@ omtra/                      # Main package
 │   └── condensed_atom_typing.py
 ├── eval/
 │   ├── system.py          # SampledSystem class for evaluation
-│   └── evals.py           # Evaluation metrics
+│   ├── evals.py           # Train-time eval (operates on SampledSystem lists)
+│   └── metrics/           # Standalone metric functions
+│       ├── rmsd.py        # ligand_rmsd
+│       ├── pharmacophore.py # pharmacophore_match
+│       ├── gnina.py       # gnina_score, gnina_minimize
+│       ├── posebusters.py # pb_validate
+│       ├── posecheck.py   # posecheck_clashes, _strain, _interactions
+│       └── compute.py     # compute_metrics orchestrator
 ├── priors/                # Prior distributions for flow matching
 └── utils/
 
@@ -211,7 +232,8 @@ class MyNewTask(Task):
 
 ### Adding evaluation metrics
 
-- Add to `omtra/eval/evals.py` or create new file in `omtra/eval/`
+- **Standalone metrics**: Add to `omtra/eval/metrics/` (pure functions, standard inputs)
+- **Train-time evals**: Add to `omtra/eval/evals.py` (operates on `SampledSystem` lists)
 - Register in `omtra/eval/register.py`
 
 ## Key Concepts
