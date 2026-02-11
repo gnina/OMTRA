@@ -59,21 +59,33 @@ class RigidDockingCondensed(Task):
 - Multi-task training with task-specific modality partitioning
 
 `omtra/models/vector_field.py` — The neural network predicting the velocity field
-- **Pure GVP/GNN architecture** with multi-round message passing:
-  1. **Token + edge embedding**: Categorical features → learned embeddings; scalar + time + task embeddings concatenated per node
-  2. **GVP convolutions**: `HeteroGVPConv` layers for geometric message passing on the heterogeneous graph
-  3. **Molecule updates**: Every `convs_per_update` convolutions, update node positions via `NodePositionUpdate` and edge features via `EdgeUpdate`
-  4. **Recycles**: The full conv → update loop repeats `n_recycles` times
+- **Hybrid GVP + Transformer architecture**:
+  1. **Pre-convs**: Initial GVP convolutions for geometric message passing
+  2. **Edge embedding**: Updates edge features after pre-convs
+  3. **Transformer**: Main processing via `TransformerWrapper` (cross-type attention)
+  4. **Position updates**: MLP-based position prediction
   5. **Output heads**: Categorical logits for atom types, bond orders
-- Optional self-conditioning: predict destination, feed back as residual
-- Optional edge rebuilding between updates for evolving ligand geometry
+- Global conditioning via AdaLN (task + time embeddings projected together)
 - Nodes carry: positions (x), scalar features (s), vector features (v)
-- Key params: `n_recycles`, `convs_per_update`, `n_molecule_updates`, `n_message_gvps`, `n_update_gvps`
 
-`omtra/models/gvp.py` — GVP layers
+`omtra/models/transformer.py` — Transformer module
+- `TransformerWrapper`: Packs heterogeneous graph nodes into unified sequence
+  - Projects (scalars + coords + flattened vectors) → d_model
+  - Cross-type self-attention across all node types (lig, prot_atom, pharm)
+  - Supports standard `TransformerEncoderLayer` or `DiTLayer` (QK-norm + AdaLN)
+- `LigandPairBiasEmbedder`: Pair-biased attention for ligand nodes
+  - RBF-encoded pairwise distances as attention bias
+  - Uses `AttentionPairBias` layer (inspired by AlphaFold)
+- `PairTransformerLayer`: Transformer layer with pair bias injection
+
+`omtra/models/gvp.py` — GVP layers (used in pre-convs)
 - `HeteroGVPConv`: Heterogeneous graph convolution with GVP message functions
 - SE(3)-equivariant via Geometric Vector Perceptrons
-- Separate message functions per edge type, shared update functions per node type
+
+`omtra/models/dit.py` — DiT layer with AdaLN conditioning
+`omtra/models/adaln.py` — Adaptive Layer Normalization
+`omtra/models/layers.py` — Shared layer primitives
+
 
 ### Data Pipeline
 
@@ -97,8 +109,12 @@ class RigidDockingCondensed(Task):
 omtra/                      # Main package
 ├── models/
 │   ├── omtra.py           # Main model (PyTorch Lightning)
-│   ├── vector_field.py    # GNN architecture
-│   ├── gvp.py             # SE(3)-equivariant layers
+│   ├── vector_field.py    # Hybrid GVP + Transformer architecture
+│   ├── transformer.py     # TransformerWrapper, PairTransformerLayer
+│   ├── dit.py             # DiT layer (AdaLN conditioning)
+│   ├── adaln.py           # Adaptive Layer Normalization
+│   ├── layers.py          # Shared layer primitives
+│   ├── gvp.py             # SE(3)-equivariant GVP layers
 │   ├── self_conditioning.py
 │   ├── interpolant_scheduler.py
 │   └── conditional_paths/ # Flow matching interpolants
