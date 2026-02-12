@@ -1,0 +1,18 @@
+# Default site configuration — generic SLURM settings
+# These are the same as the base defaults in pipeline/default.yaml.
+# Override in a site-specific file (e.g. cluster.yaml) for your environment.
+
+slurm:
+  partition_gpu: dept_gpu
+  partition_cpu: dept_cpu
+  cpus_per_task: 4
+  mem: 32G
+  time_sampling: "4:00:00"
+  time_metrics: "8:00:00"
+  time_aggregate: "0:30:00"
+  conda_env: omtra
+  extra_sbatch_args: ""
+
+paths:
+  plinder: null
+  crossdocked: null
