@@ -1,57 +1,30 @@
-# OMTRA Distributed Sampling Pipeline Configuration
-# Usage: python -m omtra_pipelines.distributed_sampling.launch_pipeline --config this_file.yaml
+# OMTRA Distributed Sampling Pipeline — Dataset Mode Example
+#
+# Only Tier 1 (required) fields are shown. Everything else comes from
+# configs/pipeline/default.yaml. Override any default inline or via --site.
+#
+# Usage:
+#   python -m omtra_pipelines.distributed_sampling.launch_pipeline \
+#     --config this_file.yaml --site cluster --dry-run
+#
+# With overrides:
+#   python -m omtra_pipelines.distributed_sampling.launch_pipeline \
+#     --config this_file.yaml --site cluster \
+#     sampling.n_timesteps=500 metrics.disable_gnina=true
 
-# --- Required ---
+# --- Tier 1: Required every run ---
 checkpoint: /path/to/last.ckpt
 task: rigid_docking_condensed
 dataset: plinder
-split: test
-
-# Work specification — provide one of:
-#   sys_idx_file: path to single-line CSV of system indices
-#   n_systems + dataset_start_idx: generate indices from a range
-sys_idx_file: /path/to/plinder_eval_sys_idxs.csv
-# dataset_start_idx: 0
-# n_systems: 100
-
-n_replicates: 10
 output_dir: /path/to/pipeline_output
 
-# How many systems per GPU sampling task
-sampling_chunk_size: 10
+# System specification — one of:
+sys_idx_file: /path/to/plinder_eval_sys_idxs.csv
+# OR:
+# n_systems: 100
+# dataset_start_idx: 0
 
-# --- Sampling options (passed to docking_eval.py --sample_only) ---
-sampling:
-  n_timesteps: 250
-  bs_per_gbmem: 5
-  max_batch_size: 300
-  stochastic_sampling: false
-
-# --- Metrics options (passed to docking_eval.py --samples_dir) ---
-metrics:
-  timeout: 2700
-  disable_gnina: false
-  disable_pb_valid: false
-  disable_posecheck: false
-  disable_rmsd: false
-  disable_strain: false
-  disable_interaction_recovery: true
-  disable_pharm_match: false
-  disable_ground_truth_metrics: false
-
-# --- Dataset paths ---
-paths:
-  plinder: /path/to/plinder
-  crossdocked: /path/to/crossdocked
-
-# --- SLURM configuration ---
-slurm:
-  partition_gpu: dept_gpu
-  partition_cpu: dept_cpu
-  cpus_per_task: 4
-  mem: 32G
-  time_sampling: "4:00:00"
-  time_metrics: "8:00:00"
-  time_aggregate: "0:30:00"
-  conda_env: omtra
-  extra_sbatch_args: ""  # e.g. "#SBATCH --account=myaccount"
+# --- Common Tier 2 overrides (optional) ---
+# replicates_per_system: 10           # default: 1
+# systems_per_job: 10                 # default: 10
+# split: test                         # default: test
