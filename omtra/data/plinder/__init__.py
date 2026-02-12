@@ -112,10 +112,10 @@ class LigandData:
             if k == 'x':
                 xace_dict[k] = xace_dict[k].float()
             else:
-                try:
-                    xace_dict[k] = xace_dict[k].long()
-                except:
-                    print(f"Error converting key {k} to long tensor.")
+                if xace_dict[k] is None:
+                    assert k in ['fixed_atom_mask', 'fixed_edge_mask'], f"{k} is None but not in ['fixed_atom_mask', 'fixed_edge_mask']"
+                    continue
+                xace_dict[k] = xace_dict[k].long()
 
         xace_ligand = MolXACE(**xace_dict)
         if dense:
