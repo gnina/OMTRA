@@ -417,9 +417,10 @@ def main(args):
     print(f"Saving samples to {output_dir}")
 
     if task.unconditional and not args.visualize:
+        sys_gt_dir = output_dir / "sys_0_gt"
+        sys_gt_dir.mkdir(parents=True, exist_ok=True)
         lig_samples = [ s.get_rdkit_ligand() for s in sampled_systems ]
-        output_file = output_dir / f"{task_name}_lig.sdf"
-        write_mols_to_sdf(lig_samples, output_file)
+        write_mols_to_sdf(lig_samples, sys_gt_dir / "gen_ligands.sdf")
     elif task.unconditional and args.visualize:
         for i, sys in enumerate(sampled_systems):
             lig_xt_file = output_dir / f"sys{i}_xt.sdf"

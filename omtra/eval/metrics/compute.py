@@ -198,7 +198,7 @@ def compute_metrics(
                 rows.append(
                     {
                         "sys_id": sys_id,
-                        "protein_id": data["gen_prot_id"],
+                        "protein_id": data.get("gen_prot_id", "none"),
                         "gen_ligand_id": lig_id,
                     }
                 )
@@ -210,7 +210,7 @@ def compute_metrics(
         for pair_id, data in pairs.items():
 
             print(f"{'–'*32}", flush=True)
-            print(f"{sys_id}, {data['gen_ligs_ids']}, {data['gen_prot_id']}", flush=True)
+            print(f"{sys_id}, {data['gen_ligs_ids']}, {data.get('gen_prot_id', 'none')}", flush=True)
             print(f"{'–'*32}", flush=True)
 
             # Sanitize generated ligands
@@ -485,6 +485,8 @@ def system_pairs_from_path(
     if sample_start_idx is None:
         sample_start_idx = 0
 
+    has_protein = "protein_identity" in task.groups_present
+
     for sys_idx in range(sample_start_idx, sample_start_idx + n_samples):
 
         sys_name = f"sys_{sys_idx}_gt"
@@ -507,8 +509,9 @@ def system_pairs_from_path(
 
         true_lig = Chem.SDMolSupplier(str(true_lig_file), sanitize=False, removeHs=False)[0]
 
-        true_prot_file = sys_dir / "protein_0.pdb"
-        true_prot_id = "protein_0"
+        if has_protein:
+            true_prot_file = sys_dir / "protein_0.pdb"
+            true_prot_id = "protein_0"
 
         pharm_missing = False
         if "pharmacophore" in task.groups_present:
@@ -549,16 +552,20 @@ def system_pairs_from_path(
                     pair["gen_ligs_ids"] = [mol.GetProp("_Name") for mol in gen_ligs]
                     pair["true_lig"] = true_lig
                     pair["true_lig_file"] = true_lig_file
-                    pair["gen_prot_file"] = sys_dir / f"gen_prot_{rep_idx}.pdb"
-                    pair["gen_prot_id"] = f"gen_prot_{rep_idx}"
-                    pair["true_prot_file"] = true_prot_file
-                    pair["true_prot_id"] = true_prot_id
+                    if has_protein:
+                        pair["gen_prot_file"] = sys_dir / f"gen_prot_{rep_idx}.pdb"
+                        pair["gen_prot_id"] = f"gen_prot_{rep_idx}"
+                        pair["true_prot_file"] = true_prot_file
+                        pair["true_prot_id"] = true_prot_id
 
-                    if not os.path.exists(true_prot_file):
-                        print(
-                            f"WARNING: Missing true protein file for system {sys_idx}. "
-                            "Depending on downstream metrics this may cause pipeline failures."
-                        )
+                        if not os.path.exists(true_prot_file):
+                            print(
+                                f"WARNING: Missing true protein file for system {sys_idx}. "
+                                "Depending on downstream metrics this may cause pipeline failures."
+                            )
+                    else:
+                        pair["gen_prot_id"] = "none"
+                        pair["true_prot_id"] = "none"
 
                     if "pharmacophore" in task.groups_present and not pharm_missing:
                         pair["true_pharm"] = pharm
@@ -593,16 +600,20 @@ def system_pairs_from_path(
             pair["true_lig"] = true_lig
             pair["true_lig_file"] = true_lig_file
 
-            if not os.path.exists(true_prot_file):
-                print(
-                    f"WARNING: Missing true protein file for system {sys_idx}. Skipping this system."
-                )
-                continue
+            if has_protein:
+                if not os.path.exists(true_prot_file):
+                    print(
+                        f"WARNING: Missing true protein file for system {sys_idx}. Skipping this system."
+                    )
+                    continue
 
-            pair["gen_prot_file"] = true_prot_file
-            pair["gen_prot_id"] = true_prot_id
-            pair["true_prot_file"] = true_prot_file
-            pair["true_prot_id"] = true_prot_id
+                pair["gen_prot_file"] = true_prot_file
+                pair["gen_prot_id"] = true_prot_id
+                pair["true_prot_file"] = true_prot_file
+                pair["true_prot_id"] = true_prot_id
+            else:
+                pair["gen_prot_id"] = "none"
+                pair["true_prot_id"] = "none"
 
             if "pharmacophore" in task.groups_present and not pharm_missing:
                 pair["true_pharm"] = pharm

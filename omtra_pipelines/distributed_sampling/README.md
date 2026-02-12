@@ -48,6 +48,7 @@ Use CLI mode when you have specific input files (a protein structure, a referenc
 | Generate a ligand conformer | `ligand_conformer_condensed` | `ligand_file` |
 | Design a ligand from a pharmacophore | `denovo_ligand_from_pharmacophore_condensed` | `pharmacophore_file` |
 | Design a ligand from protein + pharmacophore | `fixed_protein_pharmacophore_ligand_denovo_condensed` | `protein_file`, `pharmacophore_file`, pocket definition |
+| Generate molecules unconditionally | `denovo_ligand_condensed` | _(none)_ |
 
 **Pocket definition** — exactly one of:
 - `pocket_ligand`: path to SDF file defining the binding pocket location (most common)
@@ -137,6 +138,18 @@ input_files:
 
 n_replicates_total: 1000
 ```
+
+### Step-by-step: unconditional de novo generation
+
+```yaml
+# denovo_job.yaml
+task: denovo_ligand_condensed
+output_dir: /scratch/user/denovo_run
+
+n_replicates_total: 5000
+```
+
+No `input_files` needed — the model generates molecules from scratch.
 
 Pharmacophore files can be:
 - **Pharmit JSON** — exported from [Pharmit](https://pharmit.csb.pitt.edu). Automatically converted to XYZ format for metrics.
@@ -297,7 +310,7 @@ python routines/sample.py /path/to/checkpoint.ckpt \
 | Parallelism | Single GPU | SLURM array jobs across cluster |
 | Metrics | Inline (`--eval`) or via old-style `--metrics` | Separate CPU stage via `docking_eval.py` |
 | Visualization | `--visualize` flag | Not supported |
-| Unconditional tasks | Supported | Not supported |
+| Unconditional tasks | Supported | Supported (CLI mode) |
 | Scale | 10s of systems | 100s-1000s of systems/replicates |
 
 ### n_samples meaning

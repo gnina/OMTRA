@@ -145,7 +145,7 @@ def build_manifest_cli(config: dict, output_dir: Path) -> dict:
             "replicates_per_chunk": per_chunk,
             "n_chunks": len(chunks),
             "output_dir": str(output_dir),
-            "input_files": config["input_files"],
+            "input_files": config.get("input_files", {}),
         },
         "sampling_tasks": sampling_tasks,
         "metrics_tasks": metrics_tasks,
