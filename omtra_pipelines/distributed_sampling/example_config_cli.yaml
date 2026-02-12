@@ -1,7 +1,7 @@
 # OMTRA Distributed Sampling Pipeline — CLI Mode Example
 #
 # Only Tier 1 (required) fields are shown. Everything else comes from
-# configs/pipeline/default.yaml. Override any default inline or via --site.
+# defaults/default.yaml. Override any default inline or via --site.
 #
 # Usage:
 #   python -m omtra_pipelines.distributed_sampling.launch_pipeline \

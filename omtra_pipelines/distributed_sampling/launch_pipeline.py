@@ -22,8 +22,8 @@ Usage:
     python -m omtra_pipelines.distributed_sampling.launch_pipeline --config pipeline.yaml --status
 
 Config loading order (later overrides earlier):
-    1. configs/pipeline/default.yaml       (always — Tier 2+3 defaults)
-    2. configs/pipeline/site/{name}.yaml   (if --site specified)
+    1. defaults/default.yaml               (always — Tier 2+3 defaults)
+    2. defaults/site/{name}.yaml           (if --site specified)
     3. User --config YAML file             (Tier 1 required + any overrides)
     4. CLI positional overrides            (key=value — highest priority)
 """
@@ -38,7 +38,6 @@ from string import Template
 
 from omegaconf import OmegaConf, DictConfig
 
-from omtra.utils import omtra_root
 from omtra_pipelines.distributed_sampling.manifest import (
     build_manifest,
     build_manifest_cli,
@@ -55,7 +54,7 @@ from omtra_pipelines.distributed_sampling.commands import (
 )
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "slurm_templates"
-CONFIGS_DIR = Path(omtra_root()) / "configs" / "pipeline"
+CONFIGS_DIR = Path(__file__).resolve().parent / "defaults"
 
 
 # ---------------------------------------------------------------------------
@@ -70,8 +69,8 @@ def load_layered_config(
     """Load pipeline config with layered merging.
 
     Loading order (later overrides earlier):
-        1. configs/pipeline/default.yaml   (always)
-        2. configs/pipeline/site/{site}.yaml  (if site specified)
+        1. defaults/default.yaml             (always)
+        2. defaults/site/{site}.yaml         (if site specified)
         3. User config file at config_path (if provided)
         4. CLI overrides from dotlist (if provided)
 
@@ -169,7 +168,7 @@ def parse_args():
     )
     parser.add_argument(
         "--site", type=str, default=None,
-        help="Site config name (loads configs/pipeline/site/{name}.yaml for Tier 3 settings)",
+        help="Site config name (loads defaults/site/{name}.yaml for Tier 3 settings)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
