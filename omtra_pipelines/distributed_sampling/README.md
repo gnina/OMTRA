@@ -329,8 +329,8 @@ The pipeline uses a **three-tier config** with layered merging via OmegaConf.
 ### Config loading order (later overrides earlier)
 
 ```
-1. configs/pipeline/default.yaml          (always — Tier 2+3 defaults)
-2. configs/pipeline/site/{name}.yaml      (if --site specified — site settings)
+1. defaults/default.yaml                  (always — Tier 2+3 defaults)
+2. defaults/site/{name}.yaml              (if --site specified — site settings)
 3. User --config YAML file                (your job-specific settings)
 4. CLI positional overrides               (key=value — highest priority)
 ```
@@ -340,8 +340,8 @@ The pipeline uses a **three-tier config** with layered merging via OmegaConf.
 | Tier | What | Where |
 |------|------|-------|
 | **1** | Must specify every run — no sensible default | Your `--config` file |
-| **2** | Reasonable defaults, override when needed | `configs/pipeline/default.yaml` |
-| **3** | Site-specific, rarely change | `configs/pipeline/site/{name}.yaml` |
+| **2** | Reasonable defaults, override when needed | `defaults/default.yaml` |
+| **3** | Site-specific, rarely change | `defaults/site/{name}.yaml` |
 
 **Your config file only needs Tier 1 fields.** Everything else has defaults.
 
