@@ -311,13 +311,13 @@ def get_mode(cfg: DictConfig) -> str:
 
 def validate_cli_config(cfg: DictConfig) -> None:
     """Validate CLI mode config has required fields."""
+    from omtra.tasks.register import task_name_to_class
+
     missing = []
     if not OmegaConf.select(cfg, "task", default=None):
         missing.append("task")
     if not OmegaConf.select(cfg, "n_replicates_total", default=None):
         missing.append("n_replicates_total")
-    if not OmegaConf.select(cfg, "input_files", default=None):
-        missing.append("input_files")
     if not OmegaConf.select(cfg, "output_dir", default=None):
         missing.append("output_dir")
 
@@ -325,21 +325,29 @@ def validate_cli_config(cfg: DictConfig) -> None:
         print(f"Error: CLI mode config missing required fields: {missing}", file=sys.stderr)
         sys.exit(1)
 
-    input_files = cfg.input_files
-    if not input_files:
-        print("Error: 'input_files' must be a non-empty dict", file=sys.stderr)
-        sys.exit(1)
+    # Only require input_files when the task has fixed groups (i.e. conditioning inputs)
+    task = task_name_to_class(cfg.task)
+    if task.groups_fixed:
+        if not OmegaConf.select(cfg, "input_files", default=None):
+            print("Error: CLI mode config missing required field: input_files "
+                  f"(task '{cfg.task}' has fixed groups)", file=sys.stderr)
+            sys.exit(1)
 
-    # At least one pocket definition method is required for protein tasks
-    pocket_keys = {"pocket_ligand", "pocket_center", "pocket_residues"}
-    has_pocket = any(OmegaConf.select(input_files, k, default=None) for k in pocket_keys)
-    has_protein = OmegaConf.select(input_files, "protein_file", default=None) is not None
-    if has_protein and not has_pocket:
-        print(
-            "Warning: protein_file provided without a pocket definition "
-            "(pocket_ligand, pocket_center, or pocket_residues). "
-            "The omtra CLI will fail unless the task doesn't need a pocket."
-        )
+        input_files = cfg.input_files
+        if not input_files:
+            print("Error: 'input_files' must be a non-empty dict", file=sys.stderr)
+            sys.exit(1)
+
+        # At least one pocket definition method is required for protein tasks
+        pocket_keys = {"pocket_ligand", "pocket_center", "pocket_residues"}
+        has_pocket = any(OmegaConf.select(input_files, k, default=None) for k in pocket_keys)
+        has_protein = OmegaConf.select(input_files, "protein_file", default=None) is not None
+        if has_protein and not has_pocket:
+            print(
+                "Warning: protein_file provided without a pocket definition "
+                "(pocket_ligand, pocket_center, or pocket_residues). "
+                "The omtra CLI will fail unless the task doesn't need a pocket."
+            )
 
 
 def validate_dataset_config(cfg: DictConfig) -> None:
@@ -436,7 +444,7 @@ def prepare_ground_truth_files(manifest: dict, config: dict) -> None:
     - ``ligand.sdf``     from ligand_file (if provided)
     - ``pharmacophore.xyz`` from pharmacophore_file (converted if JSON)
     """
-    input_files = config["input_files"]
+    input_files = config.get("input_files", {})
 
     for task_info in manifest["sampling_tasks"].values():
         gt_dir = Path(task_info["output_dir"]) / "sys_0_gt"
