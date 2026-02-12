@@ -108,7 +108,7 @@ def build_cli_sampling_command(task_info: dict, config: dict) -> str:
         config: The full pipeline config dict.
     """
     sampling_opts = config.get("sampling", {})
-    input_files = config["input_files"]
+    input_files = config.get("input_files", {})
 
     parts = [
         "omtra",
