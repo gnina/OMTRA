@@ -269,6 +269,15 @@ def write_ground_truth(
                 ground_truth=True, 
                 g=g_list[cond_idx].to('cpu')
                 )
+        
+        # write xyz file with fixed fragments if we are doing partial modality conditioning
+        if len(task.partial_modalities_fixed) > 0:
+            gt_fixed_atoms_file = sys_gt_dir / "fixed_atoms.xyz"
+            sys.write_fixed_atoms(
+                gt_fixed_atoms_file,
+                ground_truth=True,
+                g=g_list[cond_idx].to('cpu')
+            )
 
 def main(args):
     # 1) resolve checkpoint path
@@ -309,8 +318,17 @@ def main(args):
                 train_cfg.crossdocked_path = args.crossdocked_path
 
             # instantiate datamodule & model
-            dm  = quick_load.datamodule_from_config(train_cfg)
-            multitask_dataset = dm.load_dataset(args.split)
+            if args.dataset == 'plinder':
+                spoof_cfg = quick_load.load_cfg(overrides=[
+                    'task_group=prot_protpharm_cond',
+                    f'plinder_path={args.plinder_path}',
+                    f'pharmit_path={args.pharmit_path}',
+                ])
+                dm = quick_load.datamodule_from_config(spoof_cfg)
+                multitask_dataset = dm.load_dataset(args.split)
+            else:
+                dm  = quick_load.datamodule_from_config(train_cfg)
+                multitask_dataset = dm.load_dataset(args.split)
 
             # get raw dataset object
             if args.dataset == 'plinder':
@@ -487,7 +505,7 @@ def main(args):
         for k, v in metrics.items():
             print(f"{k}: {v:.3f}")
         
-        
+
 
 if __name__ == "__main__":
     args = parse_args()

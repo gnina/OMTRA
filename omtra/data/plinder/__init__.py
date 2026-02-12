@@ -65,6 +65,9 @@ class LigandData:
     atom_cond_a: Optional[np.ndarray] = None
     # fragments
     fragments: Optional[np.ndarray] = None
+    # fixed masks
+    fixed_atom_mask: Optional[np.ndarray] = None
+    fixed_edge_mask: Optional[np.ndarray] = None
 
     
     def to_atom_array(self, atom_type_map) -> struc.AtomArray:
@@ -86,6 +89,8 @@ class LigandData:
             'x': self.coords,
             'e': self.bond_types,
             'edge_idxs': self.bond_indices,
+            'fixed_atom_mask': self.fixed_atom_mask,
+            'fixed_edge_mask': self.fixed_edge_mask
         }
 
         if self.atom_cond_a is not None:
@@ -105,10 +110,15 @@ class LigandData:
         if self.bond_types is None or self.bond_indices is None:
             xace_dict['e'] = torch.zeros((0,), dtype=torch.long)
             xace_dict['edge_idxs'] = torch.zeros((2, 0), dtype=torch.long)
-
+        
         for k in xace_dict:
             if isinstance(xace_dict[k], np.ndarray):
                 xace_dict[k] = torch.from_numpy(xace_dict[k])
+
+            # very hacky bug fix here
+            if xace_dict[k] is None and k in ['fixed_atom_mask', 'fixed_edge_mask']:
+                continue
+
             if k == 'x':
                 xace_dict[k] = xace_dict[k].float()
             else:
