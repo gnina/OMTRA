@@ -130,6 +130,18 @@ def create_parser():
     )
     parser.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
 
+    # Docking evaluation metrics
+    parser.add_argument("--eval", nargs='*', default=None, metavar='METRIC',
+        help="Compute per-sample eval metrics after sampling. "
+             "No args = all applicable. "
+             "Choices: posebusters, gnina, posecheck, rmsd, pharmacophore")
+    parser.add_argument("--eval-timeout", type=int, default=600,
+        help="Timeout per metric computation in seconds (default: 600)")
+    parser.add_argument("--eval-no-strain", action="store_true",
+        help="Skip strain energy in posecheck")
+    parser.add_argument("--eval-interaction-recovery", action="store_true",
+        help="Include interaction recovery analysis")
+
     parser.add_argument(
         "--protein_file",
         type=Path,
