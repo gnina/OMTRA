@@ -1,6 +1,8 @@
 # OMTRA: A Multi-Task Generative model for Structure-Based Drug Design
 
-![OMTRA](assets/omtra_fig.png)
+<p align="center">
+  <img src="assets/omtra_bot.png" alt="OMTRA Banner" width="800">
+</p>
 
 OMTRA is a flow-matching based generative model for small-molecule + protein systems. It supports a variety of tasks relevant to structure-based drug design, including:
 - Unconditional 3D de novo molecule generation
@@ -12,7 +14,11 @@ OMTRA is a flow-matching based generative model for small-molecule + protein sys
 - Protein AND pharmacophore-conditioned molecule design
 - Protein AND pharmacophore-conditioned docking
 
-OMTRA is described in our preprint: [https://arxiv.org/abs/2512.05080](https://arxiv.org/abs/2512.05080) and will be presented at MLSB 2025. 
+OMTRA is described in our preprint: [https://arxiv.org/abs/2512.05080](https://arxiv.org/abs/2512.05080) and will be presented at MLSB 2025.
+
+<p align="center">
+  <img src="assets/omtra_fig.png" alt="OMTRA Overview" width="75%">
+</p>
 
 -----------------------------------------------------------------------------------------------------
 
