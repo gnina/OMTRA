@@ -1,5 +1,6 @@
 omtra_pipelines/pharmit_dataset/pharmit_small/
 omtra_pipelines/pharmit_dataset/outputs/
+omtra_pipelines/pharmit_dataset/*outputs*/*
 omtra_pipelines/plinder_clustering/fps/
 omtra_pipelines/plinder_clustering/local/
 omtra_pipelines/crossdocked_dataset/zarr_storage_test/
@@ -198,3 +199,9 @@ cython_debug/
 
 # Hydra outputs
 outputs/**
+omtra_webapp/models/
+
+# Node.js dependencies
+node_modules/
+**/node_modules/
+

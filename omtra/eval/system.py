@@ -845,8 +845,11 @@ def write_mols_to_sdf(mols: List[Chem.Mol], filename: Union[str, Path]):
         raise ValueError("Output file must have .sdf extension.")
     sdwriter = Chem.SDWriter(str(filename))
     sdwriter.SetKekulize(False)
-    for mol in mols:
+    for idx, mol in enumerate(mols):
         if mol is not None:
+            if not mol.HasProp("_Name"):
+                compound_id = f"OMTRA{idx + 1:04d}"
+                mol.SetProp("_Name", compound_id)
             sdwriter.write(mol)
     sdwriter.close()
 

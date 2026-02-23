@@ -11,6 +11,8 @@ import dgl
 import gc
 import multiprocessing as mp
 import tempfile
+import sys
+import time
 from collections import defaultdict
 from scipy.spatial.distance import cdist
 from natsort import natsorted
@@ -37,12 +39,14 @@ from omtra.constants import ph_idx_to_elem
 def parse_args():
     p = argparse.ArgumentParser(description='Evaluate ligand poses')
 
+    # option for early exit
+    p.add_argument('--exit_if_done', action='store_true', help="Stop execution if the output metric file already exists.")
+
     # --- Mutually exclusive group inside IO ---
     io = p.add_argument_group("Input/Output Options")
     group = io.add_mutually_exclusive_group(required=True)
     group.add_argument("--ckpt_path", type=Path, default=None, help='Path to model checkpoint.')
     group.add_argument("--samples_dir", type=Path, default=None, help='Path to samples. Use existing samples, do not sample a model')
-    
     io.add_argument("--sample_only", action="store_true", help='Only sample the model. Do not compute metrics.')  
     io.add_argument("--output_dir", type=Path, default=None, help='Output directory.')
     io.add_argument("--sys_info_file", type=str, default=None, help="Path to the system info file (optional).")
@@ -51,24 +55,26 @@ def parse_args():
     sampling = p.add_argument_group("Sampling Options")
 
     sampling.add_argument("--task", type=str, help='Task to sample for (e.g. denovo_ligand).', required=True)
-    sampling.add_argument("--n_samples", type=int, default=None, help='Number of samples to evaluate.')
-    sampling.add_argument("--sys_idx_file", type=str, default=None, help='Path to a file with pre-selected system indices.')
-    sampling.add_argument("--n_replicates", type=int, help="Number of replicates per input sample.", required=True)
-    sampling.add_argument("--n_timesteps", type=int, default=250, help="Number of integration steps to take when sampling.")
-
-    sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
-    sampling.add_argument("--noise_scaler", type=float, default=1.0, help="Noise scaling param for stochastic sampling.")
-    sampling.add_argument("--eps", type=float, default=0.01, help="g(t) param for stochastic sampling.")
-    sampling.add_argument("--n_lig_atom_margin", type=float, default=0.075, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
-
-    sampling.add_argument("--max_batch_size", type=int, default=500, help='Maximum number of systems to sample per batch.')
-    sampling.add_argument("--bs_per_gbmem", type=float, default=None, help='Batch size per GB/EM on the GPU.')
     sampling.add_argument("--dataset", type=str, default="plinder", help='Dataset.')
     sampling.add_argument("--split", type=str, default="test", help='Data split (i.e., train, val).')
     sampling.add_argument("--dataset_start_idx", type=int, default=0, help="Index in the dataset to start sampling from.")
     sampling.add_argument("--sample_start_idx", type=int, default=None, help="Index in the sample directory to start getting samples from.")
+    sampling.add_argument("--sys_idx_file", type=str, default=None, help='Path to a file with pre-selected system indices.')
     sampling.add_argument("--plinder_path", type=str, default=None, help="Path to the Plinder dataset (optional).")
     sampling.add_argument("--crossdocked_path", type=str, default=None, help="Path to the Crossdocked dataset (optional).")
+
+    sampling.add_argument("--n_samples", type=int, default=None, help='Number of samples to evaluate.')
+    sampling.add_argument("--n_replicates", type=int, help="Number of replicates per input sample.", required=True)
+    sampling.add_argument("--n_timesteps", type=int, default=250, help="Number of integration steps to take when sampling.")
+    sampling.add_argument("--n_lig_atom_margin", type=float, default=0.075, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
+
+    sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
+    sampling.add_argument("--noise_scaler", type=float, default=1.0, help="Noise scaling param for stochastic sampling.")
+    sampling.add_argument("--eps", type=float, default=0.01, help="g(t) param for stochastic sampling.")
+    
+    sampling.add_argument("--max_batch_size", type=int, default=500, help='Maximum number of systems to sample per batch.')
+    sampling.add_argument("--bs_per_gbmem", type=float, default=None, help='Batch size per GB/EM on the GPU.')
+    
 
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
@@ -80,9 +86,9 @@ def parse_args():
     metrics.add_argument("--disable_rmsd", action="store_true", help='Disables RMSD computation between generated ligand and ground truth ligand.')
     metrics.add_argument("--disable_interaction_recovery", action="store_true", help='Disables analysis of interaction recovery by generated ligands.')
     metrics.add_argument("--disable_pharm_match", action="store_true", help='Disables computations of matching pharmacophores by generated ligands.')
-    metrics.add_argument("--disable_ground_truth_metrics", action="store_true", help='Disables all relevant metrics on the truth ligand.')
     metrics.add_argument('--disable_strain', action='store_true', help='Disables strain energy calculation.')
-
+    metrics.add_argument("--disable_ground_truth_metrics", action="store_true", help='Disables all relevant metrics on the truth ligand.')
+   
     args = p.parse_args()
 
     return args
@@ -331,7 +337,11 @@ def compute_metrics(system_pairs: List[SampledSystem],
                     ):
     
     env = os.environ.copy()
-    env['LD_LIBRARY_PATH'] = "/net/galaxy/home/koes/dkoes/local/miniconda/envs/cuda/lib/"
+    # # Use PyTorch's bundled cuDNN libraries for GNINA compatibility
+    # import torch
+    # torch_lib_path = str(Path(torch.__file__).parent / "lib")
+    # existing_ld_path = env.get('LD_LIBRARY_PATH', '')
+    # env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
 
     # dataframe for metrics
     rows = []
@@ -608,13 +618,13 @@ def sample_system(ckpt_path: Path,
         sys_info['lig_id'] = sys_info['lig_sdf'].apply(lambda x: Path(Path(x).stem).stem)
 
         # sort systems
-        sorted_idx = natsorted(sys_info.index, key=lambda i: sys_info.loc[i, "lig_id"])
-        sys_info = sys_info.iloc[sorted_idx].reset_index(drop=True)
+        # sorted_idx = natsorted(sys_info.index, key=lambda i: sys_info.loc[i, "lig_id"])
+        # sys_info = sys_info.iloc[sorted_idx].reset_index(drop=True)
         sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in range(sys_info.shape[0])]
         
         # sort dataset indices to match sys_info
-        dataset_idxs = list(dataset_idxs)
-        dataset_idxs = [dataset_idxs[i] for i in sorted_idx]
+        # dataset_idxs = list(dataset_idxs)
+        # dataset_idxs = [dataset_idxs[i] for i in sorted_idx]
 
     elif dataset == 'pharmit':
         raise ValueError(f"Pharmit dataset does not include proteins!")
@@ -897,6 +907,18 @@ def system_pairs_from_path(samples_dir: Path,
 
     return system_pairs
 
+def get_device_properties_with_retry(dev_idx=0, retries=5, delay=5):
+    """Get CUDA device properties with retries."""
+    last_err = None
+    for i in range(retries):
+        try:
+            return torch.cuda.get_device_properties(dev_idx)
+        except Exception as e:
+            last_err = e
+            print(f"[WARN] CUDA init failed (attempt {i+1}/{retries}): {e}")
+            time.sleep(delay)
+    raise RuntimeError(f"Failed to init CUDA after {retries} retries") from last_err
+
 def main(args):
     task_name: str = args.task
     task: Task = task_name_to_class(task_name)
@@ -913,6 +935,12 @@ def main(args):
             output_dir = args.output_dir 
         output_dir.mkdir(parents=True, exist_ok=True, mode=0o777)
 
+        metrics_file = output_dir / "eval_metrics.csv"
+        if metrics_file.exists() and args.exit_if_done:
+            print('output file already exists, exiting')
+            print(f'output file of interest: {metrics_file}')
+            sys.exit()
+
         # Additional keyword arguments for special types of sampling
         kwargs = {'stochastic_sampling': args.stochastic_sampling,
                   'noise_scaler': args.noise_scaler,
@@ -920,7 +948,9 @@ def main(args):
                   'n_lig_atom_margin': args.n_lig_atom_margin}
         
         if args.bs_per_gbmem is not None:
-            gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  # in GB
+            # gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  
+            props = get_device_properties_with_retry(0)
+            gpu_mem_available = props.total_memory // (1024**3) # in GB
             max_batch_size = int(gpu_mem_available * args.bs_per_gbmem)
             max_batch_size = max(1, max_batch_size)  # ensure at least batch size of 1
             print(f"Setting max_batch_size to {max_batch_size} based on available GPU memory.")
@@ -962,6 +992,12 @@ def main(args):
         samples_dir = args.samples_dir
         output_dir = args.output_dir or samples_dir
         output_dir.mkdir(parents=True, exist_ok=True, mode=0o777)
+
+        metrics_file = output_dir / "eval_metrics.csv"
+        if metrics_file.exists() and args.exit_if_done:
+            print('output file already exists, exiting')
+            print(f'output file of interest: {metrics_file}')
+            sys.exit()
 
         if args.sys_info_file is None:
             sys_info_file =  f"{samples_dir}/sys_info.csv"
