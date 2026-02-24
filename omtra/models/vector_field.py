@@ -261,6 +261,7 @@ class VectorField(nn.Module):
         self.transformer = instantiate(
             transformer_cfg,
             node_types=list(self.node_types),
+            edge_types=list(self.edge_types),
             n_hidden_scalars=self.n_hidden_scalars,
             n_vec_channels=self.n_vec_channels,
             pair_dim=self.n_hidden_edge_feats,
