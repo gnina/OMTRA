@@ -207,12 +207,13 @@ export function MolecularViewer({
         const model = viewer.addModel(proteinData.text, proteinData.format);
         proteinModelRef.current = model;
         setHasProtein(true);
-        // Apply initial style respecting state
-        const style: any = {};
-        if (showBackbone) style.cartoon = { color: 'lightblue' };
-        if (showSticks) style.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
-        console.log(`[MolecularViewer] Setting initial protein style:`, style);
-        viewer.setStyle({ model: model.getID() }, style);
+        // Protein ATOM records: cartoon/sticks per toggle
+        const protStyle: any = {};
+        if (showBackbone) protStyle.cartoon = { color: 'lightblue' };
+        if (showSticks) protStyle.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
+        viewer.setStyle({ model: model.getID(), hetflag: false }, protStyle);
+        // HETATM records always as sticks
+        viewer.setStyle({ model: model.getID(), hetflag: true }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
       }
 
       if (pharmData) {
@@ -274,12 +275,12 @@ export function MolecularViewer({
       const modelId = model.getID();
       console.log(`[MolecularViewer] Style Effect: backbone=${showBackbone}, sticks=${showSticks}, modelId=${modelId}`);
 
-      const style: any = {};
-      if (showBackbone) style.cartoon = { color: 'lightblue' };
-      if (showSticks) style.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
-
-      console.log(`[MolecularViewer] Calling setStyle with:`, style);
-      viewer.setStyle({ model: modelId }, style);
+      const protStyle: any = {};
+      if (showBackbone) protStyle.cartoon = { color: 'lightblue' };
+      if (showSticks) protStyle.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
+      viewer.setStyle({ model: modelId, hetflag: false }, protStyle);
+      // HETATM always as sticks
+      viewer.setStyle({ model: modelId, hetflag: true }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
 
       // Keep clipping fix
       viewer.setSlab(-1000, 1000);

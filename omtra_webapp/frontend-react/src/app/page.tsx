@@ -132,6 +132,7 @@ export default function HomePage() {
               <button
                 onClick={() => {
                   setActiveTab('jobs');
+                  setSelectedJobId(null);
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 className={`text-sm font-medium transition-colors ${activeTab === 'jobs'
@@ -325,12 +326,14 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Drag Handle */}
-              <div
-                className="absolute top-0 right-0 bottom-0 w-1 cursor-col-resize hover:bg-primary-400 transition-colors group"
-                onMouseDown={() => setIsResizing(true)}
-              >
-                <div className="absolute top-1/2 right-0 -translate-y-1/2 w-1.5 h-12 bg-slate-300 group-hover:bg-primary-500 rounded-full transition-colors" />
+              {/* Drag Handle - only the center tab is interactive */}
+              <div className="absolute top-0 right-0 bottom-0 w-1">
+                <div
+                  className="absolute top-1/2 right-0 -translate-y-1/2 w-3 h-12 cursor-col-resize flex items-center justify-center -translate-x-[3px] z-10"
+                  onMouseDown={() => setIsResizing(true)}
+                >
+                  <div className="w-1.5 h-12 bg-slate-300 hover:bg-primary-500 rounded-full transition-colors" />
+                </div>
               </div>
             </div>
 

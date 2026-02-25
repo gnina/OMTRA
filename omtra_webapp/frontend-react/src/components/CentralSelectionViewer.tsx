@@ -142,11 +142,13 @@ export function CentralSelectionViewer({
         viewerAny._proteinData = proteinData;
         shouldZoom = true; // Always zoom when protein changes (it's the main context)
 
-        // Immediate style to avoid flash
-        const style: any = {};
-        if (showBackbone) style.cartoon = { color: 'lightblue' };
-        if (showSticks) style.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
-        viewer.setStyle({ model: protModel }, style);
+        // Style protein ATOM records (cartoon/sticks per toggle)
+        const protStyle: any = {};
+        if (showBackbone) protStyle.cartoon = { color: 'lightblue' };
+        if (showSticks) protStyle.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
+        viewer.setStyle({ model: protModel, hetflag: false }, protStyle);
+        // HETATM records (cofactors, small molecules in PDB) always as sticks
+        viewer.setStyle({ model: protModel, hetflag: true }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
         if (showSurface) viewer.addSurface(window.$3Dmol.VDW, { opacity: 0.6, colorscheme: 'whiteCarbon', depthWrite: true }, { model: protModel });
       }
     } else if (viewerAny._proteinModel) {
@@ -220,11 +222,12 @@ export function CentralSelectionViewer({
     const viewerAny = viewer as any;
 
     if (viewerAny._proteinModel) {
-      const style: any = {};
-      if (showBackbone) style.cartoon = { color: 'lightblue' };
-      if (showSticks) style.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
-
-      viewer.setStyle({ model: viewerAny._proteinModel }, style);
+      const protStyle: any = {};
+      if (showBackbone) protStyle.cartoon = { color: 'lightblue' };
+      if (showSticks) protStyle.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
+      viewer.setStyle({ model: viewerAny._proteinModel, hetflag: false }, protStyle);
+      // HETATM always as sticks
+      viewer.setStyle({ model: viewerAny._proteinModel, hetflag: true }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
     }
 
     viewer.render();

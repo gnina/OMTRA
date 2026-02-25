@@ -795,6 +795,7 @@ def _run_gnina_score_only(lig_file, prot_file, env=None):
                     logging.warning(f"GNINA stderr: {cmd_result.stderr[:500]}")
                     logging.warning(f"GNINA stdout: {cmd_result.stdout[:500]}")
                     return None
+            else:
                 logging.warning(f"GNINA scoring failed for {lig_file} (return code {cmd_result.returncode})")
                 logging.warning(f"GNINA stdout: {cmd_result.stdout[:1000]}")
                 logging.warning(f"GNINA stderr: {cmd_result.stderr[:1000]}")
