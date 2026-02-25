@@ -860,7 +860,6 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
         'is_connected': False,
         'n_connected_components': 0,
         'molecular_weight': None,
-        'logp': None,
         'qed': None,
         'tpsa': None,
         'smiles': None,
@@ -872,6 +871,7 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
     if sampling_mode in PROTEIN_INVOLVING_MODES:
         metrics.update({
             'vina_score': None,
+            'logp': None,
             'clashes': None,
             'HBAcceptor': None,
             'HBDonor': None,

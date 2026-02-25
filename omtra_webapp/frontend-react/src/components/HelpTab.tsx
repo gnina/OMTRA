@@ -7,7 +7,6 @@ export function HelpTab() {
         <h2 className="text-4xl font-extrabold text-slate-900 mb-2 tracking-tight">
           OMTRA Help Center
         </h2>
-        <p className="text-slate-500 text-lg">Master the sampling and docking workflows</p>
       </div>
 
       <div className="space-y-10">
@@ -23,7 +22,7 @@ export function HelpTab() {
                 🚀 De Novo Design
               </h4>
               <p className="text-sm text-slate-600">
-                Generate new chemical structures from scratch or matching specific constraints.
+                Generate new chemical structures from scratch.
               </p>
             </div>
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
@@ -31,7 +30,7 @@ export function HelpTab() {
                 🧬 Docking
               </h4>
               <p className="text-sm text-slate-600">
-                Dock existing ligands into a protein pocket using GNINA minimization.
+                Dock existing ligands into a protein pocket.
               </p>
             </div>
           </div>
@@ -78,26 +77,21 @@ export function HelpTab() {
         <section className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm">
           <h3 className="text-2xl font-bold text-slate-900 mb-4 flex items-center gap-2">
             <span className="p-1.5 bg-amber-100 text-amber-600 rounded-lg text-sm">03</span>
-            Sampling & Pharmacophores
+            Sampling
           </h3>
           <div className="space-y-4 text-slate-700">
-            <p className="text-sm">
-              You can constrain generation using pharmacophores derived from a reference ligand.
-            </p>
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-              <h4 className="font-bold text-slate-900 mb-2">3D Viewer Interaction</h4>
+              <h4 className="font-bold text-slate-900 mb-2">Adding pharmacophore constraints</h4>
               <ul className="list-disc pl-5 text-sm space-y-1">
-                <li><strong>Unselected Pharmacophores</strong>: Displayed as <strong>Wireframe</strong> spheres.</li>
-                <li><strong>Selected Pharmacophores</strong>: Click to select. We recommend selecting less than 8 pharmacophores as conditioning information.</li>
-                <li><strong>Visibility</strong>: All pharmacophores are &quot;Always On Top&quot; and visible through the protein surface.</li>
+                <li><strong>Upload a pharmacophore file</strong>: Upload a <strong>JSON file exported from <a href="https://pharmit.csb.pitt.edu" target="_blank" rel="noopener noreferrer" className="text-primary-600 underline">Pharmit</a></strong> or an <strong>XYZ file</strong> with pharmacophore features.</li>
+                <li><strong>Select constraints</strong>: Pharmacophores appear as wireframe spheres in the 3D viewer. Click any sphere to select it as a conditioning constraint (solid = selected). We recommend selecting fewer than 8.</li>
               </ul>
             </div>
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
               <h4 className="font-bold text-slate-900 mb-2">Key Parameters</h4>
               <ul className="list-disc pl-5 text-sm space-y-1">
-                <li><strong>Sampling Steps</strong>: Controls denoising iterations. Higher values (e.g., 200) improve quality.</li>
-                <li><strong>Pharmacophores</strong>: Select a subset (&lt; 8 recommended) as structural constraints.</li>
-                <li><strong>Atom Distribution</strong>: Sets the target element composition for the generated molecules.</li>
+                <li><strong>Sampling Steps</strong>: Controls denoising iterations. Higher values improve quality (we used 200 in our publication).</li>
+                <li><strong>Atom Count Distribution</strong>: Sets the distribution of atom counts for generated molecules. Auto-populated when a reference ligand is used to define the pocket.</li>
               </ul>
             </div>
           </div>
@@ -112,18 +106,18 @@ export function HelpTab() {
           <div className="grid md:grid-cols-2 gap-6">
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
               <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
-                📄 Generated Molecules
+                📊 Metrics Table
               </h4>
               <p className="text-sm text-slate-600">
-                Download top-ranked molecules in SDF format. Results include confidence scores and property predictions.
+                Each generated molecule is scored with drug-likeness properties (QED, LogP, molecular weight) and, for protein-conditioned jobs, docking metrics (Vina score, clashes, HB interactions). Click any row to load that molecule in the 3D viewer.
               </p>
             </div>
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
               <h4 className="font-bold text-slate-900 mb-2 flex items-center gap-2">
-                📊 Analysis
+                🧪 3D Viewer &amp; Downloads
               </h4>
               <p className="text-sm text-slate-600">
-                View 2D interaction diagrams (PoseView) and 3D binding poses directly in the browser.
+                View generated molecules in 3D alongside the protein and binding pocket. Download individual molecules as SDF files, or view 2D interaction diagrams (PoseView) for protein-conditioned jobs.
               </p>
             </div>
           </div>
