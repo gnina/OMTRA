@@ -1,0 +1,30 @@
+# OMTRA Distributed Sampling Pipeline — Dataset Mode Example
+#
+# Only Tier 1 (required) fields are shown. Everything else comes from
+# defaults/default.yaml. Override any default inline or via --site.
+#
+# Usage:
+#   python -m omtra_pipelines.distributed_sampling.launch_pipeline \
+#     --config this_file.yaml --site cluster --dry-run
+#
+# With overrides:
+#   python -m omtra_pipelines.distributed_sampling.launch_pipeline \
+#     --config this_file.yaml --site cluster \
+#     sampling.n_timesteps=500 metrics.disable_gnina=true
+
+# --- Tier 1: Required every run ---
+checkpoint: /path/to/last.ckpt
+task: rigid_docking_condensed
+dataset: plinder
+output_dir: /path/to/pipeline_output
+
+# System specification — one of:
+sys_idx_file: /path/to/plinder_eval_sys_idxs.csv
+# OR:
+# n_systems: 100
+# dataset_start_idx: 0
+
+# --- Common Tier 2 overrides (optional) ---
+# replicates_per_system: 10           # default: 1
+# systems_per_job: 10                 # default: 10
+# split: test                         # default: test

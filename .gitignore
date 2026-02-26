@@ -197,9 +197,15 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# Research notes (Oppy's development logs)
+research_notes/
+
 # Hydra outputs
 outputs/**
 omtra_webapp/models/
+
+# Claude local config (machine-specific)
+claude.local/
 
 # Node.js dependencies
 node_modules/
