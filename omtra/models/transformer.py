@@ -157,16 +157,20 @@ class AtomOffsetEncoder(nn.Module):
         self.lin_d   = nn.Linear(3, catompair, bias=False)  # for d_lm (R^3 -> R^C)
         self.lin_inv = nn.Linear(1, catompair, bias=False)  # for 1/(1+||d||^2)
     
-    def forward(self, ref_pos: torch.Tensor) -> torch.Tensor:
+    def forward(self, 
+                node_feats: torch.Tensor,
+                node_pos: torch.Tensor,
+                lig_pair_feats: Optional[torch.Tensor] = None,
+                lig_size: int = 0) -> torch.Tensor:
         """
-        ref_pos: (B, N, 3)
+        node_pos: (B, N, 3)
         returns:
             p_lm: (B, N, N, Catompair)
         """
         # idea taken from AF3 AtomAttentionEncoder, aglorithm 5 in AF3 paper
 
-        # (2) d_lm = f_l^ref_pos - f_m^ref_pos  -> shape (B, N, N, 3)
-        d_lm = ref_pos.unsqueeze(2) - ref_pos.unsqueeze(1)              # (B, N, N, 3)
+        # (2) d_lm = f_l^node_pos - f_m^node_pos  -> shape (B, N, N, 3)
+        d_lm = node_pos.unsqueeze(2) - node_pos.unsqueeze(1)              # (B, N, N, 3)
 
         # (4) p_lm = LinearNoBias(d_lm)
         p_lm = self.lin_d(d_lm)                    # (B, N, N, C)
@@ -177,6 +181,66 @@ class AtomOffsetEncoder(nn.Module):
         p_lm = p_lm + self.lin_inv(inv)
 
         return p_lm
+    
+class RBFEncoder(nn.Module):
+    def __init__(self,
+                 hidden_dim: int,
+                 pair_dim: int,
+                 rbf_count: int = 24,
+                 rbf_d_min: float = 0.0,
+                 rbf_d_max: float = 10.0,
+                 ):
+        super().__init__()
+        self.pair_dim = pair_dim
+        self.rbf_count = rbf_count
+        self.rbf_d_min = rbf_d_min
+        self.rbf_d_max = rbf_d_max
+
+        # Project single features to pair space
+        self.s_i_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
+        self.s_j_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
+
+        # Project concatenated pair features (single contributions + RBF + edge features) to pair_dim
+        self.pair_proj = nn.Sequential(
+            nn.Linear(pair_dim + rbf_count + pair_dim, pair_dim, bias=False),
+            nn.LayerNorm(pair_dim),
+        )
+
+    def forward(self,
+                node_feats: torch.Tensor,
+                node_pos: torch.Tensor,
+                lig_pair_feats: Optional[torch.Tensor] = None,
+                lig_size: int = 0,
+                ):
+        device = node_feats.device
+        B, N_all, _ = node_feats.shape
+
+        # Compute pair features from single node features
+        s_i = self.s_i_proj(node_feats).unsqueeze(2)  # (B, N, 1, pair_dim)
+        s_j = self.s_j_proj(node_feats).unsqueeze(1)  # (B, 1, N, pair_dim)
+        pair_from_single = s_i + s_j  # (B, N, N, pair_dim)
+
+        # Compute pairwise distances and RBF embeddings
+        pair_dists = torch.cdist(node_pos, node_pos, p=2.0)  # (B, N, N)
+        dist_rbf = _rbf(
+            pair_dists,
+            D_min=self.rbf_d_min,
+            D_max=self.rbf_d_max,
+            D_count=self.rbf_count,
+        )  # (B, N, N, rbf_count)
+
+
+        # Expand edge features to full (B, N_all, N_all, pair_dim), zero outside lig-lig block
+        edge_expanded = torch.zeros(B, N_all, N_all, self.pair_dim, device=device, dtype=node_feats.dtype)
+        if lig_pair_feats is not None and lig_size > 0:
+            edge_expanded[:, :lig_size, :lig_size, :] = lig_pair_feats
+
+        # Concatenate and project to get pair features
+        pair_input = torch.cat([pair_from_single, dist_rbf, edge_expanded], dim=-1)
+        pair_feats = self.pair_proj(pair_input)  # (B, N, N, pair_dim)
+
+        return pair_feats
+
 
 class LigandPairBiasEmbedder(nn.Module):
     """Computes ligand pair bias and applies the pair-biased attention layer."""
@@ -275,25 +339,27 @@ class AllNodePairBiasEmbedder(nn.Module):
         hidden_dim: int,
         pair_dim: int,
         num_heads: int,
+        pair_init: Optional[str] = 'rbf',
         rbf_count: int = 24,
         rbf_d_min: float = 0.0,
         rbf_d_max: float = 10.0,
     ) -> None:
         super().__init__()
-        self.pair_dim = pair_dim
-        self.rbf_count = rbf_count
-        self.rbf_d_min = rbf_d_min
-        self.rbf_d_max = rbf_d_max
 
-        # Project single features to pair space
-        self.s_i_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
-        self.s_j_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
-
-        # Project concatenated pair features (single contributions + RBF + edge features) to pair_dim
-        self.pair_proj = nn.Sequential(
-            nn.Linear(pair_dim + rbf_count + pair_dim, pair_dim, bias=False),
-            nn.LayerNorm(pair_dim),
-        )
+        self.pair_init = pair_init
+    
+        if pair_init == 'rbf':
+            self.pair_rep = RBFEncoder(
+                hidden_dim=hidden_dim,
+                pair_dim=pair_dim,
+                rbf_count=rbf_count,
+                rbf_d_min=rbf_d_min,
+                rbf_d_max=rbf_d_max,
+            )
+        elif pair_init == 'af3':
+            self.pair_rep = AtomOffsetEncoder(catompair=pair_dim)
+        else:
+            raise ValueError(f"Invalid pair_init option: {pair_init}")
 
         self.layer = PairTransformerLayer(
             hidden_dim=hidden_dim,
@@ -331,33 +397,9 @@ class AllNodePairBiasEmbedder(nn.Module):
         """
         if node_feats.size(1) == 0:
             return node_feats
-
-        device = node_feats.device
-        B, N_all, _ = node_feats.shape
-
-        # Compute pair features from single node features
-        s_i = self.s_i_proj(node_feats).unsqueeze(2)  # (B, N, 1, pair_dim)
-        s_j = self.s_j_proj(node_feats).unsqueeze(1)  # (B, 1, N, pair_dim)
-        pair_from_single = s_i + s_j  # (B, N, N, pair_dim)
-
-        # Compute pairwise distances and RBF embeddings
-        pair_dists = torch.cdist(node_pos, node_pos, p=2.0)  # (B, N, N)
-        dist_rbf = _rbf(
-            pair_dists,
-            D_min=self.rbf_d_min,
-            D_max=self.rbf_d_max,
-            D_count=self.rbf_count,
-        )  # (B, N, N, rbf_count)
-
-
-        # Expand edge features to full (B, N_all, N_all, pair_dim), zero outside lig-lig block
-        edge_expanded = torch.zeros(B, N_all, N_all, self.pair_dim, device=device, dtype=node_feats.dtype)
-        if lig_pair_feats is not None and lig_size > 0:
-            edge_expanded[:, :lig_size, :lig_size, :] = lig_pair_feats
-
-        # Concatenate and project to get pair features
-        pair_input = torch.cat([pair_from_single, dist_rbf, edge_expanded], dim=-1)
-        pair_feats = self.pair_proj(pair_input)  # (B, N, N, pair_dim)
+        
+        # Compute pair representations
+        pair_feats = self.pair_rep(node_feats, node_pos, lig_pair_feats, lig_size)
 
         # Apply pair-biased attention
         out_feats = self.layer(node_feats, pair_feats, node_mask)
@@ -384,6 +426,7 @@ class TransformerWrapper(nn.Module):
                  dropout: float = 0.1,
                  use_residual: bool = True,
                  use_qk_norm: bool = False,
+                 pair_init: Optional[str] = 'rbf',
                  ):
         super().__init__()
         self.ntype_order = list(node_types)
@@ -414,6 +457,7 @@ class TransformerWrapper(nn.Module):
             hidden_dim=self.d_model,
             pair_dim=pair_dim,
             num_heads=n_heads,
+            pair_init=pair_init,    # For toggling between different pair representation initializations
         )
         
         self.layers = nn.ModuleList()
