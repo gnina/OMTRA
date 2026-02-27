@@ -709,6 +709,13 @@ class OMTRA(pl.LightningModule):
         n_lig_atoms_mean: Union[float, None] = None,
         n_lig_atoms_std: Union[float, None] = None,
         prot_pos_std: Optional[torch.Tensor] = None,
+        # Stage 5: Corruption-aware remasking
+        corruption_remasking: bool = False,
+        corruption_threshold: float = 0.5,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
@@ -1061,7 +1068,20 @@ class OMTRA(pl.LightningModule):
         # the only reason i'm allowing it to be none by default and manually adding it in
         # is that i don't want to define a default number of timesteps in more than one palce
         # it is already defined as default arg to VectorField.integrate
-        itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence, time_spacing=time_spacing, stochastic_sampling=stochastic_sampling, noise_scaler=noise_scaler, eps=eps)
+        itg_kwargs = dict(
+            visualize=visualize,
+            extract_latents_for_confidence=extract_latents_for_confidence,
+            time_spacing=time_spacing,
+            stochastic_sampling=stochastic_sampling,
+            noise_scaler=noise_scaler,
+            eps=eps,
+            corruption_remasking=corruption_remasking,
+            corruption_threshold=corruption_threshold,
+            fixed_coord_max_std=fixed_coord_max_std,
+            fixed_coord_std=fixed_coord_std,
+            fixed_token_max_prob=fixed_token_max_prob,
+            fixed_token_prob=fixed_token_prob
+        )
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
         
@@ -1145,6 +1165,13 @@ class OMTRA(pl.LightningModule):
         noise_scaler: float = 1.0,
         eps: float = 0.01,
         n_lig_atom_margin: Union[float, None] = None,
+        # Stage 5: Corruption-aware remasking
+        corruption_remasking: bool = False,
+        corruption_threshold: float = 0.5,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
     ) -> List[SampledSystem]:
         
         n_samples = len(g_list) if g_list is not None else 1
@@ -1179,6 +1206,12 @@ class OMTRA(pl.LightningModule):
                                             noise_scaler=noise_scaler,
                                             eps=eps,
                                             n_lig_atom_margin=n_lig_atom_margin,
+                                            corruption_remasking=corruption_remasking,
+                                            corruption_threshold=corruption_threshold,
+                                            fixed_coord_max_std=fixed_coord_max_std,
+                                            fixed_coord_std=fixed_coord_std,
+                                            fixed_token_max_prob=fixed_token_max_prob,
+                                            fixed_token_prob=fixed_token_prob
                                             )
                 # re-order samples
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):

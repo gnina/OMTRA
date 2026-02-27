@@ -68,6 +68,11 @@ def parse_args():
     sampling.add_argument("--n_timesteps", type=int, default=250, help="Number of integration steps to take when sampling.")
     sampling.add_argument("--n_lig_atom_margin", type=float, default=0.075, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
 
+    sampling.add_argument('--fixed_coord_max_std', type=float, default=0.0, help='Maximum sampled standard deviation of noise added to coordinates of fixed atoms (default=0.0)')
+    sampling.add_argument('--fixed_coord_std', type=float, default=None, help='Optionally fix the standard deviation of the noise added to coordinates of fixed atoms')
+    sampling.add_argument('--fixed_token_max_prob', type=float, default=0.0, help='Maximum sampled probability of replacing categorical tokens of fixed atoms (default=0.0)')
+    sampling.add_argument('--fixed_token_prob', type=float, default=None, help='Optionally fix the probability of replacing categorical tokens of fixed atoms')
+
     sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
     sampling.add_argument("--noise_scaler", type=float, default=1.0, help="Noise scaling param for stochastic sampling.")
     sampling.add_argument("--eps", type=float, default=0.01, help="g(t) param for stochastic sampling.")
@@ -945,7 +950,11 @@ def main(args):
         kwargs = {'stochastic_sampling': args.stochastic_sampling,
                   'noise_scaler': args.noise_scaler,
                   'eps': args.eps,
-                  'n_lig_atom_margin': args.n_lig_atom_margin}
+                  'n_lig_atom_margin': args.n_lig_atom_margin,
+                  'fixed_coord_max_std': args.fixed_coord_max_std,
+                  'fixed_coord_std': args.fixed_coord_std,
+                  'fixed_token_max_prob': args.fixed_token_max_prob,
+                  'fixed_token_prob': args.fixed_token_prob}
         
         if args.bs_per_gbmem is not None:
             # gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  

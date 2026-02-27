@@ -153,6 +153,30 @@ def parse_args():
         action="store_true", 
         help="If set, compute metrics for the samples"
     )
+    p.add_argument(
+        '--fixed_coord_max_std',
+        type=float,
+        default=0.0,
+        help='Maximum sampled standard deviation of noise added to coordinates of fixed atoms (default=0.0)'
+    )
+    p.add_argument(
+        '--fixed_coord_std',
+        type=float,
+        default=None,
+        help='Optionally fix the standard deviation of the noise added to coordinates of fixed atoms'
+    )
+    p.add_argument(
+        '--fixed_token_max_prob',
+        type=float,
+        default=0.0,
+        help='Maximum sampled probability of replacing categorical tokens of fixed atoms (default=0.0)'
+    )
+    p.add_argument(
+        '--fixed_token_prob',
+        type=float,
+        default=None,
+        help='Optionally fix the probability of replacing categorical tokens of fixed atoms'
+    )
 
     return p.parse_args()
 
@@ -376,7 +400,10 @@ def main(args):
         eps=args.eps,
         n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None,
         n_lig_atoms_mean=getattr(args, 'n_lig_atoms_mean', None),
-        n_lig_atoms_std=getattr(args, 'n_lig_atoms_std', None)
+        n_lig_atoms_std=getattr(args, 'n_lig_atoms_std', 0.0),
+        fixed_coord_max_std=getattr(args, 'fixed_coord_max_std', None),
+        fixed_token_prob=getattr(args, 'fixed_token_prob', 0.0),
+        fixed_token_max_prob=getattr(args, 'fixed_token_max_prob', None),  
     )
 
     if args.output_dir is None:

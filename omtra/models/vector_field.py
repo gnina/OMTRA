@@ -373,6 +373,10 @@ class VectorField(nn.Module):
         remove_com=False,
         prev_dst_dict=None,
         extract_latents_for_confidence=False,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
     ):
         """Predict x_1 (trajectory destination) given x_t, and, optionally, previous destination features."""
         device = g.device
@@ -473,27 +477,41 @@ class VectorField(nn.Module):
 
         # add time and task embedding to node scalar features
         for ntype in node_scalar_features.keys():
-            # add time embedding to node scalar features
-            if self.time_embedding_dim == 1:
-                node_scalar_features[ntype].append(
-                    t[node_batch_idx[ntype]].unsqueeze(-1)
-                )
-            else:
-                t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
-                t_emb = t_emb[node_batch_idx[ntype]]
-                node_scalar_features[ntype].append(t_emb)
-
-            node_scalar_features[ntype].append(
-                task_embedding_batch[node_batch_idx[ntype]]
-            )  # expand task embedding for each node in the batch
-
-            # concatenate all initial node scalar features and pass through the embedding layer
-            node_scalar_features[ntype] = torch.cat(
+            cat_feats = torch.cat(
                 node_scalar_features[ntype], dim=-1
             )
             node_scalar_features[ntype] = self.scalar_embedding[ntype](
-                node_scalar_features[ntype]
+                cat_feats
             )
+        
+        # add embeddings for fixed atoms/edges
+        fixed_node_features, fixed_edge_features = self.fixed_cond_embedder(g, 
+                                                                            task_class,
+                                                                            fixed_coord_max_std,
+                                                                            fixed_coord_std,
+                                                                            fixed_token_max_prob,
+                                                                            fixed_token_prob)
+        for ntype in fixed_node_features.keys():
+            node_scalar_features[ntype] = node_scalar_features[ntype] + fixed_node_features[ntype]
+        for etype in fixed_edge_features.keys():
+            edge_features[etype] = edge_features[etype] + fixed_edge_features[etype]
+        # TODO: layer norm after add?
+
+        if self.pos_emb:
+            for ntype in node_scalar_features.keys():
+                global_node_idx = torch.arange(
+                    g.num_nodes(ntype), device=device
+                )
+                bnn = g.batch_num_nodes(ntype)
+                rel_node_starts = torch.zeros(1+bnn.shape[0], device=bnn.device)
+                rel_node_starts[1:] = torch.cumsum(bnn, dim=0)
+                rel_node_starts = rel_node_starts[:-1]
+                relative_node_idx = global_node_idx - rel_node_starts[node_batch_idx[ntype]]
+                pos_emb = get_pos_embedding(
+                    relative_node_idx,
+                    self.n_hidden_scalars,
+                )
+                node_scalar_features[ntype] += pos_emb
 
         if self.self_conditioning and prev_dst_dict is None:
             train_self_condition = self.training and (torch.rand(1) > 0.5).item()
@@ -996,6 +1014,12 @@ class VectorField(nn.Module):
         stochastic_sampling: bool = False,
         noise_scaler: float = 1.0,
         eps: float = 0.01,
+        corruption_remasking: bool = False,
+        corruption_threshold: float = 0.5,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
     ):
         device = g.device
 
@@ -1014,7 +1038,11 @@ class VectorField(nn.Module):
             apply_softmax=True,
             remove_com=False,  # TODO: is this ...should this be set to True?
             prev_dst_dict=prev_dst_dict,
-            extract_latents_for_confidence=extract_latents_for_confidence
+            extract_latents_for_confidence=extract_latents_for_confidence,
+            fixed_coord_max_std=fixed_coord_max_std,
+            fixed_coord_std=fixed_coord_std,
+            fixed_token_max_prob=fixed_token_max_prob,
+            fixed_token_prob=fixed_token_prob
         )
         
         if extract_latents_for_confidence:
