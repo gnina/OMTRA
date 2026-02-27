@@ -753,6 +753,10 @@ class OMTRA(pl.LightningModule):
         # Stage 5: Corruption-aware remasking
         corruption_remasking: bool = False,
         corruption_threshold: float = 0.5,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
@@ -1134,6 +1138,10 @@ class OMTRA(pl.LightningModule):
             eps=eps,
             corruption_remasking=corruption_remasking,
             corruption_threshold=corruption_threshold,
+            fixed_coord_max_std=fixed_coord_max_std,
+            fixed_coord_std=fixed_coord_std,
+            fixed_token_max_prob=fixed_token_max_prob,
+            fixed_token_prob=fixed_token_prob
         )
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
@@ -1221,6 +1229,10 @@ class OMTRA(pl.LightningModule):
         # Stage 5: Corruption-aware remasking
         corruption_remasking: bool = False,
         corruption_threshold: float = 0.5,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
     ) -> List[SampledSystem]:
         
         n_samples = len(g_list) if g_list is not None else 1
@@ -1257,6 +1269,10 @@ class OMTRA(pl.LightningModule):
                                             n_lig_atom_margin=n_lig_atom_margin,
                                             corruption_remasking=corruption_remasking,
                                             corruption_threshold=corruption_threshold,
+                                            fixed_coord_max_std=fixed_coord_max_std,
+                                            fixed_coord_std=fixed_coord_std,
+                                            fixed_token_max_prob=fixed_token_max_prob,
+                                            fixed_token_prob=fixed_token_prob
                                             )
                 # re-order samples
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):

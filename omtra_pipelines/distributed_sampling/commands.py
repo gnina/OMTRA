@@ -46,6 +46,11 @@ def build_sampling_command(task_info: dict, config: dict) -> str:
     _add_if_not_none(parts, "--n_timesteps", sampling_opts.get("n_timesteps"))
     _add_if_not_none(parts, "--bs_per_gbmem", sampling_opts.get("bs_per_gbmem"))
     _add_if_not_none(parts, "--max_batch_size", sampling_opts.get("max_batch_size"))
+    _add_if_not_none(parts, "--n_lig_atom_margin", sampling_opts.get("n_lig_atom_margin"))
+    _add_if_not_none(parts, "--fixed_coord_max_std", sampling_opts.get("fixed_coord_max_std"))
+    _add_if_not_none(parts, "--fixed_coord_std", sampling_opts.get("fixed_coord_std"))
+    _add_if_not_none(parts, "--fixed_token_max_prob", sampling_opts.get("fixed_token_max_prob"))
+    _add_if_not_none(parts, "--fixed_token_prob", sampling_opts.get("fixed_token_prob"))
     _add_flag(parts, "--stochastic_sampling", sampling_opts.get("stochastic_sampling", False))
 
     _add_if_not_none(parts, "--plinder_path", paths.get("plinder"))

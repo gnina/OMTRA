@@ -453,6 +453,10 @@ class VectorField(nn.Module):
         remove_com=False,
         prev_dst_dict=None,
         extract_latents_for_confidence=False,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
     ):
         """Predict x_1 (trajectory destination) given x_t, and, optionally, previous destination features."""
         device = g.device
@@ -568,7 +572,12 @@ class VectorField(nn.Module):
             )
         
         # add embeddings for fixed atoms/edges
-        fixed_node_features, fixed_edge_features = self.fixed_cond_embedder(g, task_class)
+        fixed_node_features, fixed_edge_features = self.fixed_cond_embedder(g, 
+                                                                            task_class,
+                                                                            fixed_coord_max_std,
+                                                                            fixed_coord_std,
+                                                                            fixed_token_max_prob,
+                                                                            fixed_token_prob)
         for ntype in fixed_node_features.keys():
             node_scalar_features[ntype] = node_scalar_features[ntype] + fixed_node_features[ntype]
         for etype in fixed_edge_features.keys():
@@ -1089,6 +1098,10 @@ class VectorField(nn.Module):
         eps: float = 0.01,
         corruption_remasking: bool = False,
         corruption_threshold: float = 0.5,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
     ):
         device = g.device
 
@@ -1107,7 +1120,11 @@ class VectorField(nn.Module):
             apply_softmax=True,
             remove_com=False,  # TODO: is this ...should this be set to True?
             prev_dst_dict=prev_dst_dict,
-            extract_latents_for_confidence=extract_latents_for_confidence
+            extract_latents_for_confidence=extract_latents_for_confidence,
+            fixed_coord_max_std=fixed_coord_max_std,
+            fixed_coord_std=fixed_coord_std,
+            fixed_token_max_prob=fixed_token_max_prob,
+            fixed_token_prob=fixed_token_prob
         )
 
         # TEMPORARY TEST: DOES ALIGNMENT ON EACH INFERENCE STEP HELP?

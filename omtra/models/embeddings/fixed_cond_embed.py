@@ -40,11 +40,11 @@ class FixedConditionEmbedder(nn.Module):
         self.marginal_path = marginal_path
         self.marginal_keys = marginal_keys or {}
 
-        self.fixed_coord_max_std = fixed_coord_max_std
-        self.fixed_coord_std = fixed_coord_std
+        self.global_fixed_coord_max_std = fixed_coord_max_std
+        self.global_fixed_coord_std = fixed_coord_std
 
-        self.fixed_token_max_prob = fixed_token_max_prob
-        self.fixed_token_prob = fixed_token_prob
+        self.global_fixed_token_max_prob = fixed_token_max_prob
+        self.global_fixed_token_prob = fixed_token_prob
 
         # realistically this may be over engineered because we currently only fix ligand atoms, but trying to make this general for the case where we fix other modalities
         ntype_cat_feats = defaultdict(int)
@@ -89,13 +89,15 @@ class FixedConditionEmbedder(nn.Module):
         # create scalar embedders
         self.scalar_embedding = nn.ModuleDict()
         for ntype in node_types:
-            input_dim = (ntype_cat_feats[ntype] + ntype_coord_feats[ntype]) * token_dim 
+            # Always append coord sigma and token prob for corruption (even if 0) to maintain consitsent fixed condition embedding shapes
+            # Allows us to toggle corruption on/off at inference without changing model architecture
+            input_dim = (ntype_cat_feats[ntype] + ntype_coord_feats[ntype]) * token_dim + ntype_cat_feats[ntype] + ntype_coord_feats[ntype]
             if res_id_embed_dim is not None and ntype == 'prot_atom':
                 input_dim += res_id_embed_dim
-            if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
-                input_dim += ntype_cat_feats[ntype] 
-            if (self.fixed_coord_max_std > 0.0) or (self.fixed_coord_std is not None):    # raw atom coordinates are injected into scalar features
-                input_dim += ntype_coord_feats[ntype]
+            # if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
+            #     input_dim += ntype_cat_feats[ntype] 
+            # if (self.fixed_coord_max_std > 0.0) or (self.fixed_coord_std is not None):    # raw atom coordinates are injected into scalar features
+            #     input_dim += ntype_coord_feats[ntype]
 
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
@@ -109,9 +111,11 @@ class FixedConditionEmbedder(nn.Module):
         # create edge embedders
         self.edge_embedding = nn.ModuleDict()
         for etype in edge_types:
-            input_dim = token_dim
-            if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
-                input_dim += 1
+            # Always append token corruption prob to maintain consitsent fixed condition embedding shapes
+            # Allows us to toggle corruption on/off at inference without changing model architecture
+            input_dim = token_dim + 1
+            # if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
+            #     input_dim += 1
             if any((m.data_key == "x" and f"{m.entity_name}_to_{m.entity_name}" == etype) for m in partial_modality_fixed_cls):
                 input_dim += token_dim
             self.edge_embedding[etype] = nn.Sequential(
@@ -123,7 +127,17 @@ class FixedConditionEmbedder(nn.Module):
     @g_local_scope
     def forward(self,
                 g: dgl.DGLGraph,
-                task_class: Task):
+                task_class: Task,
+                fixed_coord_max_std: Optional[float] = None,
+                fixed_coord_std: Optional[float] = None,
+                fixed_token_max_prob: Optional[float] = None,
+                fixed_token_prob: Optional[float] = None):
+        
+        # Optional overrides 
+        self.fixed_coord_max_std = fixed_coord_max_std if fixed_coord_max_std is not None else self.global_fixed_coord_max_std
+        self.fixed_coord_std = fixed_coord_std if fixed_coord_std is not None else self.global_fixed_coord_std
+        self.fixed_token_max_prob = fixed_token_max_prob if fixed_token_max_prob is not None else self.global_fixed_token_max_prob
+        self.fixed_token_prob = fixed_token_prob if fixed_token_prob is not None else self.global_fixed_token_prob
 
         node_modalities = [name_to_modality(m) for m in task_class.partial_modalities_fixed if name_to_modality(m).is_node]
         edge_modalities = [name_to_modality(m) for m in task_class.partial_modalities_fixed if not name_to_modality(m).is_node]
@@ -153,7 +167,11 @@ class FixedConditionEmbedder(nn.Module):
 
                 if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
                     gt, prob = self.corrupt_tokens(gt, g.nodes[ntype].data[f"{modality.data_key}_0"], modality.name, mask)
-                    fixed_node_scalar_features[ntype].append(prob.unsqueeze(-1))
+                else:
+                    # All 0's if we aren't corrupting atom types
+                    prob = torch.zeros((gt.shape[0],), device=gt.device)
+                    
+                fixed_node_scalar_features[ntype].append(prob.unsqueeze(-1))
 
                 fixed_atom_feats = self.token_embeddings[modality.name](gt) * mask.unsqueeze(-1)
                 fixed_node_scalar_features[ntype].append(fixed_atom_feats)
@@ -171,8 +189,11 @@ class FixedConditionEmbedder(nn.Module):
                 # noise coordinates of fixed atoms
                 if (self.fixed_coord_max_std > 0.0) or (self.fixed_coord_std is not None):
                     x, sigma = self.corrupt_coords(x, mask)
-                    fixed_node_scalar_features[ntype].append(sigma)
-                
+                else:
+                    # all 0's if we aren't corrupting coordinates
+                    sigma = torch.zeros((x.shape[0], 1), device=x.device)
+
+                fixed_node_scalar_features[ntype].append(sigma)
                 fixed_atom_coords = self.coord_embedding[modality.entity_name](x) * mask.unsqueeze(-1)
                 fixed_node_scalar_features[ntype].append(fixed_atom_coords)
                 
@@ -198,8 +219,11 @@ class FixedConditionEmbedder(nn.Module):
             if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
                 ue_mask = get_upper_edge_mask(g, etype)
                 gt, prob = self.corrupt_tokens(gt, g.edges[etype].data[f"{modality.data_key}_0"], modality.name, mask, ue_mask)
-                fixed_edge_features[etype].append(prob.unsqueeze(-1))
+            else:
+                # All 0's if we aren't corrupting edge tokens
+                prob = torch.zeros((gt.shape[0],), device=gt.device)
             
+            fixed_edge_features[etype].append(prob.unsqueeze(-1))
             fixed_edge_feats = self.token_embeddings[modality.name](gt) * mask.unsqueeze(-1)
             fixed_edge_features[etype].append(fixed_edge_feats)
 
