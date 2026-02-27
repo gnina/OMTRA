@@ -1,10 +1,12 @@
 import torch
 import dgl
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
 import torch_scatter
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from typing import List, Dict, Optional
+from torch.nn.attention import sdpa_kernel, SDPBackend
 from einops.layers.torch import Rearrange
 from einops import rearrange
 from omtra.data.graph.layout import GraphLayout
@@ -56,11 +58,10 @@ class AttentionPairBias(nn.Module):
 
         self.compute_pair_bias = compute_pair_bias
         if compute_pair_bias:
-            self.proj_z = nn.Sequential(
+            self.proj_z = torch.compile(nn.Sequential(
                 nn.LayerNorm(c_z),
                 nn.Linear(c_z, num_heads, bias=False),
-                Rearrange("b ... h -> b h ..."),
-            )
+            ))
         else:
             self.proj_z = Rearrange("b ... h -> b h ...")
 
@@ -99,20 +100,29 @@ class AttentionPairBias(nn.Module):
         k = self.proj_k(k_in).view(B, -1, self.num_heads, self.head_dim)
         v = self.proj_v(k_in).view(B, -1, self.num_heads, self.head_dim)
 
-        bias = self.proj_z(z)
+        bias = self.proj_z(z).permute(0, 3, 1, 2)
 
         g = self.proj_g(s).sigmoid()
 
         # with torch.autocast("cuda", enabled=False):
         # Compute attention weights
-        attn = torch.einsum("bihd,bjhd->bhij", q.float(), k.float())
-        attn = attn / (self.head_dim**0.5) + bias.float()
-        attn = attn + (1 - mask[:, None, None].float()) * -self.inf
-        # attn = attn + (1 - mask.unsqueeze(1).float()) * -self.inf
-        attn = attn.softmax(dim=-1)
+        # attn = torch.einsum("bihd,bjhd->bhij", q.float(), k.float())
+        # attn = attn / (self.head_dim**0.5) + bias.float()
+        # attn = attn + (1 - mask[:, None, None].float()) * -self.inf
+        # # attn = attn + (1 - mask.unsqueeze(1).float()) * -self.inf
+        # attn = attn.softmax(dim=-1)
 
-        # Compute output
-        o = torch.einsum("bhij,bjhd->bihd", attn, v.float()).to(v.dtype)
+        # # Compute output
+        # o = torch.einsum("bhij,bjhd->bihd", attn, v.float()).to(v.dtype) # has shape (B, N, n_heads, head_dim)
+        
+        combined_attn_mask = (bias + (1 - mask[:, None, None, :]) * -self.inf).contiguous()
+
+        # prevent silently falling to MATH backend due to non-contiguous nature of the pairbias 
+        with sdpa_kernel([SDPBackend.CUDNN_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]):
+            o = F.scaled_dot_product_attention(
+                q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+                attn_mask=combined_attn_mask,
+            ).transpose(1, 2)
 
         o = o.reshape(B, -1, self.c_s)
         o = self.proj_o(g * o)
