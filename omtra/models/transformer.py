@@ -289,22 +289,14 @@ class AllNodePairBiasEmbedder(nn.Module):
         self.s_i_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
         self.s_j_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
 
-        self.e_proj = nn.Linear(pair_dim, pair_dim, bias=False)
-
-        self.rbf_proj = nn.Linear(rbf_count, pair_dim, bias=False)
-
-        self.combine = nn.Sequential(
-            nn.Linear(pair_dim * 4, pair_dim),
-            nn.SiLU(),
-            nn.Linear(pair_dim, pair_dim),
-            nn.LayerNorm(pair_dim)
+        # Project concatenated pair features (single contributions + RBF) to pair_dim
+        self.pair_proj = nn.Sequential(
+            nn.Linear(pair_dim + rbf_count, pair_dim, bias=False),
+            nn.LayerNorm(pair_dim),
         )
 
-        # Project concatenated pair features (single contributions + RBF) to pair_dim
-        # self.pair_proj = nn.Sequential(
-        #     nn.Linear(pair_dim + rbf_count, pair_dim, bias=False),
-        #     nn.LayerNorm(pair_dim),
-        # )
+        # Project lig-lig edge features
+        self.e_proj = nn.Linear(pair_dim, pair_dim, bias=False)
 
         self.layer = PairTransformerLayer(
             hidden_dim=hidden_dim,
@@ -315,11 +307,10 @@ class AllNodePairBiasEmbedder(nn.Module):
     def forward(
         self,
         node_feats: torch.Tensor,
-        edge_feats: torch.Tensor,   # added for new pair bias
         node_pos: torch.Tensor,
         node_mask: torch.Tensor,
-        # lig_pair_feats: Optional[torch.Tensor] = None,
-        # lig_size: int = 0,
+        lig_pair_feats: Optional[torch.Tensor] = None,
+        lig_size: int = 0,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -350,7 +341,7 @@ class AllNodePairBiasEmbedder(nn.Module):
         # Compute pair features from single node features
         s_i = self.s_i_proj(node_feats).unsqueeze(2)  # (B, N, 1, pair_dim)
         s_j = self.s_j_proj(node_feats).unsqueeze(1)  # (B, 1, N, pair_dim)
-        #pair_from_single = s_i + s_j  # (B, N, N, pair_dim)
+        pair_from_single = s_i + s_j  # (B, N, N, pair_dim)
 
         # Compute pairwise distances and RBF embeddings
         pair_dists = torch.cdist(node_pos, node_pos, p=2.0)  # (B, N, N)
@@ -361,27 +352,15 @@ class AllNodePairBiasEmbedder(nn.Module):
             D_count=self.rbf_count,
         )  # (B, N, N, rbf_count)
 
-        d = self.rbf_proj(dist_rbf)
-
-        e = self.e_proj(edge_feats)
-
-        pair = torch.cat([
-            s_i.expand_as(e),
-            s_j.expand_as(e),
-            d,
-            e
-        ], dim=-1)
-
-        pair_feats = self.combine(pair)
-
         # # Concatenate and project to get pair features
-        # pair_input = torch.cat([pair_from_single, dist_rbf], dim=-1)
-        # pair_feats = self.pair_proj(pair_input)  # (B, N, N, pair_dim)
+        pair_input = torch.cat([pair_from_single, dist_rbf], dim=-1)
+        pair_feats = self.pair_proj(pair_input)  # (B, N, N, pair_dim)
 
-        # # Add pre-computed ligand pair features if provided (additive to preserve gradients)
-        # if lig_pair_feats is not None and lig_size > 0:
-        #     # pair_feats = pair_feats.clone()
-        #     pair_feats[:, :lig_size, :lig_size, :] = pair_feats[:, :lig_size, :lig_size, :] + lig_pair_feats
+        # Add pre-computed ligand pair features if provided (additive to preserve gradients)
+        if lig_pair_feats is not None and lig_size > 0:
+            pair_feats = pair_feats.clone()
+            e = self.e_proj(lig_pair_feats)
+            pair_feats[:, :lig_size, :lig_size, :] = pair_feats[:, :lig_size, :lig_size, :] + e
 
         # Apply pair-biased attention
         out_feats = self.layer(node_feats, pair_feats, node_mask)
@@ -546,36 +525,6 @@ class TransformerWrapper(nn.Module):
         X_all = torch.cat(X_list, dim=1) # (B, n_all, d_model)
         M_all = torch.cat(M_list, dim=1)
 
-        # Pack all edge types into one (B, n_all, n_all, pair_dim) matrix
-        # Compute per-node type offsets using X_sizes
-        ntype_to_offset = {}
-        _off = 0
-        for ntype, nmax in zip(self.ntype_order, X_sizes):
-            ntype_to_offset[ntype] = _off
-            _off += nmax
-        n_all = _off
-        
-        E_all = torch.zeros(                                # (B, n_all, n_all, pair_dim)
-            X_all.shape[0], n_all, n_all, self.pair_dim,
-            device=X_all.device, dtype=X_all.dtype,
-        )
-        # Map etype string -> (src_type, dst_type) from the graph's canonical edge types
-        etype_to_srcdst = {etype: (src, dst) for src, etype, dst in g.canonical_etypes}
-        for etype, e_bucket in padded_edge_feats.items():
-            if self.trfmr_pair_feat_key not in e_bucket:
-                continue
-            srcdst = etype_to_srcdst.get(etype)
-            if srcdst is None:
-                continue
-            src_type, dst_type = srcdst
-            src_off = ntype_to_offset.get(src_type)
-            dst_off = ntype_to_offset.get(dst_type)
-            if src_off is None or dst_off is None:
-                continue
-            e_feats = e_bucket[self.trfmr_pair_feat_key]  # (B, n_src, n_dst, pair_dim)
-            n_src, n_dst = e_feats.size(1), e_feats.size(2)     # number of src and dst nodes in edges of type etype
-            E_all[:, src_off:src_off + n_src, dst_off:dst_off + n_dst, :] = e_feats # slice into edge feat matrix
-
         # Concatenate positions for all node types
         pos_list = []
         assert self.ntype_order[0] == 'lig', "First node type must be 'lig' or else all pair embedding injects pair features incorrectly"
@@ -587,8 +536,8 @@ class TransformerWrapper(nn.Module):
         all_pos = torch.cat(pos_list, dim=1)  # (B, n_all, 3)
 
         # Get ligand pair features and size for splicing
-        # lig_pair_feats = padded_edge_feats.get('lig_to_lig', {}).get(self.trfmr_pair_feat_key, None)
-        # lig_size = sizes[self.ntype_order.index('lig')] if 'lig' in self.ntype_order else 0
+        lig_pair_feats = padded_edge_feats.get('lig_to_lig', {}).get(self.trfmr_pair_feat_key, None)
+        lig_size = X_sizes[self.ntype_order.index('lig')] if 'lig' in self.ntype_order else 0
 
         # Apply all-node pair bias attention (reuses ligand pair features)
         # Note: all_node_embedder expects mask where 1=valid, but we may have inverted mask
@@ -600,11 +549,10 @@ class TransformerWrapper(nn.Module):
         
         Y_all = self.all_node_embedder(
             node_feats=X_all,
-            edge_feats=E_all, 
             node_pos=all_pos,
             node_mask=all_node_mask.float(),
-            #lig_pair_feats=lig_pair_feats,
-            #lig_size=lig_size,
+            lig_pair_feats=lig_pair_feats,
+            lig_size=lig_size,
         )
 
         for layer in self.layers:
