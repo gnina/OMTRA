@@ -1,6 +1,7 @@
 import torch
 import dgl
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
 import torch_scatter
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
@@ -105,14 +106,21 @@ class AttentionPairBias(nn.Module):
 
         # with torch.autocast("cuda", enabled=False):
         # Compute attention weights
-        attn = torch.einsum("bihd,bjhd->bhij", q.float(), k.float())
-        attn = attn / (self.head_dim**0.5) + bias.float()
-        attn = attn + (1 - mask[:, None, None].float()) * -self.inf
-        # attn = attn + (1 - mask.unsqueeze(1).float()) * -self.inf
-        attn = attn.softmax(dim=-1)
+        # attn = torch.einsum("bihd,bjhd->bhij", q.float(), k.float())
+        # attn = attn / (self.head_dim**0.5) + bias.float()
+        # attn = attn + (1 - mask[:, None, None].float()) * -self.inf
+        # # attn = attn + (1 - mask.unsqueeze(1).float()) * -self.inf
+        # attn = attn.softmax(dim=-1)
 
-        # Compute output
-        o = torch.einsum("bhij,bjhd->bihd", attn, v.float()).to(v.dtype)
+        # # Compute output
+        # o = torch.einsum("bhij,bjhd->bihd", attn, v.float()).to(v.dtype) # has shape (B, N, n_heads, head_dim)
+        
+        combined_attn_mask = bias.float() + (1 - mask[:, None, None, :].float()) * -self.inf
+        
+        o = F.scaled_dot_product_attention(
+            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), # SDPA expects (B, n_heads, N, head_dim)
+            attn_mask=combined_attn_mask,
+        ).transpose(1, 2)
 
         o = o.reshape(B, -1, self.c_s)
         o = self.proj_o(g * o)
