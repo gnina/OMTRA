@@ -40,6 +40,7 @@ class PlinderLinksZarrConverter:
         category: str = None,
         num_workers: int = 1,
         batch_size: int = 200,
+        pocket_cutoff: float = 8.0,
     ):
         self.output_path = Path(output_path)
         self.struc_chunk_size = struc_chunk_size
@@ -50,6 +51,7 @@ class PlinderLinksZarrConverter:
         self.category = category
         self.num_workers = num_workers
         self.batch_size = batch_size
+        self.pocket_cutoff = pocket_cutoff
 
         if not self.output_path.exists():
             self.store = zarr.storage.LocalStore(str(self.output_path))
@@ -426,7 +428,7 @@ class PlinderLinksZarrConverter:
     def _process_system(self, system_id: str):
         try:
             system_processor = SystemProcessor(
-                system_id=system_id, link_type=self.category
+                system_id=system_id, link_type=self.category, pocket_cutoff=self.pocket_cutoff
             )
             return system_processor.process_system()
 
