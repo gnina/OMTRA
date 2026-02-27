@@ -6,6 +6,7 @@ from torch.distributions.categorical import Categorical
 import torch_scatter
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from typing import List, Dict, Optional
+from torch.nn.attention import sdpa_kernel, SDPBackend
 from einops.layers.torch import Rearrange
 from einops import rearrange
 from omtra.data.graph.layout import GraphLayout
@@ -115,12 +116,14 @@ class AttentionPairBias(nn.Module):
         # # Compute output
         # o = torch.einsum("bhij,bjhd->bihd", attn, v.float()).to(v.dtype) # has shape (B, N, n_heads, head_dim)
         
-        combined_attn_mask = bias.float() + (1 - mask[:, None, None, :].float()) * -self.inf
-        
-        o = F.scaled_dot_product_attention(
-            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), # SDPA expects (B, n_heads, N, head_dim)
-            attn_mask=combined_attn_mask,
-        ).transpose(1, 2)
+        combined_attn_mask = (bias + (1 - mask[:, None, None, :]) * -self.inf).contiguous()
+
+        # prevent silently falling to MATH backend due to non-contiguous nature of the pairbias 
+        with sdpa_kernel([SDPBackend.CUDNN_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]):
+            o = F.scaled_dot_product_attention(
+                q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+                attn_mask=combined_attn_mask,
+            ).transpose(1, 2)
 
         o = o.reshape(B, -1, self.c_s)
         o = self.proj_o(g * o)
