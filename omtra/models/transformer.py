@@ -289,14 +289,11 @@ class AllNodePairBiasEmbedder(nn.Module):
         self.s_i_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
         self.s_j_proj = nn.Linear(hidden_dim, pair_dim, bias=False)
 
-        # Project concatenated pair features (single contributions + RBF) to pair_dim
+        # Project concatenated pair features (single contributions + RBF + edge features) to pair_dim
         self.pair_proj = nn.Sequential(
-            nn.Linear(pair_dim + rbf_count, pair_dim, bias=False),
+            nn.Linear(pair_dim + rbf_count + pair_dim, pair_dim, bias=False),
             nn.LayerNorm(pair_dim),
         )
-
-        # Project lig-lig edge features
-        self.e_proj = nn.Linear(pair_dim, pair_dim, bias=False)
 
         self.layer = PairTransformerLayer(
             hidden_dim=hidden_dim,
@@ -352,15 +349,15 @@ class AllNodePairBiasEmbedder(nn.Module):
             D_count=self.rbf_count,
         )  # (B, N, N, rbf_count)
 
-        # # Concatenate and project to get pair features
-        pair_input = torch.cat([pair_from_single, dist_rbf], dim=-1)
-        pair_feats = self.pair_proj(pair_input)  # (B, N, N, pair_dim)
 
-        # Add pre-computed ligand pair features if provided (additive to preserve gradients)
+        # Expand edge features to full (B, N_all, N_all, pair_dim), zero outside lig-lig block
+        edge_expanded = torch.zeros(B, N_all, N_all, self.pair_dim, device=device, dtype=node_feats.dtype)
         if lig_pair_feats is not None and lig_size > 0:
-            pair_feats = pair_feats.clone()
-            e = self.e_proj(lig_pair_feats)
-            pair_feats[:, :lig_size, :lig_size, :] = pair_feats[:, :lig_size, :lig_size, :] + e
+            edge_expanded[:, :lig_size, :lig_size, :] = lig_pair_feats
+
+        # Concatenate and project to get pair features
+        pair_input = torch.cat([pair_from_single, dist_rbf, edge_expanded], dim=-1)
+        pair_feats = self.pair_proj(pair_input)  # (B, N, N, pair_dim)
 
         # Apply pair-biased attention
         out_feats = self.layer(node_feats, pair_feats, node_mask)
