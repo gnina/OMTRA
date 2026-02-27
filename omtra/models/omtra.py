@@ -82,6 +82,7 @@ class OMTRA(pl.LightningModule):
         pharm_var: float = 0.0,
         lr_warmup_steps: int = 0,
         prot_pos_std: float = 0.0, #standard deviation for adding noise to protein atom positions
+        bernoulli_mask_p: float = 0.0, # probability of keeping each atom fixed in Bernoulli masking for partial modality conditioning (0.0 = disabled)
 
     ):
         super().__init__()
@@ -107,6 +108,7 @@ class OMTRA(pl.LightningModule):
         self.pharm_var = pharm_var
         self.lr_warmup_steps = lr_warmup_steps
         self.prot_pos_std = prot_pos_std
+        self.bernoulli_mask_p = bernoulli_mask_p
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -398,9 +400,14 @@ class OMTRA(pl.LightningModule):
         upper_edge_mask["lig_to_lig"] = lig_ue_mask
 
         # sample conditional path
-        # TODO: ctmc conditional path sampling manually sets things to mask token rather 
+        # TODO: ctmc conditional path sampling manually sets things to mask token rather
         # than setting to prior value (which is usually mask token)
         task_class: Task = task_name_to_class(task_name)
+
+        # Apply Bernoulli atom-level masking for partial modality conditioning
+        if self.bernoulli_mask_p > 0.0 and len(task_class.partial_modalities_fixed) > 0 and g.num_nodes("lig") > 0:
+            g = self.apply_bernoulli_mask(g, task_class)
+
         g = self.sample_conditional_path(
             g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask
         )
@@ -579,6 +586,36 @@ class OMTRA(pl.LightningModule):
             }
 
         return optimizer
+
+    def apply_bernoulli_mask(self, g: dgl.DGLHeteroGraph, task_class: Task) -> dgl.DGLHeteroGraph:
+        """Apply per-atom Bernoulli masking for partial modality conditioning.
+
+        For each ligand atom, samples Bernoulli(bernoulli_mask_p) to determine whether
+        to keep it as fixed. AND-merges with any existing atom_mask_1_true from the
+        dataset (fragment-based masking). Derives edge_mask_1_true from the merged atom mask.
+        """
+        n_lig = g.num_nodes("lig")
+        device = g.device
+
+        # Sample per-atom Bernoulli mask: 1 = keep fixed, 0 = generate
+        bernoulli_mask = (torch.rand(n_lig, device=device) < self.bernoulli_mask_p).long()
+
+        # AND-merge with existing dataset mask if present
+        if "atom_mask_1_true" in g.nodes["lig"].data:
+            existing_mask = g.nodes["lig"].data["atom_mask_1_true"]
+            merged_mask = existing_mask & bernoulli_mask
+        else:
+            merged_mask = bernoulli_mask
+
+        g.nodes["lig"].data["atom_mask_1_true"] = merged_mask
+
+        # Derive edge mask: an edge is fixed iff both endpoint atoms are fixed
+        if g.num_edges("lig_to_lig") > 0:
+            src, dst = g.edges(etype="lig_to_lig")
+            edge_mask = (merged_mask[src] & merged_mask[dst]).long()
+            g.edges["lig_to_lig"].data["edge_mask_1_true"] = edge_mask
+
+        return g
 
     def sample_conditional_path(
         self,

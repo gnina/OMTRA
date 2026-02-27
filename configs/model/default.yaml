@@ -17,3 +17,11 @@ t_alpha: 1.8
 cat_loss_weight: 0.8
 time_scaled_loss: False
 pharm_pos_std: ${pharm_pos_std}
+bernoulli_mask_p: ${bernoulli_mask_p}
+lr_warmup_steps: 5000
+
+
+scheduler_config:
+  type: cosine_decay
+  min_lr_factor: 0.1  # Optional, defaults to 0.1 (1
+
