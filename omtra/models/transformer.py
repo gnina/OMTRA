@@ -58,11 +58,10 @@ class AttentionPairBias(nn.Module):
 
         self.compute_pair_bias = compute_pair_bias
         if compute_pair_bias:
-            self.proj_z = nn.Sequential(
+            self.proj_z = torch.compile(nn.Sequential(
                 nn.LayerNorm(c_z),
                 nn.Linear(c_z, num_heads, bias=False),
-                Rearrange("b ... h -> b h ..."),
-            )
+            ))
         else:
             self.proj_z = Rearrange("b ... h -> b h ...")
 
@@ -101,7 +100,7 @@ class AttentionPairBias(nn.Module):
         k = self.proj_k(k_in).view(B, -1, self.num_heads, self.head_dim)
         v = self.proj_v(k_in).view(B, -1, self.num_heads, self.head_dim)
 
-        bias = self.proj_z(z)
+        bias = self.proj_z(z).permute(0, 3, 1, 2)
 
         g = self.proj_g(s).sigmoid()
 
