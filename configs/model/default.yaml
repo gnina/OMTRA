@@ -18,6 +18,7 @@ t_alpha: 1.8
 cat_loss_weight: 0.8
 time_scaled_loss: False
 pharm_pos_std: ${pharm_pos_std}
+bernoulli_mask_p: ${bernoulli_mask_p}
 lr_warmup_steps: 5000
 
 
