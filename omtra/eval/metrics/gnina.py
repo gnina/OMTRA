@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from rdkit import Chem
+import torch
 
 from omtra.utils import omtra_root
 
@@ -60,8 +61,10 @@ def _run_gnina(
                 "--minimize",
                 "--seed", "42",
             ]
-
         env = os.environ.copy()
+        torch_lib_path = str(Path(torch.__file__).parent / "lib")
+        existing_ld_path = env.get('LD_LIBRARY_PATH', '')
+        env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
         if result.returncode != 0:

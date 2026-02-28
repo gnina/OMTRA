@@ -17,6 +17,7 @@ import os
 import numpy as np
 import pandas as pd
 from rdkit import Chem
+import torch
 
 from omtra.tasks.base_task import Task
 from omtra.constants import ph_idx_to_elem
@@ -190,6 +191,7 @@ def compute_metrics(
     pd.DataFrame
         Multi-indexed by (sys_id, protein_id, gen_ligand_id).
     """
+    
     # Build scaffold dataframe
     rows = []
     for sys_id, pairs in system_pairs.items():
