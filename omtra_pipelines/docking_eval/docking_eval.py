@@ -56,9 +56,9 @@ def parse_args():
     sampling.add_argument("--n_timesteps", type=int, default=250, help="Number of integration steps to take when sampling.")
     sampling.add_argument("--n_lig_atom_margin", type=float, default=0.075, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
 
-    sampling.add_argument('--fixed_coord_max_std', type=float, default=0.0, help='Maximum sampled standard deviation of noise added to coordinates of fixed atoms (default=0.0)')
+    sampling.add_argument('--fixed_coord_max_std', type=float, default=None, help='Maximum sampled standard deviation of noise added to coordinates of fixed atoms. If not set, falls back to the value used during training.')
     sampling.add_argument('--fixed_coord_std', type=float, default=None, help='Optionally fix the standard deviation of the noise added to coordinates of fixed atoms')
-    sampling.add_argument('--fixed_token_max_prob', type=float, default=0.0, help='Maximum sampled probability of replacing categorical tokens of fixed atoms (default=0.0)')
+    sampling.add_argument('--fixed_token_max_prob', type=float, default=None, help='Maximum sampled probability of replacing categorical tokens of fixed atoms. If not set, falls back to the value used during training.')
     sampling.add_argument('--fixed_token_prob', type=float, default=None, help='Optionally fix the probability of replacing categorical tokens of fixed atoms')
 
     sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
