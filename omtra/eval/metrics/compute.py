@@ -17,7 +17,6 @@ import os
 import numpy as np
 import pandas as pd
 from rdkit import Chem
-import torch
 
 from omtra.tasks.base_task import Task
 from omtra.constants import ph_idx_to_elem

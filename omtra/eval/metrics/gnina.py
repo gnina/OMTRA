@@ -61,12 +61,22 @@ def _run_gnina(
                 "--minimize",
                 "--seed", "42",
             ]
-        env = os.environ.copy()
         torch_lib_path = str(Path(torch.__file__).parent / "lib")
-        existing_ld_path = env.get('LD_LIBRARY_PATH', '')
-        env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        cudnn_lib_path = str(
+            Path(torch.__file__).parent.parent
+            / "nvidia"
+            / "cudnn"
+            / "lib"
+        )
+        env = os.environ.copy()
+        existing_ld_path = env.get("LD_LIBRARY_PATH", "")
+        paths = [torch_lib_path, cudnn_lib_path]
+        if existing_ld_path:
+            paths.append(existing_ld_path)
 
+        env["LD_LIBRARY_PATH"] = ":".join(paths)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
         if result.returncode != 0:
             print("Error running GNINA:", flush=True)
             print(result.stderr)
