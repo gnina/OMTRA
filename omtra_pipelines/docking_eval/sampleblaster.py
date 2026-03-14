@@ -98,6 +98,12 @@ def parse_args():
         default=None,
         help="Path to crossdocked dataset (default: None)"
     )
+    parser.add_argument(
+        "--com_offset_magnitude",
+        type=float,
+        default=0.0,
+        help="Magnitude of center of mass offset (default: 0.0)"
+    )
     
     return parser.parse_args()
 
@@ -156,7 +162,8 @@ def generate_commands(chunks, chunk_files, args):
                 f'--output_dir={cmd_output_dir}',  # Output directory for this chunk and replicate
                 f'--plinder_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder',
                 f'--split={args.split}',
-                f'--dataset={args.dataset}'
+                f'--dataset={args.dataset}', 
+                f'--com_offset_magnitude={args.com_offset_magnitude}',
             ]
 
             if args.crossdocked_path is not None:
