@@ -6,7 +6,8 @@ import numpy as np
 from pathlib import Path
 
 # from rdkit import Chem
-import bitbirch.bitbirch as bb
+# Import the concrete module; bitbirch.bitbirch package __init__ is empty in this repo.
+import bitbirch.bitbirch.bitbirch as bb
 # import bitbirch.plotting_utils as plotting_utils
 # import pandas as pd
 
