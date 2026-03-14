@@ -51,4 +51,10 @@ python routines/train.py
     model.cat_loss_weight=0.8 \
     model.time_scaled_loss=true
     model/aux_losses=pairs \
+    crop_min_distance=4.0 \
+    crop_max_distance=10.0 \
+    alpha=3.0 \
+    beta=3.0
 ```
+
+For Plinder dynamic cropping, all four values must be set (`crop_min_distance`, `crop_max_distance`, `alpha`, `beta`).
