@@ -75,6 +75,7 @@ def parse_args():
     sampling.add_argument("--max_batch_size", type=int, default=500, help='Maximum number of systems to sample per batch.')
     sampling.add_argument("--bs_per_gbmem", type=float, default=None, help='Batch size per GB/EM on the GPU.')
     
+    sampling.add_argument("--com_offset_magnitude", type=float, default=0.0, help="Magnitude of random offset to apply to the center of mass of generated ligands for metrics computation. Set to 0 to disable.")
 
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
@@ -547,6 +548,7 @@ def sample_system(ckpt_path: Path,
                   sys_idx_file: Path = None,
                   plinder_path: Path = None,
                   crossdocked_path: Path = None,
+                  com_offset_magnitude: float = 0.0,
                   **kwargs
                   ):
     
@@ -636,7 +638,17 @@ def sample_system(ckpt_path: Path,
 
     # set coms if protein is present
     if 'protein_identity' in task.groups_present and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed'])):
-        coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
+        #offsetting the COMS, each system in a random direction by same magnitude
+        coms = []
+        for g in g_list:
+            com = g.nodes['lig'].data['x_1_true'].mean(dim=0)
+            if com_offset_magnitude > 0:
+                direction = torch.randn(3) 
+                direction = direction / direction.norm()
+                offset = (direction * com_offset_magnitude).to(com.device)
+                coms.append(com + offset)
+            else:
+                coms.append(com)
     else:
         coms = None
     
@@ -971,6 +983,7 @@ def main(args):
                                                           dataset_name=args.dataset,
                                                           plinder_path=args.plinder_path,
                                                           crossdocked_path=args.crossdocked_path,
+                                                          com_offset_magnitude=args.com_offset_magnitude,
                                                           **kwargs)
         
         print("Finished sampling. Clearing torch GPU cache...\n")
