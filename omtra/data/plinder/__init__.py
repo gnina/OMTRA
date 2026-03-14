@@ -114,6 +114,10 @@ class LigandData:
         for k in xace_dict:
             if isinstance(xace_dict[k], np.ndarray):
                 xace_dict[k] = torch.from_numpy(xace_dict[k])
+            if xace_dict[k] is None and k in ['fixed_atom_mask', 'fixed_edge_mask']:
+                continue
+            elif xace_dict[k] is None and k not in ['fixed_atom_mask', 'fixed_edge_mask']:
+                raise ValueError(f"{k} is None but not in ['fixed_atom_mask', 'fixed_edge_mask']")
             if k == 'x':
                 xace_dict[k] = xace_dict[k].float()
             else:
