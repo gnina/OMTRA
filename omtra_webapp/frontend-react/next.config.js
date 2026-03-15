@@ -3,10 +3,9 @@ const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   // Only use assetPrefix in production (when deployed with /omtra path)
-  // assetPrefix: process.env.NODE_ENV === 'production' ? '/omtra' : undefined,
-  assetPrefix: undefined,
+  assetPrefix: process.env.NODE_ENV === 'production' ? '/omtra' : undefined,
   env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001',
+    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
   },
   // Proxy API requests to avoid CORS and connection issues
   async rewrites() {
@@ -14,7 +13,7 @@ const nextConfig = {
     // Check if we're in development mode (dev server) vs production (Docker)
     const isDev = process.env.NODE_ENV !== 'production';
     // Hardcode API URL to avoid environment variable issues in Docker
-    const apiUrl = isDev ? 'http://localhost:8001' : 'http://api:8000';
+    const apiUrl = isDev ? 'http://localhost:8000' : 'http://api:8000';
     return [
       {
         source: '/api/:path*',

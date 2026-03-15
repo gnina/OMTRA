@@ -6,7 +6,7 @@ import { Providers } from './providers';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'OMTRA Sampler',
+  title: 'OMTRA',
   description: 'Generate novel molecular structures using deep learning',
   icons: {
     icon: '🧪',

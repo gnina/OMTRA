@@ -109,7 +109,7 @@ export default function HomePage() {
           <div className="flex h-20 items-center gap-8">
             {/* Logo - Left Side */}
             <div className="flex items-center gap-3">
-              <img src="/logo.png" alt="OMTRA Logo" className="h-14 w-auto" />
+              <img src="/omtra/logo.png" alt="OMTRA Logo" className="h-14 w-auto" />
               <div className="flex flex-col">
                 <span className="text-3xl font-bold text-slate-900">OMTRA</span>
                 <span className="text-sm text-slate-500 font-medium -mt-1">Generative Structure-Based Drug Design</span>
@@ -169,8 +169,7 @@ export default function HomePage() {
             <div className="flex-1 text-sm text-amber-900">
               <p className="font-medium mb-1">Disclaimer</p>
               <p className="text-amber-800/90">
-                This is a work in progress.
-                For issues, feature requests, or to contribute, please visit our{' '}
+                This is a proof of concept server for demonstration purposes. All results are public, and jobs are automatically removed after 48 hours. For issues, feature requests, or to contribute, please visit our{' '}
                 <a
                   href="https://github.com/gnina/OMTRA"
                   target="_blank"
@@ -179,7 +178,7 @@ export default function HomePage() {
                 >
                   GitHub repository
                 </a>
-                {''}.
+                {' '}and open an issue.
               </p>
             </div>
           </div>

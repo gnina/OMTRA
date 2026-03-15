@@ -65,7 +65,7 @@ from omtra.utils.checkpoints import (
 # Configuration
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
 API_HOST = os.getenv('API_HOST', '0.0.0.0')
-API_PORT = int(os.getenv('API_PORT', 8001))
+API_PORT = int(os.getenv('API_PORT', 8000))
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 26214400))
 MAX_FILES_PER_JOB = int(os.getenv('MAX_FILES_PER_JOB', 3))
 JOB_TTL_HOURS = int(os.getenv('JOB_TTL_HOURS', 48))
