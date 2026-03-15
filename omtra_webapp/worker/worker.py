@@ -166,39 +166,40 @@ def _poll_job(job_id: str, poll_url: str, poll_interval: int = 1, max_polls: int
     return job
 
 
-def _strip_hetatm_from_pdb(pdb_file: Path, output_file: Optional[Path] = None) -> Path:
-    """Strip all HETATM records from a PDB file.
-    
-    This is useful for protein-conditioned sampling where co-crystallized ligands
-    in HETATM records can cause issues with PoseCheck/GNINA and aren't needed
-    since the reference ligand is provided separately.
-    
-    Args:
-        pdb_file: Path to input PDB file
-        output_file: Optional path for output. If None, creates a temp file.
-    
-    Returns:
-        Path to cleaned PDB file (may be same as input if no HETATM found)
+
+
+def _load_posecheck_with_timeout(pdb_path: str, timeout: int = 120):
+    """Load PoseCheck protein with a hard timeout.
+
+    Returns the initialized PoseCheck object, or None if loading timed out
+    or failed.  Uses a daemon thread so a hung hydride process won't block
+    the worker forever.
     """
-    with open(pdb_file, 'r') as f:
-        lines = f.readlines()
-    
-    # Filter out HETATM lines, keep ATOM, HEADER, TITLE, etc.
-    cleaned_lines = [line for line in lines if not line.startswith('HETATM')]
-    
-    # If no HETATM were found, return original file
-    if len(cleaned_lines) == len(lines):
-        return pdb_file
-    
-    # Write cleaned PDB
-    if output_file is None:
-        # Create temp file in same directory as original
-        output_file = pdb_file.parent / f"{pdb_file.stem}_no_hetatm.pdb"
-    
-    with open(output_file, 'w') as f:
-        f.writelines(cleaned_lines)
-    
-    return output_file
+    result = [None]
+    error = [None]
+
+    def _load():
+        try:
+            from posecheck import PoseCheck
+            pc = PoseCheck()
+            pc.load_protein_from_pdb(pdb_path)
+            result[0] = pc
+        except Exception as e:
+            error[0] = e
+
+    t = threading.Thread(target=_load, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+
+    if t.is_alive():
+        logging.warning(
+            f"PoseCheck protein loading timed out after {timeout}s for {pdb_path}"
+        )
+        return None
+    if error[0]:
+        logging.warning(f"PoseCheck protein loading failed: {error[0]}")
+        return None
+    return result[0]
 
 
 def _is_blank_svg(svg: str) -> bool:
@@ -847,7 +848,7 @@ def _run_gnina_score_only(lig_file, prot_file, env=None):
             pass
 
 
-def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, protein_file=None):
+def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, protein_file=None, posecheck_obj=None):
     from rdkit import Chem
     from rdkit.Chem import Descriptors
     
@@ -1041,34 +1042,16 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                     metrics['pb_failing_checks'] = [error_msg] if error_msg and len(error_msg) > 0 and error_msg != "error" else ['error']
                     logging.warning(f"Failed to compute pb_valid for {sample_name}: {e}")
             # Only compute protein-ligand interaction metrics for protein-involving jobs
-            # Ignore pharmacophore when computing metrics (same as protein-conditioned)
             if sampling_mode in PROTEIN_INVOLVING_MODES:
                 try:
-                    # PoseCheck requires PDB files; skip interaction metrics for CIF
                     if not str(protein_file).lower().endswith('.pdb'):
-                        # Metrics already initialized to None, so leave them as-is
                         pass
+                    elif posecheck_obj is None:
+                        logging.info(f"Skipping PoseCheck metrics for {sample_name} (protein loading failed or timed out)")
                     else:
-                        from posecheck import PoseCheck
-                        import logging as _logging
-                        try:
-                            pc = PoseCheck()
-                            pc.load_protein_from_pdb(str(protein_file))
-                        except Exception as pc_e:
-                            logging.warning(f"PoseCheck initialization failed for {sample_name}: {pc_e}")
-                            # Try to catch hydride output if possible by running it manually
-                            try:
-                                h_res = subprocess.run(f"hydride -i {protein_file} -o /tmp/test_h.pdb", shell=True, capture_output=True, text=True)
-                                logging.warning(f"Manual hydride test return code: {h_res.returncode}")
-                                logging.warning(f"Manual hydride test stderr: {h_res.stderr[:500]}")
-                            except Exception:
-                                pass
-                            raise pc_e
-                        # Use mol_to_preserve (un-sanitized) so PoseCheck can still compute 
-                        # metrics even if RDKit sanitization failed for some reasons.
+                        pc = posecheck_obj
                         pc.load_ligands_from_mols([mol_to_preserve])
                         
-                        # Clashes - compute separately so it works even if interactions fail
                         try:
                             clashes = pc.calculate_clashes()
                             try:
@@ -1079,8 +1062,6 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                             logging.warning(f"Failed to compute clashes for {sample_name}: {clash_e}")
                             metrics['clashes'] = None
                         
-                        # Raw interaction counts (sum of matching columns), not normalized
-                        # Wrap interactions separately so clashes can still be computed
                         try:
                             interactions = pc.calculate_interactions()
                             label_map = {
@@ -1107,14 +1088,13 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                                             val = float(interactions[matched_cols].sum(axis=1)[0])
                                         except Exception:
                                             val = 0.0
-                                    metrics[i_type] = int(round(val))  # Convert interaction counts to integers
+                                    metrics[i_type] = int(round(val))
                                 else:
-                                    metrics[i_type] = 0  # Set to integer 0 when no interactions found
+                                    metrics[i_type] = 0
                         except Exception as int_e:
                             logging.warning(f"Failed to compute interaction metrics for {sample_name}: {int_e}")
-                            # Leave interaction metrics as None (already initialized)
                 except Exception as e:
-                    logging.warning(f"PoseCheck initialization failed for {sample_name}: {e}")
+                    logging.warning(f"PoseCheck metrics failed for {sample_name}: {e}")
             
             # Compute gnina scores - reached for both PDB and CIF (if converted to PDB)
             # This is now outside the PDB-only PoseCheck block
@@ -1667,18 +1647,6 @@ def run_omtra_sampler(
             except Exception as conv_e:
                 job_logger.warning(f"CIF→PDB conversion failed: {conv_e}", exc_info=True)
         
-        # Strip HETATM records from PDB files to avoid issues with PoseCheck/GNINA
-        # Co-crystallized ligands in HETATM aren't needed since reference ligand is provided separately
-        if protein_file and str(protein_file).lower().endswith('.pdb'):
-            try:
-                original_protein_file = protein_file
-                cleaned_protein_file = _strip_hetatm_from_pdb(Path(protein_file))
-                if cleaned_protein_file != Path(protein_file):
-                    protein_file = str(cleaned_protein_file)
-                    job_logger.info(f"Stripped HETATM records from protein file, using cleaned version: {cleaned_protein_file.name}")
-            except Exception as strip_e:
-                job_logger.warning(f"Failed to strip HETATM from PDB file: {strip_e}, using original file")
-        
         # Prepare for parallel diagram generation
         diagram_threads = []
         diagram_lock = threading.Lock()
@@ -1739,6 +1707,18 @@ def run_omtra_sampler(
                     diagram_results[sample_idx] = 'error'
                 job_logger.warning(f"Error generating diagram for {sdf_file_path.name}: {e}")
         
+        # Pre-load PoseCheck protein once for all samples
+        posecheck_obj = None
+        if sampling_mode in PROTEIN_INVOLVING_MODES and protein_file and str(protein_file).lower().endswith('.pdb'):
+            try:
+                posecheck_obj = _load_posecheck_with_timeout(str(protein_file), timeout=120)
+                if posecheck_obj is None:
+                    job_logger.warning("PoseCheck protein loading timed out or failed; interaction metrics will be skipped")
+                else:
+                    job_logger.info("PoseCheck protein loaded successfully")
+            except Exception as pc_load_e:
+                job_logger.warning(f"Failed to pre-load PoseCheck protein: {pc_load_e}; interaction metrics will be skipped")
+
         # Save individual sample files and compute metrics
         for i, mol in enumerate(molecules):
             individual_file = outputs_dir / f"sample_{i:03d}.sdf"
@@ -1763,7 +1743,8 @@ def run_omtra_sampler(
                 mol, 
                 sample_name=sample_name,
                 sampling_mode=sampling_mode,
-                protein_file=protein_file
+                protein_file=protein_file,
+                posecheck_obj=posecheck_obj
             )
             
             # Mark invalid molecules in metrics with Warning
