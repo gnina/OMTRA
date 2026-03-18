@@ -337,11 +337,10 @@ def compute_metrics(system_pairs: List[SampledSystem],
                     ):
     
     env = os.environ.copy()
-    # # Use PyTorch's bundled cuDNN libraries for GNINA compatibility
-    # import torch
-    # torch_lib_path = str(Path(torch.__file__).parent / "lib")
-    # existing_ld_path = env.get('LD_LIBRARY_PATH', '')
-    # env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
+    # Use PyTorch's bundled cuDNN libraries for GNINA compatibility
+    torch_lib_path = str(Path(torch.__file__).parent / "lib")
+    existing_ld_path = env.get('LD_LIBRARY_PATH', '')
+    env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
 
     # dataframe for metrics
     rows = []
