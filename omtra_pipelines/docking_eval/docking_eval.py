@@ -253,7 +253,8 @@ def rmsd(gen_lig, true_lig):
 
 
 def compute_pharmacophore_match(gen_ligs, true_pharm, threshold=1.0):
-    results = {"perfect_pharm_match": [],
+    results = {"n_pharms": [],
+               "perfect_pharm_match": [],
                "frac_true_pharms_matched": []}
     
     for gen_lig in gen_ligs:
@@ -264,6 +265,7 @@ def compute_pharmacophore_match(gen_ligs, true_pharm, threshold=1.0):
 
         except Exception as e:
             print(f"Failed to get pharmacophores for generated ligand: {e}")
+            results['n_pharms'].append(None)
             results['perfect_pharm_match'].append(None)
             results['frac_true_pharms_matched'].append(None)
             continue
@@ -283,6 +285,8 @@ def compute_pharmacophore_match(gen_ligs, true_pharm, threshold=1.0):
         n_true_pharms = true_coords.shape[0]
         all_true_matched = matching_pharms.any(axis=1).all()
 
+        results['n_pharms'].append(n_true_pharms)
+        
         if n_true_pharms == 0:
             n_true_pharms = 1
 
@@ -526,9 +530,9 @@ def compute_metrics(system_pairs: List[SampledSystem],
                                                  timeout=timeout,
                                                  gen_ligs=valid_gen_ligs,   # TODO: will this work if we pass all ligands not just the RDKit valid ones?
                                                  true_pharm=data['true_pharm'])
-                
-                pharm_results = pd.DataFrame(pharm_results, index=valid_lig_indices)
-                metrics.loc[valid_lig_indices, pharm_results.columns] = pharm_results
+                if pharm_results is not None:
+                    pharm_results = pd.DataFrame(pharm_results, index=valid_lig_indices)
+                    metrics.loc[valid_lig_indices, pharm_results.columns] = pharm_results
             
     return metrics
 
@@ -704,6 +708,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
         true_prot_file = sys_gt_dir / "protein_0.pdb"
         true_prot_id = "protein_0"
 
+
         if 'pharmacophore' in task.groups_present:
             pharm = replicates[0].get_pharmacophore_from_graph(g=g_list[sys_id].to('cpu'), kind='gt')
 
@@ -808,7 +813,7 @@ def system_pairs_from_path(samples_dir: Path,
         if 'pharmacophore' in task.groups_present:
             pharm = {}
             true_pharm_file = sys_dir / "pharmacophore.xyz"
-
+            pharm_missing = False
             if not os.path.exists(true_pharm_file):
                 print(f"WARNING: Missing pharmacophore file for system {sys_idx}. Depending on downstream metrics this may cause pipeline failures.")
                 pharm_missing = True
