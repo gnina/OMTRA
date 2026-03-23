@@ -225,14 +225,17 @@ def compute_metrics(
 
             # Sanitize ground truth ligand
             true_lig = data["true_lig"]
-            try:
-                Chem.SanitizeMol(true_lig)
-            except Exception as e:
+            if true_lig is not None:
+                try:
+                    Chem.SanitizeMol(true_lig)
+                except Exception as e:
+                    metrics_to_run["ground_truth"] = False
+                    print(
+                        f"An error encountered during sanitization of true ligand for system {sys_id}: {e}"
+                    )
+                    print("Automatically disabling ground truth metric computation. \n")
+            else:
                 metrics_to_run["ground_truth"] = False
-                print(
-                    f"An error encountered during sanitization of true ligand for system {sys_id}: {e}"
-                )
-                print("Automatically disabling ground truth metric computation. \n")
 
             all_indices = pd.MultiIndex.from_product(
                 [[sys_id], [data["gen_prot_id"]], data["gen_ligs_ids"]],
@@ -501,13 +504,11 @@ def system_pairs_from_path(
         sys_pair = {}
 
         true_lig_file = sys_dir / "ligand.sdf"
-        if not os.path.exists(true_lig_file):
-            print(
-                f"WARNING: Missing ground truth ligand file for system {sys_idx}. "
-                "Depending on downstream metrics this may cause pipeline failures."
-            )
-
-        true_lig = Chem.SDMolSupplier(str(true_lig_file), sanitize=False, removeHs=False)[0]
+        if os.path.exists(true_lig_file):
+            true_lig = Chem.SDMolSupplier(str(true_lig_file), sanitize=False, removeHs=False)[0]
+        else:
+            true_lig = None
+            true_lig_file = None
 
         if has_protein:
             true_prot_file = sys_dir / "protein_0.pdb"
