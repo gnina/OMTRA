@@ -38,6 +38,12 @@ def parse_args():
         required=True,
         help='Number of replicate commands per chunk'
     )
+    parser.add_argument(
+        '--bs_per_gbmem',
+        type=float,
+        default=5.0,
+        help='Target batch size per GB of GPU memory for docking_eval.py (default: 5.0)'
+    )
     
     parser.add_argument(
         '--ckpt_path', 
@@ -104,7 +110,24 @@ def parse_args():
         default=0.0,
         help="Magnitude of center of mass offset (default: 0.0)"
     )
-    
+    parser.add_argument(
+        "--plinder_path",
+        type=Path,
+        default='/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder', 
+        help="Path to plinder dataset"
+    )
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=None,
+        help="Beta distribution alpha parameter for Plinder dynamic cropping (default: None)"
+    )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=None,
+        help="Beta distribution beta parameter for Plinder dynamic cropping (default: None)"
+    )
     return parser.parse_args()
 
 
@@ -158,14 +181,18 @@ def generate_commands(chunks, chunk_files, args):
                 f'--sys_idx_file={chunk_file}',
                 f'--n_replicates={args.reps_per_cmd}',  # Each command handles 1 replicate
                 f'--n_samples={len(chunks[chunk_idx])}',  # Number of systems in this chunk
-                f'--bs_per_gbmem=5',  # Example fixed argument; adjust as needed
+                f'--bs_per_gbmem={args.bs_per_gbmem}',
                 f'--output_dir={cmd_output_dir}',  # Output directory for this chunk and replicate
-                f'--plinder_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder',
+                f'--plinder_path={args.plinder_path}',
                 f'--split={args.split}',
                 f'--dataset={args.dataset}', 
                 f'--com_offset_magnitude={args.com_offset_magnitude}',
             ]
 
+            if args.alpha is not None:
+                cmd_parts.append(f'--alpha={args.alpha}')
+            if args.beta is not None:
+                cmd_parts.append(f'--beta={args.beta}')
             if args.crossdocked_path is not None:
                 cmd_parts.append(f'--crossdocked_path={args.crossdocked_path}')
             
