@@ -98,14 +98,15 @@ class PlinderDataset(ZarrDataset):
         # Dynamic cropping: only applied during training when both distances are specified
         self.crop_min_distance = crop_min_distance
         self.crop_max_distance = crop_max_distance
-        self.alpha = alpha
-        self.beta = beta
+        # Convert string 'None' to actual None (defensive check, in case OmegaConf converts it)
+        self.alpha = None if alpha == 'None' or alpha is None else alpha
+        self.beta = None if beta == 'None' or beta is None else beta
         self.dynamic_crop = (
             crop_min_distance is not None 
             and crop_max_distance is not None
-            and alpha is not None
-            and beta is not None
-            and split == 'train'
+            and self.alpha is not None
+            and self.beta is not None
+            and split in ['train', 'test']
         )
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
