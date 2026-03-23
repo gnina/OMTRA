@@ -61,7 +61,7 @@ def build_metrics_command(task_info: dict, config: dict) -> str:
         task_info: One entry from manifest["metrics_tasks"].
         config: The full pipeline config dict.
     """
-    metrics_opts = config.get("metrics", {})
+    metrics_opts = config.get("metrics") or {}
     paths = config.get("paths", {})
 
     # Determine n_samples for metrics: dataset mode uses chunk n_systems,
@@ -146,7 +146,7 @@ def build_cli_metrics_command(task_info: dict, config: dict) -> str:
         task_info: One entry from manifest["metrics_tasks"].
         config: The full pipeline config dict.
     """
-    metrics_opts = config.get("metrics", {})
+    metrics_opts = config.get("metrics") or {}
 
     parts = [
         "python",
