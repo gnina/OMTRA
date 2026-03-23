@@ -131,12 +131,15 @@ class VectorField(nn.Module):
         ]
         modality_present_space = set()
         modality_generated_space = set()
+        partial_modality_fixed_space = set()
         for task_class in task_classes:
             for m in task_class.modalities_fixed:
                 modality_present_space.add(m.name)
             for m in task_class.modalities_generated:
                 modality_present_space.add(m.name)
                 modality_generated_space.add(m.name)
+            for m in task_class.partial_modalities_fixed:
+                partial_modality_fixed_space.add(m)
 
         modality_present_space = sorted(list(modality_present_space))
         modality_generated_space = sorted(list(modality_generated_space))

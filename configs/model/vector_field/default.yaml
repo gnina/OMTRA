@@ -29,3 +29,9 @@ use_dst_feats:                 false
 dst_feat_msg_reduction_factor: 4
 rebuild_edges:                 true
 res_id_embed_dim:              64
+fixed_coord_max_std:           0.0
+fixed_token_max_prob:          0.0
+marginal_path:                 ${pharmit_path}/train_marginals.npz
+marginal_keys:
+  lig_cond_a: lig_cond_a_marginal
+  lig_e_condensed: lig_e_marginal
