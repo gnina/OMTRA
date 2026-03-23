@@ -76,6 +76,9 @@ def parse_args():
     sampling.add_argument("--bs_per_gbmem", type=float, default=None, help='Batch size per GB/EM on the GPU.')
     
     sampling.add_argument("--com_offset_magnitude", type=float, default=0.0, help="Magnitude of random offset to apply to the center of mass of generated ligands for metrics computation. Set to 0 to disable.")
+    
+    sampling.add_argument("--alpha", type=float, default=None, help="Beta distribution alpha parameter for Plinder dynamic cropping (overrides config).")
+    sampling.add_argument("--beta", type=float, default=None, help="Beta distribution beta parameter for Plinder dynamic cropping (overrides config).")
 
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
@@ -590,7 +593,14 @@ def sample_system(ckpt_path: Path,
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
         
-        cfg = quick_load.load_cfg(overrides=['task_group=protein'], plinder_path=plinder_path)
+        # Build config overrides, including alpha/beta if provided
+        overrides = ['task_group=protein']
+        if args.alpha is not None:
+            overrides.append(f'alpha={args.alpha}')
+        if args.beta is not None:
+            overrides.append(f'beta={args.beta}')
+        
+        cfg = quick_load.load_cfg(overrides=overrides, plinder_path=plinder_path)
         plinder_datamodule = datamodule_from_config(cfg)    
         dataset = plinder_datamodule.load_dataset(split).datasets['plinder'][plinder_link_version]
         
