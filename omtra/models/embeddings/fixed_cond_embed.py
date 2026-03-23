@@ -118,14 +118,17 @@ class FixedConditionEmbedder(nn.Module):
         # create edge embedders
         self.edge_embedding = nn.ModuleDict()
         cat_edge_entity_names = {m.entity_name for m in partial_modality_fixed_cls if m.graph_entity == "edge"}
+        self.cat_edge_entity_names = cat_edge_entity_names
         for etype in edge_types:
+            has_coord = any((m.data_key == "x" and f"{m.entity_name}_to_{m.entity_name}" == etype) for m in partial_modality_fixed_cls)
             if etype in cat_edge_entity_names:
-                # categorical edge: prob(1) + token_emb(token_dim) [+ dist_emb(token_dim) if also has coord]
+                # categorical edge: prob(1) + token_emb(token_dim)
                 input_dim = token_dim + 1
-                if any((m.data_key == "x" and f"{m.entity_name}_to_{m.entity_name}" == etype) for m in partial_modality_fixed_cls):
-                    input_dim += token_dim
+                if has_coord:
+                    # also has pairwise distances: + sigma(1) + dist_emb(token_dim)
+                    input_dim += 1 + token_dim
             else:
-                # coord-only structural edge (e.g., lig_to_lig): sigma(1) + dist_emb(token_dim)
+                # coord-only structural edge: sigma(1) + dist_emb(token_dim)
                 input_dim = 1 + token_dim
             self.edge_embedding[etype] = nn.Sequential(
                 nn.Linear(input_dim, n_hidden_edge_feats),
@@ -265,6 +268,13 @@ class FixedConditionEmbedder(nn.Module):
                 edge_masks[etype] = edge_mask
             if etype not in fixed_edge_features:
                 fixed_edge_features[etype] = []
+
+            # If this etype also has categorical features but they weren't added (inactive task),
+            # zero-pad to maintain consistent input_dim for edge_embedding
+            if etype in self.cat_edge_entity_names and len(fixed_edge_features[etype]) == 0:
+                fixed_edge_features[etype].append(
+                    torch.zeros(dists.shape[0], 1 + self.token_dim, device=dists.device)
+                )
 
             # per-edge sigma: average of src and dst node sigmas
             sigma_edges = ((sigma_per_ntype[ntype][src] + sigma_per_ntype[ntype][dst]) / 2) * edge_mask.unsqueeze(-1)
