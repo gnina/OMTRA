@@ -34,6 +34,7 @@ from omtra.constants import (
 
 from omtra.data.graph.utils import get_batch_idxs
 from omtra.utils.graph import g_local_scope
+from omtra.models.embeddings.fixed_cond_embed import FixedConditionEmbedder
 
 # from line_profiler import LineProfiler, profile
 
@@ -73,6 +74,12 @@ class VectorField(nn.Module):
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
         res_id_embed_dim: int = 64, 
+        fixed_coord_max_std: float = 0.0,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: float = 0.0,
+        fixed_token_prob: Optional[float] = None,
+        marginal_path: str = None,
+        marginal_keys: dict = None,
         pharm_pos_std_flag: bool = False,
     ):
         super().__init__()
@@ -92,6 +99,11 @@ class VectorField(nn.Module):
         self.has_mask = has_mask
         self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
+
+        self.fixed_coord_max_std = fixed_coord_max_std
+        self.fixed_coord_std = fixed_coord_std
+        self.fixed_token_max_prob = fixed_token_max_prob
+        self.fixed_token_prob = fixed_token_prob
         self.pharm_pos_std_flag = pharm_pos_std_flag
 
         self.convs_per_update = convs_per_update
@@ -128,6 +140,7 @@ class VectorField(nn.Module):
 
         modality_present_space = sorted(list(modality_present_space))
         modality_generated_space = sorted(list(modality_generated_space))
+        partial_modality_fixed_space = sorted(list(partial_modality_fixed_space))
 
         modalities_present_cls = [
             name_to_modality(modality_name) for modality_name in modality_present_space
@@ -136,6 +149,25 @@ class VectorField(nn.Module):
             name_to_modality(modality_name)
             for modality_name in modality_generated_space
         ]
+        partial_modality_fixed_cls = [
+            name_to_modality(modality_name)
+            for modality_name in partial_modality_fixed_space
+        ]
+
+        self.fixed_cond_embedder = FixedConditionEmbedder(
+            partial_modality_fixed_cls=partial_modality_fixed_cls,
+            token_dim=self.token_dim,
+            n_hidden_scalars=self.n_hidden_scalars,
+            n_hidden_edge_feats=self.n_hidden_edge_feats,
+            fake_atoms=self.fake_atoms,
+            res_id_embed_dim=res_id_embed_dim,
+            fixed_coord_max_std=self.fixed_coord_max_std,
+            fixed_coord_std=self.fixed_coord_std,
+            fixed_token_max_prob=self.fixed_token_max_prob,
+            fixed_token_prob=self.fixed_token_prob,
+            marginal_path=marginal_path,
+            marginal_keys=marginal_keys,
+            )
 
         # get the set of all nodes present in our graphs
         self.node_types = set(
