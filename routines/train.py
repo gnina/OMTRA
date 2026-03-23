@@ -190,10 +190,14 @@ def main(cfg: DictConfig):
             # Strip + prefix (append) and ~ prefix (delete)
             if override.startswith('+') or override.startswith('~'):
                 override = override[1:]
+            if override.startswith('checkpoint='):
+                continue
             cleaned_overrides.append(override)
         cli_cfg = OmegaConf.from_dotlist(cleaned_overrides)
         cfg = OmegaConf.merge(original_cfg, cli_cfg)
-        cfg.og_run_dir = str(run_dir)
+        with open_dict(cfg):
+            cfg.og_run_dir = str(run_dir)
+            cfg.checkpoint = str(ckpt_path)
 
     # merge_task_spec populates single_dataset_configs from separate YAML files
     # This is needed for both fresh runs and resumed runs
