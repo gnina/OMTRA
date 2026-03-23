@@ -69,6 +69,7 @@ def build_manifest(config: dict, output_dir: Path) -> dict:
 
         metrics_tasks[str(i)] = {
             "chunk_id": i,
+            "n_systems": len(chunk),
             "samples_dir": str(output_dir / "samples" / f"chunk_{i}"),
             "output_dir": str(output_dir / "metrics" / f"chunk_{i}"),
         }
