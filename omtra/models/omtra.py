@@ -73,6 +73,7 @@ class OMTRA(pl.LightningModule):
         og_run_dir: Optional[str] = None,
         fake_atom_p: float = 0.0,
         distort_p: float = 0.0,
+        distort_t: float = 0.5,
         eval_config: Optional[DictConfig] = None,
         zero_bo_loss_weight: float = 1.0,
         train_t_dist: str = 'uniform',
@@ -81,11 +82,11 @@ class OMTRA(pl.LightningModule):
         time_scaled_loss: bool = False,
         pharm_pos_std: float = 0.0,
         pharm_var: float = 0.0,
+        scheduler_config: Optional[DictConfig] = None,
         lr_warmup_steps: int = 0,
         prot_pos_std: float = 0.0, #standard deviation for adding noise to protein atom positions
         bernoulli_mask_p: float = 0.0, # probability of keeping each atom fixed in Bernoulli masking for partial modality conditioning (0.0 = disabled)
 
-        scheduler_config: Optional[DictConfig] = None,
     ):
         super().__init__()
 
@@ -103,6 +104,7 @@ class OMTRA(pl.LightningModule):
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = self.fake_atom_p > 0
         self.distort_p = distort_p
+        self.distort_t = distort_t
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
@@ -416,12 +418,9 @@ class OMTRA(pl.LightningModule):
         )
 
         if self.distort_p > 0.0:
-            t_mask = (t > 0.5)[node_batch_idxs["lig"]]
+            t_mask = (t > self.distort_t)[node_batch_idxs["lig"]]
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
-            if "lig_x" in task_class.partial_modalities_fixed:
-                distort_mask = distort_mask & t_mask.unsqueeze(-1) & (~g.nodes["lig"].data['atom_mask_1_true'].unsqueeze(-1)) # don't apply geometry distortion to fixed atoms if ligand coordinate modality is partially fixed
-            else: 
-                distort_mask = distort_mask & t_mask.unsqueeze(-1)
+            distort_mask = distort_mask & t_mask.unsqueeze(-1)
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
         
         # add noise to pharmacophore coordinates
@@ -603,7 +602,7 @@ class OMTRA(pl.LightningModule):
             }
 
         # Linear LR warmup
-        if self.lr_warmup_steps > 0:
+        if self.lr_warmup_steps and self.lr_warmup_steps > 0:
             def lr_lambda(current_step: int):
                 if current_step < self.lr_warmup_steps:
                     return float(current_step + 1) / float(self.lr_warmup_steps)
@@ -618,7 +617,6 @@ class OMTRA(pl.LightningModule):
                     "name": "lr_warmup",
                 },
             }
-
         return optimizer
 
     def apply_bernoulli_mask(self, g: dgl.DGLHeteroGraph, task_class: Task) -> dgl.DGLHeteroGraph:
@@ -743,9 +741,6 @@ class OMTRA(pl.LightningModule):
         n_lig_atoms_mean: Union[float, None] = None,
         n_lig_atoms_std: Union[float, None] = None,
         prot_pos_std: Optional[torch.Tensor] = None,
-        # Stage 5: Corruption-aware remasking
-        corruption_remasking: bool = False,
-        corruption_threshold: float = 0.5,
         fixed_coord_max_std: Optional[float] = None,
         fixed_coord_std: Optional[float] = None,
         fixed_token_max_prob: Optional[float] = None,
@@ -972,35 +967,59 @@ class OMTRA(pl.LightningModule):
                     atom_mask_old = g_i_copy.nodes['lig'].data['atom_mask_1_true'].bool()
 
                     n_fixed_atoms = atom_mask_old.sum().item()
-                    atom_mask_new = torch.zeros(n_lig_atoms[g_idx], dtype=torch.bool, device=g_i.device) 
+                    atom_mask_new = torch.zeros(n_lig_atoms[g_idx], dtype=torch.bool, device=g_i.device)
                     atom_mask_new[:n_fixed_atoms] = True
-
-                    # if n_lig_atoms[g_idx].item() > atom_mask_old.shape[0]:
-                    #     atom_pad = torch.zeros(n_lig_atoms[g_idx].item() - atom_mask_old.shape[0], dtype=torch.bool, device=atom_mask_old.device)
-                    #     atom_mask_new = torch.cat([atom_mask_old, atom_pad])
-                    # else:
-                    #     atom_mask_new = atom_mask_old[:n_lig_atoms[g_idx].item()]
                     g_i.nodes['lig'].data['atom_mask_1_true'] = atom_mask_new.long()
 
-                    src, dst = edge_idxs
-                    edge_mask_new = atom_mask_new[src] & atom_mask_new[dst]
+                    # Create vectorized mapping from old atom indices to new atom indices
+                    fixed_atoms_old = torch.where(atom_mask_old)[0]
+                    old_to_new = torch.zeros(atom_mask_old.shape[0], dtype=torch.long, device=g_i.device)
+                    old_to_new[fixed_atoms_old] = torch.arange(n_fixed_atoms, device=g_i.device)
 
-                    n_gt_lig_atoms =  atom_mask_old.shape[0] - n_fake_atoms_gt[g_idx]
-                    src_old, dst_old = build_lig_edge_idxs(n_gt_lig_atoms)
-                    edge_mask_old = atom_mask_old[src_old] & atom_mask_old[dst_old]
-                    g_i.edges['lig_to_lig'].data['edge_mask_1_true'] = edge_mask_new.long()
+                    # Get edge indices for old graph (edges don't include fake atoms)
+                    src_old, dst_old = build_lig_edge_idxs(atom_mask_old.shape[0]).to(g_i.device)
+
+                    # Use original graph's edge_mask_1_true, which marks fixed edges in the old graph
+                    # (not all edges in the dense fully-connected graph)
+                    edge_mask_old = g_i_copy.edges['lig_to_lig'].data['edge_mask_1_true'].bool()
+                    src_old_fixed = src_old[edge_mask_old]
+                    dst_old_fixed = dst_old[edge_mask_old]
+
+                    # Map old fixed edge endpoints to new atom indices
+                    src_new_from_old = old_to_new[src_old_fixed]
+                    dst_new_from_old = old_to_new[dst_old_fixed]
+
+                    # Compute edge indices in new graph using build_lig_edge_idxs ordering:
+                    # Upper triangle edges first, then lower triangle edges
+                    n_new = n_lig_atoms[g_idx].item()
+                    n_upper_new = n_new * (n_new - 1) // 2
+                    is_upper = src_new_from_old < dst_new_from_old
+
+                    # Upper triangle formula: src*n - src*(src+1)//2 + dst - src - 1
+                    upper_idx = (src_new_from_old * n_new
+                                 - (src_new_from_old * (src_new_from_old + 1)) // 2
+                                 + dst_new_from_old - src_new_from_old - 1)
+
+                    # Lower triangle: offset + corresponding upper triangle index (with src/dst swapped)
+                    lower_upper_idx = (dst_new_from_old * n_new
+                                       - (dst_new_from_old * (dst_new_from_old + 1)) // 2
+                                       + src_new_from_old - dst_new_from_old - 1)
+                    lower_idx = n_upper_new + lower_upper_idx
+
+                    edge_indices_new = torch.where(is_upper, upper_idx, lower_idx)
+
+                    # Set edge_mask_1_true for new graph (marking which edges are fixed bonds)
+                    edge_mask_new_bonds = torch.zeros(g_i.num_edges('lig_to_lig'), dtype=torch.long, device=g_i.device)
+                    edge_mask_new_bonds[edge_indices_new] = 1
+                    g_i.edges['lig_to_lig'].data['edge_mask_1_true'] = edge_mask_new_bonds
 
                     for m_name in task.partial_modalities_fixed:
                         m = name_to_modality(m_name)
                         if m.is_node:
-                            dks = [dk for dk in g.nodes['lig'].data.keys() if m.data_key in dk]
-                            for dk in dks:
-                                g_i.nodes['lig'].data[dk][atom_mask_new] = g_i_copy.nodes['lig'].data[dk][atom_mask_old]
+                            g_i.nodes['lig'].data[f"{m.data_key}_1_true"][atom_mask_new] = g_i_copy.nodes['lig'].data[f"{m.data_key}_1_true"][atom_mask_old]
                         else:
-                            dks = [dk for dk in g.edges['lig_to_lig'].data.keys() if m.data_key in dk]
-                            for dk in dks:
-                                g_i.edges['lig_to_lig'].data[dk][edge_mask_new] = g_i_copy.edges['lig_to_lig'].data[dk][edge_mask_old]
-
+                            old_data = g_i_copy.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][edge_mask_old]
+                            g_i.edges['lig_to_lig'].data[f"{m.data_key}_1_true"][edge_indices_new] = old_data
         
         add_pharm = "pharmacophore" in groups_generated
         if protein_present and add_pharm:
@@ -1043,7 +1062,7 @@ class OMTRA(pl.LightningModule):
                     ntype="pharm",
                 )
 
-        # TODO: batch the graphs
+        # TODO: batch the graphs 
         g = dgl.batch(g_flat).to(device)
         com_batch = torch.stack(coms_flat, dim=0).to(device)
 
@@ -1073,16 +1092,6 @@ class OMTRA(pl.LightningModule):
             dk = m.data_key
             data_src.data[f"{dk}_t"] = data_src.data[f"{dk}_0"]
 
-            if m.name in task.partial_modalities_fixed:
-                if m.is_node:
-                    mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
-                    gt_labels = g.nodes[m.entity_name].data[f'{m.data_key}_1_true']
-                else:
-                    # Take upper triangle for edge modalities
-                    mask = g.edges[m.entity_name].data['edge_mask_1_true'].bool()
-                    gt_labels = g.edges[m.entity_name].data[f'{m.data_key}_1_true']
-                data_src.data[f"{dk}_t"][mask] = gt_labels[mask]
-
         # set x_1_true to x_t for modalities fixed
         for m in task.modalities_fixed:
             if not m.is_node:
@@ -1109,8 +1118,6 @@ class OMTRA(pl.LightningModule):
             stochastic_sampling=stochastic_sampling,
             noise_scaler=noise_scaler,
             eps=eps,
-            corruption_remasking=corruption_remasking,
-            corruption_threshold=corruption_threshold,
             fixed_coord_max_std=fixed_coord_max_std,
             fixed_coord_std=fixed_coord_std,
             fixed_token_max_prob=fixed_token_max_prob,
@@ -1199,9 +1206,6 @@ class OMTRA(pl.LightningModule):
         noise_scaler: float = 1.0,
         eps: float = 0.01,
         n_lig_atom_margin: Union[float, None] = None,
-        # Stage 5: Corruption-aware remasking
-        corruption_remasking: bool = False,
-        corruption_threshold: float = 0.5,
         fixed_coord_max_std: Optional[float] = None,
         fixed_coord_std: Optional[float] = None,
         fixed_token_max_prob: Optional[float] = None,
@@ -1240,8 +1244,6 @@ class OMTRA(pl.LightningModule):
                                             noise_scaler=noise_scaler,
                                             eps=eps,
                                             n_lig_atom_margin=n_lig_atom_margin,
-                                            corruption_remasking=corruption_remasking,
-                                            corruption_threshold=corruption_threshold,
                                             fixed_coord_max_std=fixed_coord_max_std,
                                             fixed_coord_std=fixed_coord_std,
                                             fixed_token_max_prob=fixed_token_max_prob,
@@ -1269,6 +1271,10 @@ class OMTRA(pl.LightningModule):
                                             noise_scaler=noise_scaler,
                                             eps=eps,
                                             n_lig_atom_margin=n_lig_atom_margin,
+                                            fixed_coord_max_std=fixed_coord_max_std,
+                                            fixed_coord_std=fixed_coord_std,
+                                            fixed_token_max_prob=fixed_token_max_prob,
+                                            fixed_token_prob=fixed_token_prob
                                             )
 
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):

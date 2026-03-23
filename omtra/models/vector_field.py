@@ -779,28 +779,10 @@ class VectorField(nn.Module):
                 continue
             if m.data_key == "x":
                 node_pos = node_positions[m.entity_name]
-                # masking for fixed partial modalities of fixed fragments
-                if m.name in task_class.partial_modalities_fixed:
-                    mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
-                    gt_pos = g.nodes[m.entity_name].data['x_1_true']
-                    node_pos[mask] = gt_pos[mask]
                 dst_dict[m.name] = node_pos
 
             elif m.is_categorical:
                 dst_dict[m.name] = logits[m.name]
-
-                # masking for fixed partial modalities of fixed fragments
-                if m.name in task_class.partial_modalities_fixed:
-                    if m.is_node:
-                        mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
-                        gt_labels = g.nodes[m.entity_name].data[f'{m.data_key}_1_true']
-                    else:
-                        # Take upper triangle for edge modalities
-                        mask = g.edges[m.entity_name].data['edge_mask_1_true'][upper_edge_mask[m.entity_name]].bool()
-                        gt_labels = g.edges[m.entity_name].data[f'{m.data_key}_1_true'][upper_edge_mask[m.entity_name]]
-                    one_hot = torch.zeros_like(dst_dict[m.name])
-                    one_hot[torch.arange(dst_dict[m.name].size(0), device=dst_dict[m.name].device), gt_labels] = 1.0
-                    dst_dict[m.name][mask] = one_hot[mask]
                 if apply_softmax:
                     dst_dict[m.name] = torch.softmax(
                         dst_dict[m.name], dim=-1
@@ -975,19 +957,6 @@ class VectorField(nn.Module):
                 **kwargs,
             )
 
-            if len(task.partial_modalities_fixed) > 0:
-                for m_name in task.partial_modalities_fixed:
-                    m = name_to_modality(m_name)
-                    if m.is_node:
-                        data_src = g.nodes['lig']
-                        mask = data_src.data['atom_mask_1_true'].bool()
-                    else:
-                        data_src = g.edges['lig_to_lig']
-                        mask = data_src.data['edge_mask_1_true'].bool()
-                
-                    data_src.data[f"{m.data_key}_t"][mask] = data_src.data[f"{m.data_key}_1_true"][mask]
-                    data_src.data[f"{m.data_key}_1_pred"][mask] = data_src.data[f"{m.data_key}_1_true"][mask]
-
             if visualize:
                 add_frame(g)
                 
@@ -1052,8 +1021,6 @@ class VectorField(nn.Module):
         stochastic_sampling: bool = False,
         noise_scaler: float = 1.0,
         eps: float = 0.01,
-        corruption_remasking: bool = False,
-        corruption_threshold: float = 0.5,
         fixed_coord_max_std: Optional[float] = None,
         fixed_coord_std: Optional[float] = None,
         fixed_token_max_prob: Optional[float] = None,
