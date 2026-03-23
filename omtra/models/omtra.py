@@ -209,7 +209,7 @@ class OMTRA(pl.LightningModule):
             checkpoint_dir = Path(log_dir) / "checkpoints"
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-            current_checkpoints = list(checkpoint_dir.glob("*.ckpt"))
+            current_checkpoints = [p for p in checkpoint_dir.glob("*.ckpt") if p.stem.startswith("batch_")]     # filter out last.ckpt and only keep batch checkpointss
             if self.global_rank == 0 and len(current_checkpoints) >= self.k_checkpoints:
                 current_checkpoints.sort(key=lambda x: int(x.stem.split("_")[-1]))
                 # remove the oldest checkpoint
