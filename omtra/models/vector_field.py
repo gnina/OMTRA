@@ -544,7 +544,10 @@ class VectorField(nn.Module):
         for ntype in fixed_node_features.keys():
             node_scalar_features[ntype] = node_scalar_features[ntype] + fixed_node_features[ntype]
         for etype in fixed_edge_features.keys():
-            edge_features[etype] = edge_features[etype] + fixed_edge_features[etype]
+            if etype in edge_features:
+                edge_features[etype] = edge_features[etype] + fixed_edge_features[etype]
+            else:
+                edge_features[etype] = fixed_edge_features[etype]
         # TODO: layer norm after add?
 
 

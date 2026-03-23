@@ -50,6 +50,13 @@ class FixedConditionEmbedder(nn.Module):
         ntype_cat_feats = defaultdict(int)
         ntype_coord_feats = defaultdict(int)
 
+        self.token_dim = token_dim
+        # store sorted superset so forward can zero-pad for tasks with a subset
+        self.all_node_modalities = sorted(
+            [m for m in partial_modality_fixed_cls if m.graph_entity == "node"],
+            key=lambda m: m.name,
+        )
+
         node_types = set(m.entity_name for m in partial_modality_fixed_cls if m.graph_entity == "node")
         node_types = sorted(list(node_types))
 
@@ -110,14 +117,16 @@ class FixedConditionEmbedder(nn.Module):
 
         # create edge embedders
         self.edge_embedding = nn.ModuleDict()
+        cat_edge_entity_names = {m.entity_name for m in partial_modality_fixed_cls if m.graph_entity == "edge"}
         for etype in edge_types:
-            # Always append token corruption prob to maintain consitsent fixed condition embedding shapes
-            # Allows us to toggle corruption on/off at inference without changing model architecture
-            input_dim = token_dim + 1
-            # if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
-            #     input_dim += 1
-            if any((m.data_key == "x" and f"{m.entity_name}_to_{m.entity_name}" == etype) for m in partial_modality_fixed_cls):
-                input_dim += token_dim
+            if etype in cat_edge_entity_names:
+                # categorical edge: prob(1) + token_emb(token_dim) [+ dist_emb(token_dim) if also has coord]
+                input_dim = token_dim + 1
+                if any((m.data_key == "x" and f"{m.entity_name}_to_{m.entity_name}" == etype) for m in partial_modality_fixed_cls):
+                    input_dim += token_dim
+            else:
+                # coord-only structural edge (e.g., lig_to_lig): sigma(1) + dist_emb(token_dim)
+                input_dim = 1 + token_dim
             self.edge_embedding[etype] = nn.Sequential(
                 nn.Linear(input_dim, n_hidden_edge_feats),
                 nn.SiLU(),
@@ -139,30 +148,48 @@ class FixedConditionEmbedder(nn.Module):
         self.fixed_token_max_prob = fixed_token_max_prob if fixed_token_max_prob is not None else self.global_fixed_token_max_prob
         self.fixed_token_prob = fixed_token_prob if fixed_token_prob is not None else self.global_fixed_token_prob
 
-        node_modalities = [name_to_modality(m) for m in task_class.partial_modalities_fixed if name_to_modality(m).is_node]
+        active_partial = set(task_class.partial_modalities_fixed)
         edge_modalities = [name_to_modality(m) for m in task_class.partial_modalities_fixed if not name_to_modality(m).is_node]
 
         fixed_node_scalar_features = {}
         fixed_edge_features = {}
 
         pair_dists = {}
+        pair_edge_endpoints = {}
+        sigma_per_ntype = {}
+        coord_etype_to_ntype = {}
         atom_masks = {}
         edge_masks = {}
-        
-        # Collect node embeddings
-        for modality in node_modalities:
-            ntype = modality.entity_name
-            if g.num_nodes(ntype) == 0:
-                continue
-            
-            if modality.is_categorical:
-                if ntype not in fixed_node_scalar_features:
-                    fixed_node_scalar_features[ntype] = []
 
+        # Determine which ntypes have at least one active partial modality
+        active_ntypes = {
+            m.entity_name for m in self.all_node_modalities
+            if m.name in active_partial and g.num_nodes(m.entity_name) > 0
+        }
+
+        # Collect node embeddings, iterating over the full superset for consistent scalar_embedding input_dim.
+        # Modalities not active in the current task are zero-padded so the input dim is always the same.
+        for modality in self.all_node_modalities:
+            ntype = modality.entity_name
+            if ntype not in active_ntypes:
+                continue
+            if ntype not in fixed_node_scalar_features:
+                fixed_node_scalar_features[ntype] = []
+
+            n_nodes = g.num_nodes(ntype)
+
+            if modality.name not in active_partial:
+                # zero-pad for inactive modality to maintain consistent scalar_embedding input shape
+                fixed_node_scalar_features[ntype].append(
+                    torch.zeros(n_nodes, 1 + self.token_dim, device=g.device)
+                )
+                continue
+
+            if modality.is_categorical:
                 gt = g.nodes[ntype].data[f"{modality.data_key}_1_true"].clone()
                 mask = g.nodes[ntype].data["atom_mask_1_true"].bool().clone()
-                
-                if ntype not in atom_masks.keys():
+
+                if ntype not in atom_masks:
                     atom_masks[ntype] = mask
 
                 if (self.fixed_token_max_prob > 0.0) or (self.fixed_token_prob is not None):
@@ -170,20 +197,16 @@ class FixedConditionEmbedder(nn.Module):
                 else:
                     # All 0's if we aren't corrupting atom types
                     prob = torch.zeros((gt.shape[0],), device=gt.device)
-                    
-                fixed_node_scalar_features[ntype].append(prob.unsqueeze(-1))
 
+                fixed_node_scalar_features[ntype].append(prob.unsqueeze(-1))
                 fixed_atom_feats = self.token_embeddings[modality.name](gt) * mask.unsqueeze(-1)
                 fixed_node_scalar_features[ntype].append(fixed_atom_feats)
 
             elif modality.data_key == "x":
-                if ntype not in fixed_node_scalar_features:
-                    fixed_node_scalar_features[ntype] = []
-
                 x = g.nodes[ntype].data["x_1_true"].clone() # ground truth positions
                 mask = g.nodes[ntype].data["atom_mask_1_true"].bool().clone()
 
-                if ntype not in atom_masks.keys():
+                if ntype not in atom_masks:
                     atom_masks[ntype] = mask
 
                 # noise coordinates of fixed atoms
@@ -193,16 +216,18 @@ class FixedConditionEmbedder(nn.Module):
                     # all 0's if we aren't corrupting coordinates
                     sigma = torch.zeros((x.shape[0], 1), device=x.device)
 
+                sigma_per_ntype[ntype] = sigma
                 fixed_node_scalar_features[ntype].append(sigma)
                 fixed_atom_coords = self.coord_embedding[modality.entity_name](x) * mask.unsqueeze(-1)
                 fixed_node_scalar_features[ntype].append(fixed_atom_coords)
-                
-                # TODO: this is probably not how we want to specify that we want lig-to-lig distances for fixed atoms
-                etype = f"{ntype}_to_{ntype}" 
+
+                etype = f"{ntype}_to_{ntype}"
+                coord_etype_to_ntype[etype] = ntype
                 src, dst = g.edges(etype=etype)
-                src = src.clone()   # this might be unecessary
-                dst = dst.clone()   # this might be unecessary
-                diff = x[src] - x[dst] 
+                src = src.clone()
+                dst = dst.clone()
+                pair_edge_endpoints[etype] = (src, dst)
+                diff = x[src] - x[dst]
                 pair_dists[etype] = _norm_no_nan(diff, axis=-1, keepdims=True)
 
         # Collect edge embeddings
@@ -227,12 +252,25 @@ class FixedConditionEmbedder(nn.Module):
             fixed_edge_feats = self.token_embeddings[modality.name](gt) * mask.unsqueeze(-1)
             fixed_edge_features[etype].append(fixed_edge_feats)
 
-            # pairwise distances
-            if etype in pair_dists.keys():
-                fixed_pair_dists = pair_dists[etype] * mask.unsqueeze(-1)
-                fixed_pair_dists = self.coord_embedding[etype](fixed_pair_dists)
-                fixed_edge_features[etype].append(fixed_pair_dists)
-                        
+
+        # Embed pairwise distances for coord-derived structural edges (e.g., lig_to_lig)
+        for etype, dists in pair_dists.items():
+            ntype = coord_etype_to_ntype[etype]
+            src, dst = pair_edge_endpoints[etype]
+
+            src_mask = atom_masks[ntype]
+            edge_mask = src_mask[src] & src_mask[dst]
+
+            if etype not in edge_masks:
+                edge_masks[etype] = edge_mask
+            if etype not in fixed_edge_features:
+                fixed_edge_features[etype] = []
+
+            # per-edge sigma: average of src and dst node sigmas
+            sigma_edges = ((sigma_per_ntype[ntype][src] + sigma_per_ntype[ntype][dst]) / 2) * edge_mask.unsqueeze(-1)
+            dist_emb = self.coord_embedding[etype](dists) * edge_mask.unsqueeze(-1)
+            fixed_edge_features[etype].append(sigma_edges)
+            fixed_edge_features[etype].append(dist_emb)
 
         # Construct singular scalar embedding for fixed atoms
         for ntype in fixed_node_scalar_features.keys():
@@ -243,7 +281,7 @@ class FixedConditionEmbedder(nn.Module):
                 cat_feats
             ) * atom_masks[ntype].unsqueeze(-1)     
         
-        # Construct singular scalar embedding for fixed atoms
+        # Construct singular scalar embedding for fixed edges
         for etype in fixed_edge_features.keys():
             edge_feats = torch.cat(
                 fixed_edge_features[etype], dim=-1
