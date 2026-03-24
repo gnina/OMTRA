@@ -519,13 +519,15 @@ OMTRA_DEBUG=1 omtra --task denovo_ligand_condensed --n_samples 10
 
 ## OMTRA Web Application
 
-The web application provides an interactive interface for exploring OMTRA's capabilities.
+The web application provides an interactive interface for exploring OMTRA's capabilities. You can try a hosted version at [bits.csb.pitt.edu/omtra](http://bits.csb.pitt.edu/omtra).
 
 ### Prerequisites
 - Docker, Docker Compose, NVIDIA Container Toolkit installed
 - Model weights downloaded to `omtra/trained_models/` directory (see [Model Weights](#model-weights))
 
 ### Starting the Web Application
+
+> **Note:** The pre-built Docker images on Docker Hub for the web application are currently an older version, but will be updated soon.
 
 ```bash
 cd omtra_webapp
