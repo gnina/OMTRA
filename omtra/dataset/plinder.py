@@ -788,7 +788,7 @@ class PlinderDataset(ZarrDataset):
         Dict[str, Dict[str, torch.Tensor]],
     ]:
 
-        lig_xace = ligand.to_xace_mol(dense=True)
+        lig_xace = ligand.to_xace_mol(dense=False)
 
         denovo_ligand = any(group in task.groups_generated for group in ['ligand_identity',  'ligand_identity_condensed'])
 
@@ -798,6 +798,9 @@ class PlinderDataset(ZarrDataset):
                 lig_xace = add_fake_atoms(lig_xace, self.fake_atom_p, cond_a_typer)
             else:
                 lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
+
+        # note: very important to densify AFTER adding fake atoms
+        lig_xace = lig_xace.sparse_to_dense()
         
         node_data = {
             "lig": {

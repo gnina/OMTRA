@@ -201,6 +201,9 @@ cython_debug/
 outputs/**
 omtra_webapp/models/
 
+# Claude local config (machine-specific)
+claude.local/
+
 # Node.js dependencies
 node_modules/
 **/node_modules/

@@ -1,0 +1,31 @@
+# OMTRA Distributed Sampling Pipeline — CLI Mode Example
+#
+# Only Tier 1 (required) fields are shown. Everything else comes from
+# defaults/default.yaml. Override any default inline or via --site.
+#
+# Usage:
+#   python -m omtra_pipelines.distributed_sampling.launch_pipeline \
+#     --config this_file.yaml --site cluster --dry-run
+#
+# With overrides:
+#   python -m omtra_pipelines.distributed_sampling.launch_pipeline \
+#     --config this_file.yaml --site cluster \
+#     replicates_per_job=200 sampling.n_timesteps=500
+
+# --- Tier 1: Required every run ---
+task: fixed_protein_ligand_denovo_condensed
+output_dir: /path/to/pipeline_output
+
+input_files:
+  protein_file: /path/to/protein.pdb
+  ligand_file: /path/to/ligand.sdf             # optional (enables RMSD metrics)
+  pharmacophore_file: /path/to/pharm.json       # optional (Pharmit JSON, XYZ, or ligand SDF)
+  pocket_ligand: /path/to/pocket_ref.sdf        # exactly one pocket method required
+  # pocket_center: "1.0,2.0,3.0"
+  # pocket_residues: "A:123-125,B:200"
+
+n_replicates_total: 1000
+
+# --- Common Tier 2 overrides (optional) ---
+# checkpoint: /path/to/last.ckpt      # default: auto-resolved from task
+# replicates_per_job: 100             # default: 100
