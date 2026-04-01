@@ -1,0 +1,86 @@
+# OMTRA Distributed Sampling Pipeline — Default Configuration
+#
+# Config loading order (later overrides earlier):
+#   1. This file (always loaded)
+#   2. Site config (--site cluster)
+#   3. User config file (--config my_job.yaml)
+#   4. CLI overrides (key=value positional args)
+#
+# Tier 1 fields (MUST be specified per run) have no defaults here.
+# Tier 2 fields have reasonable defaults that users often override.
+# Tier 3 fields are site-specific and rarely change (see site/ configs).
+
+# ============================================================
+# Tier 1 — Must specify every run (no sensible defaults)
+# ============================================================
+
+task: rigid_docking_condensed                    # REQUIRED: task name (e.g. rigid_docking_condensed)
+output_dir: /net/galaxy/home/koes/ltoft/OMTRA/trained_models/mt/gnn_prot_cond_2026-02-26_14-57-948005/samples_rigid_docking_condensed_posebusters              # REQUIRED: path for pipeline output
+
+# Mode is inferred: 'cli' if input_files present, 'dataset' otherwise.
+# Can be set explicitly to override inference.
+# mode: null
+
+# --- Dataset mode ---
+checkpoint: /net/galaxy/home/koes/ltoft/OMTRA/trained_models/mt/gnn_prot_cond_2026-02-26_14-57-948005/checkpoints/last.ckpt             # Path to model checkpoint
+dataset: crossdocked                # plinder | crossdocked
+sys_idx_file: /net/galaxy/home/koes/ltoft/OMTRA/omtra_pipelines/docking_eval/eval_idx_files/posebusters_idxs.csv            # Path to CSV of system indices
+n_systems: null               # Number of systems (alternative to sys_idx_file)
+dataset_start_idx: 0          # Starting index when using n_systems
+
+# --- CLI mode ---
+input_files: null             # Dict of input files (protein_file, ligand_file, etc.)
+n_replicates_total: null      # Total replicates to generate
+
+# ============================================================
+# Tier 2 — Reasonable defaults, often overridden
+# ============================================================
+
+split: val                   # Dataset split
+
+# Parallelism
+systems_per_job: 5           # Systems per GPU job (dataset mode)
+replicates_per_system: 40      # Replicates per system (dataset mode)
+replicates_per_job: 100       # Replicates per GPU job (CLI mode)
+
+# Sampling parameters
+sampling:
+  n_timesteps: 250
+  stochastic_sampling: false
+  bs_per_gbmem: 5            # Batch size scaling (dataset mode)
+  max_batch_size: 300         # Max batch size (dataset mode)
+  noise_scaler: null
+  eps: null
+
+# Metrics parameters
+metrics:
+  timeout: 2700
+  disable_gnina: false
+  disable_pb_valid: false
+  disable_posecheck: false
+  disable_rmsd: false
+  disable_strain: false
+  disable_interaction_recovery: true
+  disable_pharm_match: false
+  disable_ground_truth_metrics: false
+
+# ============================================================
+# Tier 3 — Site-specific (override via --site or site/ configs)
+# ============================================================
+
+# SLURM settings
+slurm:
+  partition_gpu: dept_gpu
+  partition_cpu: dept_cpu
+  cpus_per_task: 4
+  mem: 32G
+  time_sampling: "4:00:00"
+  time_metrics: "8:00:00"
+  time_aggregate: "0:30:00"
+  conda_env: omtra
+  extra_sbatch_args: ""
+
+# Dataset paths
+paths:
+  plinder: null
+  crossdocked: /net/dali/home/mscbio/rah304/shared_folder/pb_benchmark_set
