@@ -96,7 +96,7 @@ def determine_applicable_metrics(
         "rmsd": has_protein and not lig_identity_generated,
         "pharm_match": has_pharmacophore,
         "ground_truth": has_protein,
-        "interaction_recovery": False,  # opt-in only
+        "interaction_recovery": has_protein,  # opt-in only
     }
 
     # If specific metrics requested, filter to only those
