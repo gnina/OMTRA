@@ -1,6 +1,8 @@
 # OMTRA: A Multi-Task Generative model for Structure-Based Drug Design
 
-![OMTRA](assets/omtra_fig.png)
+<p align="center">
+  <img src="assets/omtra_bot.png" alt="OMTRA Banner" width="800">
+</p>
 
 OMTRA is a flow-matching based generative model for small-molecule + protein systems. It supports a variety of tasks relevant to structure-based drug design, including:
 - Unconditional 3D de novo molecule generation
@@ -12,7 +14,11 @@ OMTRA is a flow-matching based generative model for small-molecule + protein sys
 - Protein AND pharmacophore-conditioned molecule design
 - Protein AND pharmacophore-conditioned docking
 
-OMTRA is described in our preprint: [https://arxiv.org/abs/2512.05080](https://arxiv.org/abs/2512.05080) and will be presented at MLSB 2025. 
+OMTRA is described in our preprint: [https://arxiv.org/abs/2512.05080](https://arxiv.org/abs/2512.05080) and will be presented at MLSB 2025.
+
+<p align="center">
+  <img src="assets/omtra_fig.png" alt="OMTRA Overview" width="75%">
+</p>
 
 -----------------------------------------------------------------------------------------------------
 
@@ -513,13 +519,15 @@ OMTRA_DEBUG=1 omtra --task denovo_ligand_condensed --n_samples 10
 
 ## OMTRA Web Application
 
-The web application provides an interactive interface for exploring OMTRA's capabilities.
+The web application provides an interactive interface for exploring OMTRA's capabilities. You can try a hosted version at [bits.csb.pitt.edu/omtra](http://bits.csb.pitt.edu/omtra).
 
 ### Prerequisites
 - Docker, Docker Compose, NVIDIA Container Toolkit installed
 - Model weights downloaded to `omtra/trained_models/` directory (see [Model Weights](#model-weights))
 
 ### Starting the Web Application
+
+> **Note:** The pre-built Docker images on Docker Hub for the web application are currently an older version, but will be updated soon.
 
 ```bash
 cd omtra_webapp
