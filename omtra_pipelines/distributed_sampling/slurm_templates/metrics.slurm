@@ -6,6 +6,7 @@
 #SBATCH --time=$time_metrics
 #SBATCH -o $log_dir/metrics_%A_%a.out
 #SBATCH -e $log_dir/metrics_%A_%a.err
+#SBATCH --exclude=g023
 $extra_sbatch_args
 
 source ~/.bashrc
