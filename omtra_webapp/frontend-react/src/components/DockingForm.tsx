@@ -245,8 +245,8 @@ export function DockingForm({
 
       // Extract pharmacophores for display using backend API for all formats
       if (filename.endsWith('.sdf') || filename.endsWith('.json') || filename.endsWith('.xyz')) {
-        const result = await apiClient.extractPharmacophore(null, token);
-        onPharmacophoresChange(result.pharmacophores);
+        const result = await apiClient.extractPharmacophore(file);
+        onPharmacophoresChange?.(result.pharmacophores);
 
         // For SDF, also set content for viewer to center
         if (filename.endsWith('.sdf')) {
@@ -641,7 +641,7 @@ export function DockingForm({
         </div>
 
         {/* Step 2: Pocket Selection */}
-        {proteinFile && (
+        {(proteinFile || refLigandToken) && (
           <div className="animate-in fade-in slide-in-from-top-4 duration-500 space-y-4">
             <h3 className="text-base font-semibold text-slate-900 mb-2">2. Pocket Selection</h3>
             <div className="flex flex-col gap-3 p-1 bg-slate-100 rounded-xl mb-4">
@@ -817,7 +817,7 @@ export function DockingForm({
         )}
 
         {/* Step 3: Pharmacophore (Conditional) */}
-        {proteinFile && dockingMode === 'Rigid Docking + Pharmacophore' && (
+        {(proteinFile || pharmacophoreFile) && dockingMode === 'Rigid Docking + Pharmacophore' && (
           <div className="animate-in fade-in slide-in-from-top-4 duration-500 delay-150">
             <h3 className="text-base font-semibold text-slate-900 mb-2">3. Upload Pharmacophore</h3>
             <p className="text-xs text-slate-500 mb-3">Upload a pharmacophore file (.xyz, .json, .sdf) to guide docking.</p>
@@ -828,6 +828,7 @@ export function DockingForm({
                 else {
                   setPharmacophoreFile(null);
                   onPharmacophoresChange?.([]);
+                  onLigandContentChange?.(null);
                 }
               }}
               acceptedTypes={['.xyz', '.json', '.sdf']}
@@ -864,7 +865,7 @@ export function DockingForm({
         )}
 
         {/* Step 4: Ligand Upload */}
-        {proteinFile && (
+        {(proteinFile || ligandFile) && (
           <div className="animate-in fade-in slide-in-from-top-4 duration-500 delay-300">
             <h3 className="text-base font-semibold text-slate-900 mb-2">
               {dockingMode === 'Rigid Docking + Pharmacophore' ? '4.' : '3.'} Upload Ligand

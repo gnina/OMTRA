@@ -259,7 +259,7 @@ export function JobSubmissionForm({
 
             // Extract pharmacophores using backend API for all formats (SDF, XYZ, JSON)
             try {
-                const result = await apiClient.extractPharmacophore(null, token);
+                const result = await apiClient.extractPharmacophore(file);
                 onPharmacophoresChange?.(result.pharmacophores);
                 onPharmacophoreSelectionChange?.([]);
 
@@ -632,7 +632,7 @@ export function JobSubmissionForm({
                 )}
 
                 {/* 2. Pocket Selection (for Protein-conditioned modes) */}
-                {proteinFile && (samplingMode === 'Protein-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned') && (
+                {(proteinFile || refLigandToken) && (samplingMode === 'Protein-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned') && (
                     <div className="animate-in fade-in slide-in-from-top-4 duration-500 space-y-4">
                         <h4 className="text-sm font-semibold text-slate-700 mb-2">2. Binding Site Definition</h4>
                         <p className="text-xs text-slate-500 mb-2">Recommend deselecting protein surface to view boxes.</p>
@@ -811,7 +811,7 @@ export function JobSubmissionForm({
                 )}
 
                 {/* 3. Pharmacophore Upload (for Pharmacophore modes) */}
-                {(samplingMode === 'Pharmacophore-conditioned' || (samplingMode === 'Protein+Pharmacophore-conditioned' && proteinFile)) && (
+                {(samplingMode === 'Pharmacophore-conditioned' || (samplingMode === 'Protein+Pharmacophore-conditioned' && (proteinFile || pharmacophoreFile))) && (
                     <div className="animate-in fade-in slide-in-from-top-4 duration-500 delay-150">
                         <h4 className="text-sm font-semibold text-slate-700 mb-2">
                             {samplingMode === 'Protein+Pharmacophore-conditioned' ? '3.' : '1.'} Upload Pharmacophore
@@ -825,6 +825,8 @@ export function JobSubmissionForm({
                                     setPharmacophoreFile(null);
                                     setPharmacophoreToken(null);
                                     onPharmacophoresChange?.([]);
+                                    onLigandContentChange?.(null);
+                                    setLigandContent(null);
                                 }
                             }}
                             acceptedTypes={['.xyz', '.json', '.sdf']}

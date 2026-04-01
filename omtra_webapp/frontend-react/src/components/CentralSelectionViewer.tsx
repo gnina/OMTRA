@@ -156,6 +156,11 @@ export function CentralSelectionViewer({
       try {
         viewer.removeModel(viewerAny._proteinModel);
         viewer.removeAllSurfaces();
+        // Remove bounding box shapes if they exist
+        if (viewerAny._bboxShapes) {
+          viewerAny._bboxShapes.forEach((s: any) => { try { viewer.removeShape(s); } catch (e) { } });
+          viewerAny._bboxShapes = undefined;
+        }
       } catch (e) { console.warn(e); }
       viewerAny._proteinModel = undefined;
       viewerAny._proteinData = undefined;
