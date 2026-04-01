@@ -138,6 +138,11 @@ class SampledSystem:
             n_lig_atoms -= n_fake_atoms
         return n_lig_atoms
 
+    def get_n_fixed_atoms(self) -> int:
+        if 'atom_mask_1' not in self.g.nodes['lig'].data:
+            return 0
+        return self.g.nodes['lig'].data['atom_mask_1'].bool().sum().item()
+
     def get_atom_arr(self, reference: bool = False):
         """
         Get the system data represented as Biotite AtomArray
