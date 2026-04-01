@@ -20,7 +20,7 @@ if not hasattr(collections, 'Set'):
     collections.Set = collections.abc.Set
 import shutil
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Body
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Body, Form
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
@@ -242,18 +242,31 @@ async def upload_file(upload_token: str, file: UploadFile = File(...)):
 
 
 @app.post("/extract-pharmacophore")
-async def extract_pharmacophore_endpoint(file: UploadFile = File(...)):
-    """Extract pharmacophore features from an uploaded file (SDF, XYZ, or JSON)"""
+async def extract_pharmacophore_endpoint(
+    file: Optional[UploadFile] = File(None),
+    upload_token: Optional[str] = Form(None)
+):
+    """Extract pharmacophore features from an uploaded file (SDF, XYZ, or JSON) or existing token"""
     
     try:
-        # Validate filename exists
-        logger.info(f"Extract pharmacophore request: filename={file.filename}, content_type={file.content_type}")
+        if upload_token and upload_token in upload_tokens:
+            token_data = upload_tokens[upload_token]
+            file_path = token_data.get('file_path')
+            if not file_path or not Path(file_path).exists():
+                raise HTTPException(status_code=400, detail="Uploaded file not found")
+            filename = Path(file_path).name
+            async with aiofiles.open(file_path, 'rb') as f:
+                content = await f.read()
+            logger.info(f"Extract pharmacophore request from token {upload_token}: {filename}")
+        elif file and file.filename:
+            filename = file.filename
+            content = await file.read()
+            logger.info(f"Extract pharmacophore request from file upload: filename={filename}")
+        else:
+            logger.warning("Extract pharmacophore: No file or valid token provided")
+            raise HTTPException(status_code=400, detail="No file or valid token provided")
         
-        if not file.filename:
-            logger.warning("Extract pharmacophore: No filename provided")
-            raise HTTPException(status_code=400, detail="No filename provided")
-        
-        filename_lower = file.filename.lower()
+        filename_lower = filename.lower()
         
         # Determine extraction function based on extension
         if filename_lower.endswith('.sdf'):
@@ -263,15 +276,13 @@ async def extract_pharmacophore_endpoint(file: UploadFile = File(...)):
         elif filename_lower.endswith('.json'):
             extract_func = extract_pharmacophore_from_json
         else:
-            logger.warning(f"Extract pharmacophore: Invalid file type - {file.filename}")
+            logger.warning(f"Extract pharmacophore: Invalid file type - {filename}")
             raise HTTPException(
                 status_code=400, 
-                detail=f"File must be an SDF, XYZ, or JSON file (got: {file.filename})"
+                detail=f"File must be an SDF, XYZ, or JSON file (got: {filename})"
             )
         
-        # Read file content
-        content = await file.read()
-        logger.info(f"Read {len(content)} bytes from {file.filename}")
+        logger.info(f"Read {len(content)} bytes from {filename}")
         
         if len(content) == 0:
             logger.warning("Extract pharmacophore: Empty file provided")
@@ -290,7 +301,7 @@ async def extract_pharmacophore_endpoint(file: UploadFile = File(...)):
                 timeout=120.0
             )
             n_ph = result.get('n_pharmacophores', 0)
-            logger.info(f"Extracted {n_ph} pharmacophore features from {file.filename}")
+            logger.info(f"Extracted {n_ph} pharmacophore features from {filename}")
             if n_ph > 0:
                 first = result['pharmacophores'][0]
                 logger.debug(f"First pharmacophore: type={first.get('type')}, pos={first.get('position')}")

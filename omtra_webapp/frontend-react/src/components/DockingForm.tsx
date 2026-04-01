@@ -245,7 +245,7 @@ export function DockingForm({
 
       // Extract pharmacophores for display using backend API for all formats
       if (filename.endsWith('.sdf') || filename.endsWith('.json') || filename.endsWith('.xyz')) {
-        const result = await apiClient.extractPharmacophore(file);
+        const result = await apiClient.extractPharmacophore(null, token);
         onPharmacophoresChange(result.pharmacophores);
 
         // For SDF, also set content for viewer to center
@@ -473,6 +473,7 @@ export function DockingForm({
 
       const uploads = [finalProteinToken, finalLigandToken];
       if (finalPharmToken) uploads.push(finalPharmToken);
+      if (refLigandToken && pocketSelectionMethod === 'ligand') uploads.push(refLigandToken);
 
       const jobData = {
         params,

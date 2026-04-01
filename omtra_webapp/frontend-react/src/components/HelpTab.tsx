@@ -48,7 +48,7 @@ export function HelpTab() {
               <div>
                 <strong className="text-slate-900">Detected Pockets</strong>
                 <p className="text-sm text-slate-600 mt-1">
-                  Upload a protein to auto-detect binding sites (yellow boxes). Click a box to select it.
+                  Upload a protein to auto-detect binding sites (yellow boxes) using Pocketeer. Click a box to select it.
                 </p>
               </div>
             </li>
@@ -90,7 +90,7 @@ export function HelpTab() {
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
               <h4 className="font-bold text-slate-900 mb-2">Key Parameters</h4>
               <ul className="list-disc pl-5 text-sm space-y-1">
-                <li><strong>Sampling Steps</strong>: Controls denoising iterations. Higher values improve quality (we used 200 in our publication).</li>
+                <li><strong>Sampling Steps</strong>: Number of integration steps. Higher values improve quality (we used 200 in our paper).</li>
                 <li><strong>Atom Count Distribution</strong>: Sets the distribution of atom counts for generated molecules. Auto-populated when a reference ligand is used to define the pocket.</li>
               </ul>
             </div>

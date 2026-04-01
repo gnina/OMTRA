@@ -259,7 +259,7 @@ export function JobSubmissionForm({
 
             // Extract pharmacophores using backend API for all formats (SDF, XYZ, JSON)
             try {
-                const result = await apiClient.extractPharmacophore(file);
+                const result = await apiClient.extractPharmacophore(null, token);
                 onPharmacophoresChange?.(result.pharmacophores);
                 onPharmacophoreSelectionChange?.([]);
 
