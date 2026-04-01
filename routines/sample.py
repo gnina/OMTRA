@@ -287,12 +287,14 @@ def write_ground_truth(
 
         # write the ground truth pharmacophore
         if 'pharmacophore' in task.groups_present:
-            gt_pharm_file = sys_gt_dir / "pharmacophore.xyz"
-            sys.write_pharmacophore(
-                gt_pharm_file, 
-                ground_truth=True, 
-                g=g_list[cond_idx].to('cpu')
-                )
+            g_cpu = g_list[cond_idx].to('cpu')
+            if g_cpu.num_nodes('pharm') > 0 and 'x_1_true' in g_cpu.nodes['pharm'].data:
+                gt_pharm_file = sys_gt_dir / "pharmacophore.xyz"
+                sys.write_pharmacophore(
+                    gt_pharm_file, 
+                    ground_truth=True, 
+                    g=g_list[cond_idx].to('cpu')
+                    )
         
         # write xyz file with fixed fragments if we are doing partial modality conditioning
         if len(task.partial_modalities_fixed) > 0:
@@ -416,9 +418,10 @@ def main(args):
     print(f"Saving samples to {output_dir}")
 
     if task.unconditional and not args.visualize:
+        sys_gt_dir = output_dir / "sys_0_gt"
+        sys_gt_dir.mkdir(parents=True, exist_ok=True)
         lig_samples = [ s.get_rdkit_ligand() for s in sampled_systems ]
-        output_file = output_dir / f"{task_name}_lig.sdf"
-        write_mols_to_sdf(lig_samples, output_file)
+        write_mols_to_sdf(lig_samples, sys_gt_dir / "gen_ligands.sdf")
     elif task.unconditional and args.visualize:
         for i, sys in enumerate(sampled_systems):
             lig_xt_file = output_dir / f"sys{i}_xt.sdf"

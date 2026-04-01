@@ -930,10 +930,11 @@ def main(args):
     task_name: str = args.task
     task: Task = task_name_to_class(task_name)
 
-    if task.unconditional or ('protein_identity' not in task.groups_present):
-        raise ValueError("This script is for evaluating models on protein-conditioned tasks.")
-
     if args.samples_dir is None:
+
+        if task.unconditional or ('protein_identity' not in task.groups_present):
+            raise ValueError("Sampling mode requires a protein-conditioned task. "
+                             "Use --samples_dir for metrics-only mode on protein-free tasks.")
         
         model_ckpt = Path(args.ckpt_path)
         if args.output_dir is None:
@@ -1036,7 +1037,15 @@ def main(args):
                         'interaction_recovery': not args.disable_interaction_recovery,
                         'pharm_match': (not args.disable_pharm_match) and ('pharmacophore' in task.groups_present),
                         'ground_truth': not args.disable_ground_truth_metrics}
-        
+                        
+        # Auto-disable metrics that are inapplicable for this task
+        from omtra.eval.metrics.compute import determine_applicable_metrics
+
+        applicable = determine_applicable_metrics(task)
+        for k in list(metrics_to_run):
+            if k in applicable:
+                metrics_to_run[k] = metrics_to_run[k] and applicable[k]
+
         metrics = compute_metrics(system_pairs=system_pairs,
                                 task=task,
                                 metrics_to_run=metrics_to_run,
