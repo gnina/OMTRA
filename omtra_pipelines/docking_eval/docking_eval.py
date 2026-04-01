@@ -258,7 +258,8 @@ def rmsd(gen_lig, true_lig):
 
 
 def compute_pharmacophore_match(gen_ligs, true_pharm, threshold=1.0):
-    results = {"perfect_pharm_match": [],
+    results = {"n_pharms": [],
+               "perfect_pharm_match": [],
                "frac_true_pharms_matched": []}
     
     for gen_lig in gen_ligs:
@@ -269,6 +270,7 @@ def compute_pharmacophore_match(gen_ligs, true_pharm, threshold=1.0):
 
         except Exception as e:
             print(f"Failed to get pharmacophores for generated ligand: {e}")
+            results['n_pharms'].append(None)
             results['perfect_pharm_match'].append(None)
             results['frac_true_pharms_matched'].append(None)
             continue
@@ -288,6 +290,8 @@ def compute_pharmacophore_match(gen_ligs, true_pharm, threshold=1.0):
         n_true_pharms = true_coords.shape[0]
         all_true_matched = matching_pharms.any(axis=1).all()
 
+        results['n_pharms'].append(n_true_pharms)
+        
         if n_true_pharms == 0:
             n_true_pharms = 1
 
@@ -342,11 +346,10 @@ def compute_metrics(system_pairs: List[SampledSystem],
                     ):
     
     env = os.environ.copy()
-    # # Use PyTorch's bundled cuDNN libraries for GNINA compatibility
-    # import torch
-    # torch_lib_path = str(Path(torch.__file__).parent / "lib")
-    # existing_ld_path = env.get('LD_LIBRARY_PATH', '')
-    # env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
+    # Use PyTorch's bundled cuDNN libraries for GNINA compatibility
+    torch_lib_path = str(Path(torch.__file__).parent / "lib")
+    existing_ld_path = env.get('LD_LIBRARY_PATH', '')
+    env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
 
     # dataframe for metrics
     rows = []
@@ -532,9 +535,9 @@ def compute_metrics(system_pairs: List[SampledSystem],
                                                  timeout=timeout,
                                                  gen_ligs=valid_gen_ligs,   # TODO: will this work if we pass all ligands not just the RDKit valid ones?
                                                  true_pharm=data['true_pharm'])
-                
-                pharm_results = pd.DataFrame(pharm_results, index=valid_lig_indices)
-                metrics.loc[valid_lig_indices, pharm_results.columns] = pharm_results
+                if pharm_results is not None:
+                    pharm_results = pd.DataFrame(pharm_results, index=valid_lig_indices)
+                    metrics.loc[valid_lig_indices, pharm_results.columns] = pharm_results
             
     return metrics
 
@@ -607,29 +610,27 @@ def sample_system(ckpt_path: Path,
         sys_info['n_gt_lig_atoms'] =  sys_info['lig_atom_end'] - sys_info['lig_atom_start']
         sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'n_gt_lig_atoms', 'sys_id']]
 
-    elif dataset == 'crossdocked':
+    elif (dataset == 'crossdocked') or (dataset == 'posebusters'):
+        dataset_name = 'crossdocked' if dataset == 'crossdocked' else 'posebusters'
 
         cfg = quick_load.load_cfg(overrides=['task_group=fixed_crossdocked'], crossdocked_path=crossdocked_path)
         crossdocked_datamodule = datamodule_from_config(cfg)    
         dataset = crossdocked_datamodule.load_dataset(split).datasets['crossdocked']
                                
         #dataset = multitask_dataset.datasets['crossdocked']
-        dataset_name = 'crossdocked'
-
+        
         # system info
         sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
         sys_info['n_gt_lig_atoms'] = sys_info['lig_atom_end'] - sys_info['lig_atom_start']
         sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb', 'n_gt_lig_atoms']] 
         sys_info['lig_id'] = sys_info['lig_sdf'].apply(lambda x: Path(Path(x).stem).stem)
+        sys_info['system_id'] = sys_info['lig_id'].str[:-7]
+        sys_info['ligand_id'] = sys_info['lig_id'].str.split("_").str[1]
 
         # sort systems
         # sorted_idx = natsorted(sys_info.index, key=lambda i: sys_info.loc[i, "lig_id"])
         # sys_info = sys_info.iloc[sorted_idx].reset_index(drop=True)
         sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in range(sys_info.shape[0])]
-        
-        # sort dataset indices to match sys_info
-        # dataset_idxs = list(dataset_idxs)
-        # dataset_idxs = [dataset_idxs[i] for i in sorted_idx]
 
     elif dataset == 'pharmit':
         raise ValueError(f"Pharmit dataset does not include proteins!")
@@ -711,6 +712,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
 
         true_prot_file = sys_gt_dir / "protein_0.pdb"
         true_prot_id = "protein_0"
+
 
         if 'pharmacophore' in task.groups_present:
             pharm = replicates[0].get_pharmacophore_from_graph(g=g_list[sys_id].to('cpu'), kind='gt')
@@ -816,7 +818,7 @@ def system_pairs_from_path(samples_dir: Path,
         if 'pharmacophore' in task.groups_present:
             pharm = {}
             true_pharm_file = sys_dir / "pharmacophore.xyz"
-
+            pharm_missing = False
             if not os.path.exists(true_pharm_file):
                 print(f"WARNING: Missing pharmacophore file for system {sys_idx}. Depending on downstream metrics this may cause pipeline failures.")
                 pharm_missing = True
