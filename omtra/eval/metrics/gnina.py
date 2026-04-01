@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Dict, Optional
+import torch
 
 from rdkit import Chem
 
@@ -60,8 +61,22 @@ def _run_gnina(
                 "--minimize",
                 "--seed", "42",
             ]
-
+        
+        torch_lib_path = str(Path(torch.__file__).parent / "lib")
+        cudnn_lib_path = str(
+            Path(torch.__file__).parent.parent
+            / "nvidia"
+            / "cudnn"
+            / "lib"
+        )
         env = os.environ.copy()
+        existing_ld_path = env.get("LD_LIBRARY_PATH", "")
+        paths = [torch_lib_path, cudnn_lib_path]
+        if existing_ld_path:
+            paths.append(existing_ld_path)
+
+        env["LD_LIBRARY_PATH"] = ":".join(paths)
+
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
         if result.returncode != 0:

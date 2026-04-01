@@ -62,7 +62,7 @@ def compute_pharmacophore_match(sampled_systems: List[SampledSystem], threshold=
     if pharm_counts['n_gen_pharms'] == 0:
         pharm_counts['n_gen_pharms'] = 1
 
-    metrics =  {
+    metrics =  { 
         "frac_pharm_samples_matching": pharm_counts['n_pharms_matched_perfect']/len(sampled_systems),  
         "frac_true_centers_matched": pharm_counts['n_true_matched']/pharm_counts['n_true_pharms']    }
     return metrics
