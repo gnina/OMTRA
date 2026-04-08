@@ -208,3 +208,6 @@ claude.local/
 node_modules/
 **/node_modules/
 
+
+# User-specific distributed sampling configs
+omtra_pipelines/distributed_sampling/defaults/
