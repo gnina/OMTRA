@@ -1,10 +1,14 @@
 from typing import Dict, List
 from pathlib import Path
 import argparse
+import os
+
+# Must be set before any CUDA allocation to reduce fragmentation OOM errors
+if 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ:
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 import pandas as pd
 import torch
-import os
 import dgl
 import gc
 import sys
@@ -385,8 +389,9 @@ def main(args):
         
         if args.bs_per_gbmem is not None:
             # gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  
-            props = get_device_properties_with_retry(0)
-            gpu_mem_available = props.total_memory // (1024**3) # in GB
+            get_device_properties_with_retry(0)  # ensure CUDA is initialized
+            free_mem, _ = torch.cuda.mem_get_info(0)
+            gpu_mem_available = free_mem // (1024**3) # in GB (free memory only)
             max_batch_size = int(gpu_mem_available * args.bs_per_gbmem)
             max_batch_size = max(1, max_batch_size)  # ensure at least batch size of 1
             print(f"Setting max_batch_size to {max_batch_size} based on available GPU memory.")
