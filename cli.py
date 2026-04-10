@@ -151,9 +151,10 @@ def create_parser():
     )
     pocket_group.add_argument(
         "--pocket_center",
-        type=str,
+        type=float,
         default=None,
-        help="Pocket center coordinates as 'x,y,z' (also set --bbox_length, default 23.0)"
+        nargs=3,
+        help="Pocket center coordinates as --pocket_center x y z (also set --bbox_length, default 23.0)"
     )
     pocket_group.add_argument(
         "--pocket_residues",
@@ -183,12 +184,8 @@ def _build_pocket_definition(pocket_ligand, pocket_center, pocket_residues, bbox
         return {'type': 'file', 'value': Path(pocket_ligand)}
     
     if pocket_center is not None:
-        parts = [x.strip() for x in pocket_center.split(',')]
-        if len(parts) != 3:
-            raise ValueError(f"--pocket_center expects exactly 3 values (x,y,z), got {len(parts)}")
         try:
-            center_coords = [float(p) for p in parts]
-            pocket_def = {'type': 'center', 'value': center_coords}
+            pocket_def = {'type': 'center', 'value': pocket_center}
             if bbox_length is not None:
                 pocket_def['bbox_length'] = bbox_length
             return pocket_def
