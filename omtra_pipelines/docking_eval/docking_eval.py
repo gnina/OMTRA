@@ -79,7 +79,7 @@ def parse_args():
     
     sampling.add_argument("--alpha", type=float, default=None, help="Beta distribution alpha parameter for Plinder dynamic cropping (overrides config).")
     sampling.add_argument("--beta", type=float, default=None, help="Beta distribution beta parameter for Plinder dynamic cropping (overrides config).")
-
+    sampling.add_argument("--additional_prot_crop", type=float, default=None, help="Additional fixed distance to crop from pocket residues for Plinder dynamic cropping (overrides config).")
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
 
@@ -602,6 +602,8 @@ def sample_system(ckpt_path: Path,
             overrides.append(f'alpha={args.alpha}')
         if args.beta is not None:
             overrides.append(f'beta={args.beta}')
+        if args.additional_prot_crop is not None:
+            overrides.append(f'additional_prot_crop={args.additional_prot_crop}')
         
         cfg = quick_load.load_cfg(overrides=overrides, plinder_path=plinder_path)
         plinder_datamodule = datamodule_from_config(cfg)    
