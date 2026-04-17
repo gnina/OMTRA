@@ -75,6 +75,7 @@ class PlinderDataset(ZarrDataset):
         crop_max_distance: Optional[float] = None,
         alpha: Optional[float] = None,   # beta distribution alpha parameter for dynamic cropping
         beta: Optional[float] = None,    # beta distribution beta parameter for dynamic cropping
+        additional_prot_crop: Optional[float] = None, # additional fixed distance to crop from pocket residues
     ):
         super().__init__(
             split,
@@ -107,6 +108,13 @@ class PlinderDataset(ZarrDataset):
             and self.alpha is not None
             and self.beta is not None
             and split in ['train', 'test']
+        )
+
+        # Store additional_prot_crop distance if in test split, otherwise None
+        self.additional_prot_crop = (
+            additional_prot_crop 
+            if additional_prot_crop is not None and split in ["test"]
+            else None
         )
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
@@ -523,6 +531,14 @@ class PlinderDataset(ZarrDataset):
                         apo = link_structure
                     else:
                         pred = link_structure
+
+        if self.additional_prot_crop is not None and include_protein:
+            # Crop the pocket with an additional fixed distance
+            cropped_pocket = crop_structure_data(pocket, ligand.coords, self.additional_prot_crop)
+            
+            # If cropping results in empty pocket, fall back to original pocket
+            if cropped_pocket is not None:
+                pocket = cropped_pocket
 
         system = SystemData(
             system_id=system_info["system_id"],
