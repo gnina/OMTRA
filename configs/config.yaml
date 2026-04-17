@@ -30,6 +30,7 @@ crop_min_distance: 4 # minimum crop distance for Plinder dynamic cropping
 crop_max_distance: 10 # maximum crop distance for Plinder dynamic cropping
 alpha: null # beta-distribution alpha for Plinder dynamic cropping
 beta: null # beta-distribution beta for Plinder dynamic cropping
+additional_prot_crop: null # additional fixed distance to crop protein pocket during inference (test split)
 pharm_pos_std: 0.0 # standard deviation to sample noise variance from for pharm positions
 prot_pos_std: 0.0 # standard deviation to sample noise std dev from for protein atom positions
 offset_std: 0.0 # offset to prior positions
