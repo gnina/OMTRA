@@ -82,6 +82,7 @@ class OMTRA(pl.LightningModule):
         pharm_var: float = 0.0,
         lr_warmup_steps: int = 0,
         prot_pos_std: float = 0.0, #standard deviation for adding noise to protein atom positions
+        lig_com_offset_std: float = 0.0, #standard deviation for offsetting ligand center of mass
 
     ):
         super().__init__()
@@ -107,6 +108,7 @@ class OMTRA(pl.LightningModule):
         self.pharm_var = pharm_var
         self.lr_warmup_steps = lr_warmup_steps
         self.prot_pos_std = prot_pos_std
+        self.lig_com_offset_std = lig_com_offset_std
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -401,6 +403,18 @@ class OMTRA(pl.LightningModule):
         # TODO: ctmc conditional path sampling manually sets things to mask token rather 
         # than setting to prior value (which is usually mask token)
         task_class: Task = task_name_to_class(task_name)
+
+        # shift ligand prior (x_0) to simulate displaced pocket definition
+        # x_1_true is untouched so loss targets are unaffected
+        has_ligand = any(
+            group in task_class.groups_present
+            for group in ["ligand_identity", "ligand_identity_condensed"]
+        )
+        if has_ligand and self.lig_com_offset_std > 0.0 and g.num_nodes("lig") > 0:
+            offset = torch.randn(g.batch_size, 3, device=g.device) * self.lig_com_offset_std
+            per_atom_offset = offset[node_batch_idxs["lig"]]  # (n_lig_atoms, 3)
+            g.nodes["lig"].data['x_0'] = g.nodes["lig"].data['x_0'] + per_atom_offset
+
         g = self.sample_conditional_path(
             g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask
         )
