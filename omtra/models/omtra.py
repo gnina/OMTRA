@@ -15,6 +15,7 @@ import hydra
 import os
 import functools
 import math
+import gc
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
@@ -1254,6 +1255,8 @@ class OMTRA(pl.LightningModule):
                     start = i * reps_per_batch  # starting index in the chunk results
                     end = start + reps_per_batch    # ending index in the chunk results
                     sampled_systems[sys_idx].extend(batch_results[start:end])   # sys_idx is the index relative to all samples
+                del batch_results   # add these two lines
+                gc.collect()
                 
             # last batch
             if last_batch_reps > 0:
@@ -1281,6 +1284,8 @@ class OMTRA(pl.LightningModule):
                     start = i * last_batch_reps
                     end = start + last_batch_reps
                     sampled_systems[sys_idx].extend(batch_results[start:end])
+                del batch_results   # add these two lines
+                gc.collect()
         
         # Check that each system has expected number of replicates
         for i, sys_reps in enumerate(sampled_systems):

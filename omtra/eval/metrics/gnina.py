@@ -69,17 +69,15 @@ def _run_gnina(
             / "cudnn"
             / "lib"
         )
+        
         env = os.environ.copy()
         existing_ld_path = env.get("LD_LIBRARY_PATH", "")
         paths = [torch_lib_path, cudnn_lib_path]
         if existing_ld_path:
             paths.append(existing_ld_path)
 
-        env = os.environ.copy()
-        # Use PyTorch's bundled cuDNN libraries for GNINA compatibility
-        torch_lib_path = str(Path(torch.__file__).parent / "lib")
-        existing_ld_path = env.get('LD_LIBRARY_PATH', '')
-        env['LD_LIBRARY_PATH'] = f"{torch_lib_path}:{existing_ld_path}" if existing_ld_path else torch_lib_path
+        env["LD_LIBRARY_PATH"] = ":".join(paths)
+        env['OMP_NUM_THREADS'] = '1'
 
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 

@@ -3,10 +3,6 @@ from pathlib import Path
 import argparse
 import os
 
-# Must be set before any CUDA allocation to reduce fragmentation OOM errors
-if 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ:
-    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-
 import pandas as pd
 import torch
 import dgl
