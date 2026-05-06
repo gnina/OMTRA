@@ -39,11 +39,19 @@ def parse_args():
         help='Number of replicate commands per chunk'
     )
     
-    parser.add_argument(
-        '--ckpt_path', 
-        type=Path, 
-        required=True,
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        '--ckpt_path',
+        type=Path,
+        default=None,
         help='Path to model checkpoint for docking_eval.py'
+    )
+    mode.add_argument(
+        '--samples_dir',
+        type=Path,
+        default=None,
+        help='Path to existing samples directory. Use existing samples, do not sample a model. '
+             'Generated commands will use --samples_dir=<subdir> instead of --ckpt_path/--output_dir.'
     )
     parser.add_argument(
         '--reps_per_cmd', 
@@ -133,47 +141,45 @@ def generate_commands(chunks, chunk_files, args):
     """Generate docking_eval.py commands for each chunk and replicate."""
     commands = []
 
-    docking_eval_output_dir = args.output_dir / f'samples_{args.task}'
-    docking_eval_output_dir = docking_eval_output_dir.resolve()
-    docking_eval_output_dir.mkdir(parents=True, exist_ok=True)
+    if args.samples_dir is not None:
+        base_dir = args.samples_dir.resolve()
+    else:
+        base_dir = (args.output_dir / f'samples_{args.task}').resolve()
+        base_dir.mkdir(parents=True, exist_ok=True)
 
     for chunk_idx, chunk_file in enumerate(chunk_files):
         for replicate in range(args.n_replicates):
 
-            # determine output file
-            cmd_output_dir = docking_eval_output_dir / f'chunk_{chunk_idx}_rep_{replicate}'
+            cmd_dir = base_dir / f'chunk_{chunk_idx}_rep_{replicate}'
 
-            # Build the command
             cmd_parts = [
                 'python',
                 str(Path(__file__).parent / 'docking_eval.py'),
-                f'--ckpt_path={args.ckpt_path}',
                 f'--task={args.task}',
-                f'--sys_idx_file={chunk_file}',
-                f'--n_replicates={args.reps_per_cmd}',  # Each command handles 1 replicate
-                f'--n_samples={len(chunks[chunk_idx])}',  # Number of systems in this chunk
-                f'--bs_per_gbmem=5',  # Example fixed argument; adjust as needed
-                f'--output_dir={cmd_output_dir}',  # Output directory for this chunk and replicate
-                f'--plinder_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder',
-                f'--split={args.split}',
-                f'--dataset={args.dataset}'
+                f'--n_replicates={args.reps_per_cmd}',
+                f'--n_samples={len(chunks[chunk_idx])}',
             ]
 
-            if args.crossdocked_path is not None:
-                cmd_parts.append(f'--crossdocked_path={args.crossdocked_path}')
-            
-            # Add additional arguments
+            if args.samples_dir is not None:
+                cmd_parts.append(f'--samples_dir={cmd_dir}')
+            else:
+                cmd_parts.extend([
+                    f'--ckpt_path={args.ckpt_path}',
+                    f'--sys_idx_file={chunk_file}',
+                    f'--bs_per_gbmem=5',
+                    f'--output_dir={cmd_dir}',
+                    f'--plinder_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder',
+                    f'--split={args.split}',
+                    f'--dataset={args.dataset}',
+                ])
+                if args.crossdocked_path is not None:
+                    cmd_parts.append(f'--crossdocked_path={args.crossdocked_path}')
+
             if args.additional_args:
                 cmd_parts.extend(args.additional_args.split())
-            
-            # Add replicate-specific output directory if multiple replicates
-            # if args.n_replicates > 1:
-            #     output_suffix = f'_chunk{chunk_idx}_rep{replicate}'
-            #     cmd_parts.append(f'--output_dir=eval_output{output_suffix}')
-            
-            command = ' '.join(cmd_parts)
-            commands.append(command)
-    
+
+            commands.append(' '.join(cmd_parts))
+
     return commands
 
 
