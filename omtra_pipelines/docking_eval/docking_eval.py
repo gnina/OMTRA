@@ -81,14 +81,11 @@ def parse_args():
     metrics.add_argument("--disable_pharm_match", action="store_true", help='Disables computations of matching pharmacophores by generated ligands.')
     metrics.add_argument('--disable_strain', action='store_true', help='Disables strain energy calculation.')
     metrics.add_argument("--disable_ground_truth_metrics", action="store_true", help='Disables all relevant metrics on the truth ligand.')
-   
+    metrics.add_argument("--disable_fixed_frag_metrics", action="store_true", help='Disables computations of fixed fragment metrics.')
+
     args = p.parse_args()
 
     return args
-
-
-
-
 
 
 def sample_system(ckpt_path: Path,
@@ -457,13 +454,16 @@ def main(args):
     if not args.sample_only:
         pb_mode = determine_pb_mode(task)
 
+        is_partial_task = len(task.partial_modalities_fixed) > 0
+
         metrics_to_run = {'pb_valid': not args.disable_pb_valid,
                         'gnina': not args.disable_gnina,
                         'posecheck': not args.disable_posecheck,
                         'rmsd': not args.disable_rmsd and 'ligand_identity_condensed' not in task.groups_generated,
                         'interaction_recovery': not args.disable_interaction_recovery,
                         'pharm_match': (not args.disable_pharm_match) and ('pharmacophore' in task.groups_present),
-                        'ground_truth': not args.disable_ground_truth_metrics}
+                        'ground_truth': not args.disable_ground_truth_metrics,
+                        'fixed_frag_metrics': (not args.disable_fixed_frag_metrics) and is_partial_task}
 
         # Auto-disable metrics that are inapplicable for this task
         from omtra.eval.metrics.compute import determine_applicable_metrics
@@ -472,11 +472,17 @@ def main(args):
             if k in applicable:
                 metrics_to_run[k] = metrics_to_run[k] and applicable[k]
 
+        protein_generated = "protein_structure" in task.groups_generated
+        frag_systems = sampled_systems if args.samples_dir is None else None
+
         metrics = compute_metrics(system_pairs=system_pairs,
                                 pb_mode=pb_mode,
                                 metrics_to_run=metrics_to_run,
                                 timeout=args.timeout,
-                                disable_strain=args.disable_strain
+                                disable_strain=args.disable_strain,
+                                sampled_systems=frag_systems,
+                                n_replicates=args.n_replicates,
+                                protein_generated=protein_generated,
                                 )
 
         metrics = metrics.reset_index()
