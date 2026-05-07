@@ -497,6 +497,11 @@ class OMTRA(pl.LightningModule):
         for modality in task_class.modalities_generated:
             is_categorical = modality.is_categorical
 
+            # skip loss if there are no nodes of this type
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                losses[modality.name] = torch.tensor(0.0, device=g.device)
+                continue
+
             if self.time_scaled_loss:
                 mod_weight = t_weights
 
@@ -518,11 +523,6 @@ class OMTRA(pl.LightningModule):
 
             inp = vf_output[modality.name]
             target = targets[modality.name]
-
-            # skip loss if there are no nodes of this type
-            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
-                losses[modality.name] = torch.tensor(0.0, device=g.device)
-                continue
 
             if disable_time_scaled_loss and modality.is_categorical:
                 mod_loss = fn.cross_entropy(
