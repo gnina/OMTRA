@@ -93,6 +93,12 @@ def parse_args():
         help='Dataset arg passed to docking_eval.py (default: plinder)'
     )
     parser.add_argument(
+        "--plinder_path",
+        type=Path,
+        default=None,
+        help="Path to plinder dataset (default: None)"
+    )
+    parser.add_argument(
         "--crossdocked_path",
         type=Path,
         default=None,
@@ -154,11 +160,12 @@ def generate_commands(chunks, chunk_files, args):
                 f'--n_samples={len(chunks[chunk_idx])}',  # Number of systems in this chunk
                 f'--bs_per_gbmem=5',  # Example fixed argument; adjust as needed
                 f'--output_dir={cmd_output_dir}',  # Output directory for this chunk and replicate
-                f'--plinder_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder',
                 f'--split={args.split}',
                 f'--dataset={args.dataset}'
             ]
 
+            if args.plinder_path is not None:
+                cmd_parts.append(f'--plinder_path={args.plinder_path}')
             if args.crossdocked_path is not None:
                 cmd_parts.append(f'--crossdocked_path={args.crossdocked_path}')
             
