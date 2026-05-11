@@ -29,6 +29,7 @@ class PharmitDataset(ZarrDataset):
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
                  max_pharms_sampled: int = 8,
+                 partial_mode: str = "whole_fragment_plus_atoms",
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
@@ -36,6 +37,8 @@ class PharmitDataset(ZarrDataset):
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = fake_atom_p > 0
         self.max_pharms_sampled = max_pharms_sampled
+        self.partial_mode = partial_mode
+        print(f"PharmitDataset partial_mode: {self.partial_mode}")
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
         # dists_dict = np.load(dists_file)
@@ -120,13 +123,40 @@ class PharmitDataset(ZarrDataset):
             frag_ids = np.unique(frags)
             n_frags = frag_ids.shape[0]
 
-            if n_frags <= 1:
-                fixed_frags = []
+            if self.partial_mode == "whole_fragments":
+                # Mode 4: Whole fragments only, no Bernoulli modifications
+                if n_frags <= 1:
+                    fixed_frags = []
+                else:
+                    num_frags_fixed = np.random.randint(1, n_frags)
+                    fixed_frags = np.random.choice(frag_ids, size=num_frags_fixed, replace=False)
+                mask = np.isin(frags, fixed_frags).astype(np.int64)
             else:
-                # Uniformly sample between 1 and # frags-1 fragments to fix 
-                num_frags_fixed = np.random.randint(1, n_frags)
-                fixed_frags = np.random.choice(frag_ids, size=num_frags_fixed, replace=False)
-            xace_dict['fixed_atom_mask'] = torch.from_numpy(np.isin(frags, fixed_frags).astype(np.int64))
+                # shared fragment selection for modes 1-3
+                fixed_frags = frag_ids
+                if n_frags > 1:
+                    num_frags_fixed = np.random.randint(1, n_frags)
+                    fixed_frags = np.random.choice(frag_ids, size=num_frags_fixed, replace=False)
+                mask = np.isin(frags, fixed_frags).astype(np.int64)
+
+                p = np.random.rand()
+
+                # Mode 1: whole fragments + extra single atoms
+                if self.partial_mode == "whole_fragment_plus_atoms":
+                    extra = (mask == 0) & (np.random.rand(frags.size) < p)
+                    mask = np.clip(mask + extra.astype(np.int64), 0, 1)
+
+                # Mode 2: partial fragments (unfix some fixed atoms via Bernoulli)
+                elif self.partial_mode == "fragment_bernoulli_atom":
+                    unfix = (mask == 1) & (np.random.rand(frags.size) < p)
+                    mask = np.clip(mask - unfix.astype(np.int64), 0, 1)
+
+                # Mode 3: partial fragments + single atoms (flip Bernoulli-selected atoms)
+                elif self.partial_mode == "fragment_plus_flipped_atoms":
+                    flip = np.random.rand(frags.size) < p
+                    mask = np.abs(mask - flip.astype(np.int64))
+
+            xace_dict['fixed_atom_mask'] = torch.from_numpy(mask)
             
         # get slice indicies for ligand-ligand edges
         edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)

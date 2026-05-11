@@ -29,6 +29,7 @@ res_id_embed_dim: 64 # dimension of residue id embedding
 pharm_pos_std: 0.0 # standard deviation to sample noise variance from for pharm positions
 prot_pos_std: 0.0 # standard deviation to sample noise std dev from for protein atom positions
 bernoulli_mask_p: 0.0 # probability of keeping each atom fixed in Bernoulli masking (0.0 = disabled)
+partial_mode: whole_fragments # fragment masking mode for partial modality conditioning
 offset_std: 0.0 # offset to prior positions
 
 pharmit_path: ${omtra_root:}/data/pharmit

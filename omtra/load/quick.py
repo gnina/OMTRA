@@ -112,8 +112,10 @@ def omtra_from_checkpoint(ckpt_path: str) -> OMTRA:
         model: The loaded OMTRA model.
     """
 
-    # load model
-    model = OMTRA.load_from_checkpoint(ckpt_path)
+    # TEMPORARY (zombie GPU workaround): map_location='cpu' avoids tensor-by-tensor CUDA
+    # allocation during checkpoint deserialization. Revert to:
+    # model = OMTRA.load_from_checkpoint(ckpt_path)
+    model = OMTRA.load_from_checkpoint(ckpt_path, map_location='cpu', weights_only=False)
 
     return model
 

@@ -3,6 +3,12 @@ from pathlib import Path
 import argparse
 import os
 
+# DISABLED: expandable_segments uses cudaMallocAsync which fails on zombie CUDA contexts
+# (nodes with corrupted driver state show OOM despite free memory). Default cudaMalloc works fine.
+# if 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ:
+#     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+
 import pandas as pd
 import torch
 import dgl
@@ -67,6 +73,11 @@ def parse_args():
     
     sampling.add_argument("--max_batch_size", type=int, default=500, help='Maximum number of systems to sample per batch.')
     sampling.add_argument("--bs_per_gbmem", type=float, default=None, help='Batch size per GB/EM on the GPU.')
+    sampling.add_argument("--partial_mode", type=str, default=None,
+                          help="Fragment masking mode for partial modality conditioning. "
+                               "Overrides the config default (whole_fragments). "
+                               "Options: whole_fragments, whole_fragment_plus_atoms, "
+                               "fragment_bernoulli_atom, fragment_plus_flipped_atoms")
     
 
     # --- Metrics computation options ---
@@ -120,11 +131,23 @@ def sample_system(ckpt_path: Path,
 
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    
+
     # 4) instantiate datamodule & model
     #dm  = quick_load.datamodule_from_config(train_cfg)
     #multitask_dataset = dm.load_dataset(split)
-    model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
+
+    # TEMPORARY (zombie GPU workaround): load to CPU first, then transfer.
+    # Revert to: model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
+    model = quick_load.omtra_from_checkpoint(ckpt_path)
+
+    model_mb = (sum(p.numel() * p.element_size() for p in model.parameters()) +
+                sum(b.numel() * b.element_size() for b in model.buffers())) / (1024 ** 2)
+    print(f"Model size (CPU): {model_mb:.1f} MB")
+    if device != 'cpu' and torch.cuda.is_available():
+        free_mb, total_mb = (x / (1024 ** 2) for x in torch.cuda.mem_get_info(0))
+        print(f"GPU memory: {free_mb:.0f} MB free / {total_mb:.0f} MB total on {torch.cuda.get_device_name(0)}")
+
+    model = model.to(device).eval()
 
     if sys_idx_file is None:
         dataset_idxs = range(dataset_start_idx, dataset_start_idx + n_samples) 
@@ -141,8 +164,11 @@ def sample_system(ckpt_path: Path,
 
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
-        
+
         cfg = quick_load.load_cfg(overrides=['task_group=protein'], plinder_path=plinder_path)
+        partial_mode = kwargs.pop('partial_mode', None)
+        if partial_mode is not None:
+            cfg.partial_mode = partial_mode
         plinder_datamodule = datamodule_from_config(cfg)    
         dataset = plinder_datamodule.load_dataset(split).datasets['plinder'][plinder_link_version]
         
@@ -158,6 +184,7 @@ def sample_system(ckpt_path: Path,
 
 
     elif dataset == 'crossdocked':
+        kwargs.pop('partial_mode', None)
 
         cfg = quick_load.load_cfg(overrides=['task_group=fixed_crossdocked'], crossdocked_path=crossdocked_path)
         crossdocked_datamodule = datamodule_from_config(cfg)    
@@ -378,7 +405,8 @@ def main(args):
                   'fixed_coord_max_std': args.fixed_coord_max_std,
                   'fixed_coord_std': args.fixed_coord_std,
                   'fixed_token_max_prob': args.fixed_token_max_prob,
-                  'fixed_token_prob': args.fixed_token_prob}
+                  'fixed_token_prob': args.fixed_token_prob,
+                  'partial_mode': args.partial_mode}
         
         if args.bs_per_gbmem is not None:
             # gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  

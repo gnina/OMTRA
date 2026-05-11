@@ -64,6 +64,7 @@ class PlinderDataset(ZarrDataset):
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
         res_id_embed_dim: int = 64,
         max_pharms_sampled: int = 8,
+        partial_mode: str = "whole_fragment_plus_atoms",
     ):
         super().__init__(
             split,
@@ -83,6 +84,8 @@ class PlinderDataset(ZarrDataset):
         self.res_id_embed_dim = res_id_embed_dim
 
         self.max_pharms_sampled = max_pharms_sampled
+        self.partial_mode = partial_mode
+        print(f"PlinderDataset partial_mode: {self.partial_mode}")
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
@@ -391,15 +394,43 @@ class PlinderDataset(ZarrDataset):
             frag_ids = np.unique(frags)
             n_frags = frag_ids.shape[0]
 
-            if n_frags <= 1:
-                fixed_frags = []
+            if self.partial_mode == "whole_fragments":
+                # Mode 4: Whole fragments only, no Bernoulli modifications
+                if n_frags <= 1:
+                    fixed_frags = []
+                else:
+                    num_frags_fixed = np.random.randint(1, n_frags)
+                    fixed_frags = np.random.choice(frag_ids, size=num_frags_fixed, replace=False)
+                mask = np.isin(frags, fixed_frags).astype(np.int64)
             else:
-                # Uniformly sample between 1 and # frags-1 fragments to fix 
-                num_frags_fixed = np.random.randint(1, n_frags)
-                fixed_frags = np.random.choice(frag_ids, size=num_frags_fixed, replace=False)
+                p = np.random.rand()
 
-            ligand.fixed_atom_mask = torch.from_numpy(np.isin(frags, fixed_frags).astype(np.int64))
-            ligand.fixed_edge_mask = (ligand.fixed_atom_mask[ligand.bond_indices[:, 0]] 
+                if n_frags <= 1:
+                    # Single-fragment ligand: start with nothing fixed, randomly flip atoms
+                    mask = (np.random.rand(frags.size) < p).astype(np.int64)
+                else:
+                    # Multi-fragment ligand: select a random subset of whole fragments
+                    num_frags_fixed = np.random.randint(1, n_frags)
+                    fixed_frags = np.random.choice(frag_ids, size=num_frags_fixed, replace=False)
+                    mask = np.isin(frags, fixed_frags).astype(np.int64)
+
+                    # Mode 1: whole fragments + extra single atoms
+                    if self.partial_mode == "whole_fragment_plus_atoms":
+                        extra = (mask == 0) & (np.random.rand(frags.size) < p)
+                        mask = np.clip(mask + extra.astype(np.int64), 0, 1)
+
+                    # Mode 2: partial fragments (unfix some fixed atoms via Bernoulli)
+                    elif self.partial_mode == "fragment_bernoulli_atom":
+                        unfix = (mask == 1) & (np.random.rand(frags.size) < p)
+                        mask = np.clip(mask - unfix.astype(np.int64), 0, 1)
+
+                    # Mode 3: partial fragments + single atoms (flip Bernoulli-selected atoms)
+                    elif self.partial_mode == "fragment_plus_flipped_atoms":
+                        flip = np.random.rand(frags.size) < p
+                        mask = np.abs(mask - flip.astype(np.int64))
+
+            ligand.fixed_atom_mask = torch.from_numpy(mask)
+            ligand.fixed_edge_mask = (ligand.fixed_atom_mask[ligand.bond_indices[:, 0]]
                                             & ligand.fixed_atom_mask[ligand.bond_indices[:, 1]]).long()
 
         if include_pharmacophore:

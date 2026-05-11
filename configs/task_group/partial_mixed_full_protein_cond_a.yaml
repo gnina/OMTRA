@@ -1,5 +1,5 @@
 # this block must be included in all task_group configs
-# especially the datamodule: default attribue
+# especially the datamodule: default attribute
 defaults:
   - _self_
   - datamodule: default
@@ -7,13 +7,18 @@ defaults:
 
 # Define tasks with time-varying probabilities
 # this is p(task) but p(task) can change through the course of training
+# Full modality: 25%, Partial modality: 70%, Pharmit: 5%
 task_phases:
   - duration_batches: null
     tasks:
       - name: partial_rigid_docking_condensed
-        probability: 0.475
+        probability: 0.35
       - name: partial_fixed_protein_ligand_denovo_condensed
-        probability: 0.475
+        probability: 0.35
+      - name: rigid_docking_condensed
+        probability: 0.125
+      - name: fixed_protein_ligand_denovo_condensed
+        probability: 0.125
       - name: partial_denovo_ligand_condensed
         probability: 0.025
       - name: partial_ligand_conformer_condensed
@@ -24,6 +29,10 @@ dataset_task_coupling:
   partial_rigid_docking_condensed:
     - [plinder, 1.0]
   partial_fixed_protein_ligand_denovo_condensed:
+    - [plinder, 1.0]
+  rigid_docking_condensed:
+    - [plinder, 1.0]
+  fixed_protein_ligand_denovo_condensed:
     - [plinder, 1.0]
   partial_denovo_ligand_condensed:
     - [pharmit, 1.0]
