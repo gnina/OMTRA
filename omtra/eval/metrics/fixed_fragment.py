@@ -1,8 +1,17 @@
 """Metrics for partial fragment conditioning tasks.
 
-Computes per-sample statistics on how much the model redesigned atoms and
-bonds that belong to the fixed (conditioned) fragment, and whether redesigned
-atoms end up within 2 Å of their ground-truth positions.
+For each fixed atom/edge, measures whether the model reproduced the same type in the
+generated ligand and whether the geometry stayed within 2 Å of ground truth.
+
+Metrics returned per SampledSystem
+-----------------------------------
+n_atoms_fixed                   : number of fixed atoms
+frac_fixed_atoms_redesigned     : fraction of fixed atoms with same type in generated ligand
+frac_fixed_atoms_redesigned_≤2Å : fraction of fixed atoms with same type AND within 2 Å
+frac_fixed_edges_redesigned     : fraction of fixed bonds with same bond order in generated ligand
+frac_fixed_redesigned           : combined (atoms + edges) fraction with same type
+frac_fixed_redesigned_≤2Å       : combined (atoms + edges) fraction with same type AND within 2 Å
+                                  (edge geometry measured at bond midpoint)
 """
 
 from __future__ import annotations
@@ -35,60 +44,52 @@ def _fixed_frag_metrics(sys: SampledSystem) -> Dict[str, float]:
     if n_fixed == 0:
         return result
 
-    # ---- Atom (node) metrics ----
+    # ---- Atom metrics ----
     a_pred = lig_data["a_1"][fixed_node_mask]
     a_true = lig_data["a_1_true"][fixed_node_mask]
     x_pred = lig_data["x_1"][fixed_node_mask].float()
     x_true = lig_data["x_1_true"][fixed_node_mask].float()
 
-    atom_redesigned = a_pred != a_true
-    n_redesigned = int(atom_redesigned.sum().item())
-    result["frac_fixed_atoms_redesigned"] = n_redesigned / n_fixed
-
+    atom_same = a_pred == a_true
     dists = torch.norm(x_pred - x_true, dim=-1)
-    if n_redesigned > 0:
-        result["frac_fixed_atoms_redesigned_within_2A"] = (
-            float((atom_redesigned & (dists < 2.0)).sum().item()) / n_redesigned
-        )
-    else:
-        result["frac_fixed_atoms_redesigned_within_2A"] = float("nan")
+    n_atom_same = int(atom_same.sum().item())
+    n_atom_same_close = int((atom_same & (dists < 2.0)).sum().item())
 
-    # ---- Edge (bond) metrics ----
+    result["frac_fixed_atoms_redesigned"] = n_atom_same / n_fixed
+    result["frac_fixed_atoms_redesigned_≤2Å"] = n_atom_same_close / n_fixed
+
+    # ---- Edge metrics ----
+    n_fixed_edges = 0
+    n_edge_same = 0
+    n_edge_same_close = 0
+
     edge_data = g.edges["lig_to_lig"].data
-    if not all(k in edge_data for k in ("edge_mask_1_true", "e_1", "e_1_true")):
-        return result
+    if all(k in edge_data for k in ("edge_mask_1_true", "e_1", "e_1_true")):
+        upper_mask = get_upper_edge_mask(g, etype="lig_to_lig")
+        fixed_edge_mask = edge_data["edge_mask_1_true"].bool() & upper_mask
+        n_fixed_edges = int(fixed_edge_mask.sum().item())
 
-    upper_mask = get_upper_edge_mask(g, etype="lig_to_lig")
-    fixed_edge_mask = edge_data["edge_mask_1_true"].bool() & upper_mask
-    n_fixed_edges = int(fixed_edge_mask.sum().item())
+        if n_fixed_edges > 0:
+            e_pred = edge_data["e_1"][fixed_edge_mask]
+            e_true = edge_data["e_1_true"][fixed_edge_mask]
+            edge_same = e_pred == e_true
+            n_edge_same = int(edge_same.sum().item())
+            result["frac_fixed_edges_redesigned"] = n_edge_same / n_fixed_edges
 
-    if n_fixed_edges == 0:
-        return result
+            src, dst = g.edges(etype="lig_to_lig")
+            src_fixed = src[fixed_edge_mask]
+            dst_fixed = dst[fixed_edge_mask]
+            x_pred_all = lig_data["x_1"].float()
+            x_true_all = lig_data["x_1_true"].float()
+            mid_pred = (x_pred_all[src_fixed] + x_pred_all[dst_fixed]) / 2
+            mid_true = (x_true_all[src_fixed] + x_true_all[dst_fixed]) / 2
+            edge_dists = torch.norm(mid_pred - mid_true, dim=-1)
+            n_edge_same_close = int((edge_same & (edge_dists < 2.0)).sum().item())
 
-    e_pred = edge_data["e_1"][fixed_edge_mask]
-    e_true = edge_data["e_1_true"][fixed_edge_mask]
-
-    edge_redesigned = e_pred != e_true
-    n_edges_redesigned = int(edge_redesigned.sum().item())
-    result["frac_fixed_edges_redesigned"] = n_edges_redesigned / n_fixed_edges
-
-    if n_edges_redesigned > 0:
-        src, dst = g.edges(etype="lig_to_lig")
-        src_fixed = src[fixed_edge_mask]
-        dst_fixed = dst[fixed_edge_mask]
-
-        x_pred_all = lig_data["x_1"].float()
-        x_true_all = lig_data["x_1_true"].float()
-
-        mid_pred = (x_pred_all[src_fixed] + x_pred_all[dst_fixed]) / 2
-        mid_true = (x_true_all[src_fixed] + x_true_all[dst_fixed]) / 2
-        edge_dists = torch.norm(mid_pred - mid_true, dim=-1)
-
-        result["frac_fixed_edges_redesigned_within_2A"] = (
-            float((edge_redesigned & (edge_dists < 2.0)).sum().item()) / n_edges_redesigned
-        )
-    else:
-        result["frac_fixed_edges_redesigned_within_2A"] = float("nan")
+    # ---- Combined metrics (atoms + edges) ----
+    n_total = n_fixed + n_fixed_edges
+    result["frac_fixed_redesigned"] = (n_atom_same + n_edge_same) / n_total
+    result["frac_fixed_redesigned_≤2Å"] = (n_atom_same_close + n_edge_same_close) / n_total
 
     return result
 
