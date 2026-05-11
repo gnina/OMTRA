@@ -25,6 +25,7 @@ from omtra.eval.metrics.pharmacophore import pharmacophore_match_from_dict
 from omtra.eval.metrics.posebusters import pb_validate
 from omtra.eval.metrics.gnina import gnina_score_and_minimize
 from omtra.eval.metrics.posecheck import posecheck_all
+from omtra.eval.metrics.fixed_fragment import fixed_frag_metrics
 from omtra.eval.metrics.lddt import lddt_pli_scores
 
 
@@ -89,10 +90,12 @@ def determine_applicable_metrics(
         "ligand_identity_condensed" in task.groups_generated
         or "ligand_identity" in task.groups_generated
     )
-    protein_structure_generated = "protein_structure" in task.groups_generated
     has_pharmacophore = "pharmacophore" in task.groups_present
+    protein_structure_generated = "protein_structure" in task.groups_generated
 
     # Determine which metrics are applicable for this task
+    is_partial = len(task.partial_modalities_fixed) > 0
+
     applicable = {
         "pb_valid": has_protein,
         "gnina": has_protein,
@@ -101,6 +104,7 @@ def determine_applicable_metrics(
         "pharm_match": has_pharmacophore,
         "ground_truth": has_protein,
         "interaction_recovery": has_protein,  # opt-in only
+        "fixed_frag_metrics": is_partial,
         # lDDT-PLI with fixed protein (rigid docking / ligand-only tasks)
         "lddt_lig": has_protein and not lig_identity_generated and not protein_structure_generated,
         # lDDT-PLI with generated protein (flexible docking)
@@ -111,7 +115,7 @@ def determine_applicable_metrics(
     if requested:
         internal_names = {CLI_TO_INTERNAL[m] for m in requested}
         for key in list(applicable):
-            if key in ("ground_truth", "interaction_recovery"):
+            if key in ("ground_truth", "interaction_recovery", "fixed_frag_metrics"):
                 continue
             if key not in internal_names:
                 applicable[key] = False
@@ -176,6 +180,9 @@ def compute_metrics(
     metrics_to_run: Dict[str, bool],
     timeout: int,
     disable_strain: bool = False,
+    sampled_systems=None,
+    n_replicates: int = None,
+    protein_generated: bool = False,
 ) -> pd.DataFrame:
     """Compute evaluation metrics for all system pairs.
 
@@ -488,6 +495,17 @@ def compute_metrics(
                     metrics.loc[valid_lig_indices, pharm_results.columns] = (
                         pharm_results
                     )
+
+    # ---- Fixed Fragment Metrics ----
+    if metrics_to_run.get("fixed_frag_metrics") and sampled_systems is not None:
+        n_systems = len(system_pairs)
+        frag_df = fixed_frag_metrics(
+            sampled_systems=sampled_systems,
+            n_systems=n_systems,
+            n_replicates=n_replicates,
+            protein_generated=protein_generated,
+        )
+        metrics = metrics.join(frag_df, how="left")
 
     return metrics
 
