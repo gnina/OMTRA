@@ -28,6 +28,7 @@ def pharmacophore_match(
     results: Dict[str, list] = {
         "perfect_pharm_match": [],
         "frac_true_pharms_matched": [],
+        "n_pharms": [],
     }
 
     true_coords = np.asarray(true_pharm_coords)
@@ -42,6 +43,7 @@ def pharmacophore_match(
             print(f"Failed to get pharmacophores for generated ligand: {e}")
             results["perfect_pharm_match"].append(None)
             results["frac_true_pharms_matched"].append(None)
+            results["n_pharms"].append(true_coords.shape[0])
             continue
 
         d = cdist(true_coords, gen_coords)
@@ -58,6 +60,7 @@ def pharmacophore_match(
         results["frac_true_pharms_matched"].append(
             matching_pharms.any(axis=1).sum() / n_true_pharms
         )
+        results["n_pharms"].append(true_coords.shape[0])
 
     return results
 
