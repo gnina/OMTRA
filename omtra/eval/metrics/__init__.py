@@ -1,4 +1,5 @@
 from omtra.eval.metrics.rmsd import ligand_rmsd
+from omtra.eval.metrics.lddt import lddt_pli_scores
 from omtra.eval.metrics.pharmacophore import pharmacophore_match, pharmacophore_match_from_dict
 from omtra.eval.metrics.posebusters import pb_validate
 from omtra.eval.metrics.gnina import gnina_score, gnina_minimize, gnina_score_and_minimize
@@ -22,6 +23,7 @@ from omtra.eval.metrics.compute import (
 
 __all__ = [
     "ligand_rmsd",
+    "lddt_pli_scores",
     "pharmacophore_match",
     "pharmacophore_match_from_dict",
     "pb_validate",

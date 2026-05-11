@@ -25,13 +25,14 @@ from omtra.eval.metrics.pharmacophore import pharmacophore_match_from_dict
 from omtra.eval.metrics.posebusters import pb_validate
 from omtra.eval.metrics.gnina import gnina_score_and_minimize
 from omtra.eval.metrics.posecheck import posecheck_all
+from omtra.eval.metrics.lddt import lddt_pli_scores
 
 
 # ---------------------------------------------------------------------------
 # Public constants
 # ---------------------------------------------------------------------------
 
-VALID_EVAL_METRICS = {"posebusters", "gnina", "posecheck", "rmsd", "pharmacophore"}
+VALID_EVAL_METRICS = {"posebusters", "gnina", "posecheck", "rmsd", "pharmacophore", "lddt_lig", "lddt"}
 
 CLI_TO_INTERNAL = {
     "posebusters": "pb_valid",
@@ -39,6 +40,8 @@ CLI_TO_INTERNAL = {
     "posecheck": "posecheck",
     "rmsd": "rmsd",
     "pharmacophore": "pharm_match",
+    "lddt_lig": "lddt_lig",
+    "lddt": "lddt",
 }
 
 
@@ -86,6 +89,7 @@ def determine_applicable_metrics(
         "ligand_identity_condensed" in task.groups_generated
         or "ligand_identity" in task.groups_generated
     )
+    protein_structure_generated = "protein_structure" in task.groups_generated
     has_pharmacophore = "pharmacophore" in task.groups_present
 
     # Determine which metrics are applicable for this task
@@ -97,6 +101,10 @@ def determine_applicable_metrics(
         "pharm_match": has_pharmacophore,
         "ground_truth": has_protein,
         "interaction_recovery": has_protein,  # opt-in only
+        # lDDT-PLI with fixed protein (rigid docking / ligand-only tasks)
+        "lddt_lig": has_protein and not lig_identity_generated and not protein_structure_generated,
+        # lDDT-PLI with generated protein (flexible docking)
+        "lddt": has_protein and not lig_identity_generated and protein_structure_generated,
     }
 
     # If specific metrics requested, filter to only those
@@ -431,6 +439,39 @@ def compute_metrics(
                             (sys_id, data["gen_prot_id"], data["gen_ligs_ids"][i]),
                             "rmsd",
                         ] = rmsd_result
+
+            # ---- lDDT-PLI (ligand placement, fixed protein) ----
+            if metrics_to_run.get("lddt_lig"):
+                lddt_lig_results = run_with_timeout(
+                    lddt_pli_scores,
+                    timeout=120,
+                    gen_ligs=data["gen_ligs"],
+                    true_lig=true_lig,
+                    prot_file=data["true_prot_file"],
+                )
+                if lddt_lig_results is not None:
+                    for i, score in enumerate(lddt_lig_results):
+                        metrics.loc[
+                            (sys_id, data["gen_prot_id"], data["gen_ligs_ids"][i]),
+                            "lddt_lig",
+                        ] = score
+
+            # ---- lDDT-PLI (protein + ligand, flexible protein) ----
+            if metrics_to_run.get("lddt"):
+                lddt_results = run_with_timeout(
+                    lddt_pli_scores,
+                    timeout=120,
+                    gen_ligs=data["gen_ligs"],
+                    true_lig=true_lig,
+                    prot_file=data["true_prot_file"],
+                    gen_prot_file=data.get("gen_prot_file"),
+                )
+                if lddt_results is not None:
+                    for i, score in enumerate(lddt_results):
+                        metrics.loc[
+                            (sys_id, data["gen_prot_id"], data["gen_ligs_ids"][i]),
+                            "lddt",
+                        ] = score
 
             # ---- Pharmacophore matching ----
             if metrics_to_run["pharm_match"]:
