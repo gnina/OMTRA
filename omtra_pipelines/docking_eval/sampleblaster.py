@@ -99,6 +99,12 @@ def parse_args():
         help='Dataset arg passed to docking_eval.py (default: plinder)'
     )
     parser.add_argument(
+        "--plinder_path",
+        type=Path,
+        default=None,
+        help="Path to plinder dataset (default: None)"
+    )
+    parser.add_argument(
         "--crossdocked_path",
         type=Path,
         default=None,
