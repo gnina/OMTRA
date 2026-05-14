@@ -100,10 +100,10 @@ def move_feats_to_t1(task_name: str, g: dgl.DGLHeteroGraph, t: str = '0'):
     return g
 
 
-def dgl_to_rdkit(g):
+def dgl_to_rdkit(g, task_name='denovo_ligand'):
     """ Converts one DGL molecule to RDKit ligand """
 
-    task_name: str = 'denovo_ligand'
+    #task_name: str = 'denovo_ligand'
     task: Task = task_name_to_class(task_name)
 
     g = move_feats_to_t1(task_name, g, '1_true')

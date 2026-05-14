@@ -52,7 +52,69 @@ denovo_ligand_condensed:
       train: true
       params:
         max_workers: 0
+partial_denovo_ligand_condensed:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 denovo_ligand_from_pharmacophore_condensed:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+  - pharm_match:
+      train: true
+      params:
+        threshold: 1.0
+denovo_ligand_from_pharmacophore:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+  - pharm_match:
+      train: true
+      params:
+        threshold: 1.0
+denovo_ligand_from_pharmacophore_extra_feats:
   - validity:
       train: true
       params: {}
@@ -131,6 +193,25 @@ ligand_conformer_condensed:
       train: true
       params:
         max_workers: 0
+partial_ligand_conformer_condensed:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - pb_valid_conformer:
+      train: true
+      params:
+        max_workers: 0
 ligand_conformer_from_pharmacophore_condensed:
   - stability:
       train: true
@@ -154,6 +235,64 @@ ligand_conformer_from_pharmacophore_condensed:
       train: true
       params:
         threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+ligand_conformer_from_pharmacophore:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - pb_valid_conformer:
+      train: true
+      params:
+        max_workers: 0
+  - pharm_match:
+      train: true
+      params:
+        threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+ligand_conformer_from_pharmacophore_extra_feats:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - pb_valid_conformer:
+      train: true
+      params:
+        max_workers: 0
+  - pharm_match:
+      train: true
+      params:
+        threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 rigid_docking:
   - stability:
       train: true
@@ -178,6 +317,33 @@ rigid_docking:
       params:
         clash_cutoff: 0.05
 rigid_docking_condensed:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+partial_rigid_docking_condensed:
   - stability:
       train: true
       params: {}
@@ -440,6 +606,32 @@ protein_ligand_denovo_condensed:
       train: true
       params:
         max_workers: 0
+partial_protein_ligand_denovo_condensed:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 protein_ligand_denovo_extra_feats:
   - validity:
       train: true
@@ -485,6 +677,32 @@ fixed_protein_ligand_denovo:
       params:
         clash_cutoff: 0.05
 fixed_protein_ligand_denovo_condensed:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+partial_fixed_protein_ligand_denovo_condensed:
   - validity:
       train: true
       params: {}
@@ -651,7 +869,129 @@ rigid_docking_pharmacophore_condensed:
       train: true
       params:
         max_workers: 0
+rigid_docking_pharmacophore:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - pharm_match:
+      train: true
+      params:
+        threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+rigid_docking_pharmacophore_extra_feats:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - pharm_match:
+      train: true
+      params:
+        threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 fixed_protein_pharmacophore_ligand_denovo_condensed:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - pharm_match:
+      train: true
+      params:
+        threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+fixed_protein_pharmacophore_ligand_denovo:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - pharm_match:
+      train: true
+      params:
+        threshold: 1.0
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+fixed_protein_pharmacophore_ligand_denovo_extra_feats:
   - validity:
       train: true
       params: {}

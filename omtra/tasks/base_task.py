@@ -7,6 +7,8 @@ from typing import List
 
 class Task:
 
+    partial_modalities_fixed: List[str] = []
+
     @classproperty
     def groups_present(self):
         return self.groups_fixed + self.groups_generated
@@ -20,7 +22,7 @@ class Task:
         modalities = []
         for modality_name in modal.MODALITY_ORDER:
             modality = name_to_modality(modality_name)
-            if modality.group in self.groups_generated:
+            if (modality.group in self.groups_generated):
                 modalities.append(modality)
         return modalities
     
@@ -29,14 +31,14 @@ class Task:
         modalities = []
         for modality_name in modal.MODALITY_ORDER:
             modality = name_to_modality(modality_name)
-            if modality.group in self.groups_fixed:
+            if (modality.group in self.groups_fixed):
                 modalities.append(modality)
         return modalities
     
     @classproperty
     def modalities_present(self) -> List[Modality]:
         return self.modalities_fixed + self.modalities_generated
-    
+
     @classproperty
     def plinder_link_version(self) -> str:
         prot_atom_prior = self.priors.get('prot_atom_x', None)
@@ -62,7 +64,7 @@ class Task:
     @classproperty
     def unconditional(self) -> bool:
         """Returns True if the task is fully unconditional, i.e., all groups are generated and none are fixed."""
-        return set(self.groups_generated) == set(self.groups_present)
+        return (set(self.groups_generated) == set(self.groups_present)) and (len(self.partial_modalities_fixed) == 0)
 
     @classproperty
     def has_protein(self) -> bool:

@@ -34,6 +34,7 @@ from omtra.constants import (
 
 from omtra.data.graph.utils import get_batch_idxs
 from omtra.utils.graph import g_local_scope
+from omtra.models.embeddings.fixed_cond_embed import FixedConditionEmbedder
 
 # from line_profiler import LineProfiler, profile
 
@@ -72,7 +73,14 @@ class VectorField(nn.Module):
         dst_feat_msg_reduction_factor: float = 4,
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
-        res_id_embed_dim: int = 64
+        res_id_embed_dim: int = 64, 
+        fixed_coord_max_std: float = 0.0,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: float = 0.0,
+        fixed_token_prob: Optional[float] = None,
+        marginal_path: str = None,
+        marginal_keys: dict = None,
+        pharm_pos_std_flag: bool = False,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -91,6 +99,12 @@ class VectorField(nn.Module):
         self.has_mask = has_mask
         self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
+
+        self.fixed_coord_max_std = fixed_coord_max_std
+        self.fixed_coord_std = fixed_coord_std
+        self.fixed_token_max_prob = fixed_token_max_prob
+        self.fixed_token_prob = fixed_token_prob
+        self.pharm_pos_std_flag = pharm_pos_std_flag
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -117,15 +131,19 @@ class VectorField(nn.Module):
         ]
         modality_present_space = set()
         modality_generated_space = set()
+        partial_modality_fixed_space = set()
         for task_class in task_classes:
             for m in task_class.modalities_fixed:
                 modality_present_space.add(m.name)
             for m in task_class.modalities_generated:
                 modality_present_space.add(m.name)
                 modality_generated_space.add(m.name)
+            for m in task_class.partial_modalities_fixed:
+                partial_modality_fixed_space.add(m)
 
         modality_present_space = sorted(list(modality_present_space))
         modality_generated_space = sorted(list(modality_generated_space))
+        partial_modality_fixed_space = sorted(list(partial_modality_fixed_space))
 
         modalities_present_cls = [
             name_to_modality(modality_name) for modality_name in modality_present_space
@@ -134,6 +152,25 @@ class VectorField(nn.Module):
             name_to_modality(modality_name)
             for modality_name in modality_generated_space
         ]
+        partial_modality_fixed_cls = [
+            name_to_modality(modality_name)
+            for modality_name in partial_modality_fixed_space
+        ]
+
+        self.fixed_cond_embedder = FixedConditionEmbedder(
+            partial_modality_fixed_cls=partial_modality_fixed_cls,
+            token_dim=self.token_dim,
+            n_hidden_scalars=self.n_hidden_scalars,
+            n_hidden_edge_feats=self.n_hidden_edge_feats,
+            fake_atoms=self.fake_atoms,
+            res_id_embed_dim=res_id_embed_dim,
+            fixed_coord_max_std=self.fixed_coord_max_std,
+            fixed_coord_std=self.fixed_coord_std,
+            fixed_token_max_prob=self.fixed_token_max_prob,
+            fixed_token_prob=self.fixed_token_prob,
+            marginal_path=marginal_path,
+            marginal_keys=marginal_keys,
+            )
 
         # get the set of all nodes present in our graphs
         self.node_types = set(
@@ -196,6 +233,9 @@ class VectorField(nn.Module):
             input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
             if res_id_embed_dim is not None and ntype == 'prot_atom':
                 input_dim += res_id_embed_dim
+            if self.pharm_pos_std_flag and ntype == 'pharm':
+                input_dim += 1
+
 
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
@@ -368,6 +408,10 @@ class VectorField(nn.Module):
         remove_com=False,
         prev_dst_dict=None,
         extract_latents_for_confidence=False,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
     ):
         """Predict x_1 (trajectory destination) given x_t, and, optionally, previous destination features."""
         device = g.device
@@ -462,6 +506,10 @@ class VectorField(nn.Module):
             task_idx
         )  # tensor of shape (batch_size, token_dim)
 
+        if 'pharm' in node_scalar_features and self.pharm_pos_std_flag and g.num_nodes('pharm') > 0:
+            pharm_stddev = g.nodes['pharm'].data['pharm_pos_std']
+            node_scalar_features['pharm'].append(pharm_stddev)
+
         # add time and task embedding to node scalar features
         for ntype in node_scalar_features.keys():
             # add time embedding to node scalar features
@@ -485,6 +533,23 @@ class VectorField(nn.Module):
             node_scalar_features[ntype] = self.scalar_embedding[ntype](
                 node_scalar_features[ntype]
             )
+        
+        # add embeddings for fixed atoms/edges
+        fixed_node_features, fixed_edge_features = self.fixed_cond_embedder(g, 
+                                                                            task_class,
+                                                                            fixed_coord_max_std,
+                                                                            fixed_coord_std,
+                                                                            fixed_token_max_prob,
+                                                                            fixed_token_prob)
+        for ntype in fixed_node_features.keys():
+            node_scalar_features[ntype] = node_scalar_features[ntype] + fixed_node_features[ntype]
+        for etype in fixed_edge_features.keys():
+            if etype in edge_features:
+                edge_features[etype] = edge_features[etype] + fixed_edge_features[etype]
+            else:
+                edge_features[etype] = fixed_edge_features[etype]
+        # TODO: layer norm after add?
+
 
         if self.self_conditioning and prev_dst_dict is None:
             train_self_condition = self.training and (torch.rand(1) > 0.5).item()
@@ -713,7 +778,9 @@ class VectorField(nn.Module):
             if m.is_node and g.num_nodes(m.entity_name) == 0:
                 continue
             if m.data_key == "x":
-                dst_dict[m.name] = node_positions[m.entity_name]
+                node_pos = node_positions[m.entity_name]
+                dst_dict[m.name] = node_pos
+
             elif m.is_categorical:
                 dst_dict[m.name] = logits[m.name]
                 if apply_softmax:
@@ -892,7 +959,7 @@ class VectorField(nn.Module):
 
             if visualize:
                 add_frame(g)
-
+                
         # set x_1 = x_t
         for modality in task.node_modalities_present:
             ntype = modality.entity_name
@@ -954,6 +1021,10 @@ class VectorField(nn.Module):
         stochastic_sampling: bool = False,
         noise_scaler: float = 1.0,
         eps: float = 0.01,
+        fixed_coord_max_std: Optional[float] = None,
+        fixed_coord_std: Optional[float] = None,
+        fixed_token_max_prob: Optional[float] = None,
+        fixed_token_prob: Optional[float] = None
     ):
         device = g.device
 
@@ -972,7 +1043,11 @@ class VectorField(nn.Module):
             apply_softmax=True,
             remove_com=False,  # TODO: is this ...should this be set to True?
             prev_dst_dict=prev_dst_dict,
-            extract_latents_for_confidence=extract_latents_for_confidence
+            extract_latents_for_confidence=extract_latents_for_confidence,
+            fixed_coord_max_std=fixed_coord_max_std,
+            fixed_coord_std=fixed_coord_std,
+            fixed_token_max_prob=fixed_token_max_prob,
+            fixed_token_prob=fixed_token_prob
         )
         
         if extract_latents_for_confidence:

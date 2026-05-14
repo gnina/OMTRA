@@ -149,10 +149,46 @@ def parse_args():
         help='Which data split to use'
     )
     p.add_argument(
-        "--metrics", 
-        action="store_true", 
+        "--metrics",
+        action="store_true",
         help="If set, compute metrics for the samples"
     )
+    p.add_argument(
+        '--fixed_coord_max_std',
+        type=float,
+        default=None,
+        help='Maximum sampled standard deviation of noise added to coordinates of fixed atoms. If not set, falls back to the value used during training.'
+    )
+    p.add_argument(
+        '--fixed_coord_std',
+        type=float,
+        default=None,
+        help='Optionally fix the standard deviation of the noise added to coordinates of fixed atoms'
+    )
+    p.add_argument(
+        '--fixed_token_max_prob',
+        type=float,
+        default=None,
+        help='Maximum sampled probability of replacing categorical tokens of fixed atoms. If not set, falls back to the value used during training.'
+    )
+    p.add_argument(
+        '--fixed_token_prob',
+        type=float,
+        default=None,
+        help='Optionally fix the probability of replacing categorical tokens of fixed atoms'
+    )
+
+    # Docking evaluation metrics
+    p.add_argument("--eval", nargs='*', default=None, metavar='METRIC',
+        help="Compute per-sample eval metrics after sampling. "
+             "No args = all applicable. "
+             "Choices: posebusters, gnina, posecheck, rmsd, pharmacophore")
+    p.add_argument("--eval-timeout", type=int, default=600,
+        help="Timeout per metric computation in seconds (default: 600)")
+    p.add_argument("--eval-no-strain", action="store_true",
+        help="Skip strain energy in posecheck")
+    p.add_argument("--eval-interaction-recovery", action="store_true",
+        help="Include interaction recovery analysis")
 
     return p.parse_args()
 
@@ -231,10 +267,11 @@ def write_ground_truth(
         n_systems: int,
         n_replicates: int,
         task: Task,
-        output_dir: Path, 
+        output_dir: Path,
         sampled_systems,
         g_list,
-        prot_cif: bool = True
+        prot_cif: bool = True,
+        also_write_pdb: bool = False,
     ):
     for cond_idx in range(n_systems):
         # get an example system containing the ground truth information of interest
@@ -248,8 +285,8 @@ def write_ground_truth(
         # write the ground truth ligand
         gt_lig_file = sys_gt_dir / "ligand.sdf"
         sys.write_ligand(
-            gt_lig_file, 
-            ground_truth=True, 
+            gt_lig_file,
+            ground_truth=True,
             g=g_list[cond_idx].to('cpu'),
         )
 
@@ -258,6 +295,8 @@ def write_ground_truth(
             if prot_cif:
                 gt_prot_file = sys_gt_dir / "protein.cif"
                 sys.write_protein(gt_prot_file, ground_truth=True)
+                if also_write_pdb:
+                    sys.write_protein_pdb(sys_gt_dir, filename='protein', ground_truth=True)
             else:
                 sys.write_protein_pdb(sys_gt_dir, filename='protein', ground_truth=True)
 
@@ -269,6 +308,15 @@ def write_ground_truth(
                 ground_truth=True, 
                 g=g_list[cond_idx].to('cpu')
                 )
+        
+        # write xyz file with fixed fragments if we are doing partial modality conditioning
+        if len(task.partial_modalities_fixed) > 0:
+            gt_fixed_atoms_file = sys_gt_dir / "fixed_atoms.xyz"
+            sys.write_fixed_atoms(
+                gt_fixed_atoms_file,
+                ground_truth=True,
+                g=g_list[cond_idx].to('cpu')
+            )
 
 def main(args):
     # 1) resolve checkpoint path
@@ -310,11 +358,19 @@ def main(args):
 
             # instantiate datamodule & model
             if args.dataset == 'plinder':
-                spoof_cfg = quick_load.load_cfg(overrides=[
-                    'task_group=prot_protpharm_cond',
-                    f'plinder_path={args.plinder_path}',
-                    f'pharmit_path={args.pharmit_path}',
-                ])
+                overrides = ['task_group=prot_protpharm_cond']
+                if args.plinder_path is not None:
+                    overrides.append(f'plinder_path={args.plinder_path}')
+                if args.pharmit_path is not None:
+                    overrides.append(f'pharmit_path={args.pharmit_path}')
+                spoof_cfg = quick_load.load_cfg(overrides=overrides)
+                dm = quick_load.datamodule_from_config(spoof_cfg)
+                multitask_dataset = dm.load_dataset(args.split)
+            elif args.dataset == 'pharmit':
+                overrides = ['task_group=pharmit5050_cond_a']
+                if args.pharmit_path is not None:
+                    overrides.append(f'pharmit_path={args.pharmit_path}')
+                spoof_cfg = quick_load.load_cfg(overrides=overrides)
                 dm = quick_load.datamodule_from_config(spoof_cfg)
                 multitask_dataset = dm.load_dataset(args.split)
             else:
@@ -346,24 +402,34 @@ def main(args):
 
     # set coms if protein is present, prefer ligand com
     coms = None
-    
-    # Priority 1: Explicit pocket center from CLI/Worker
+
+    # Priority 1: Explicit pocket center from CLI/Worker (local webapp / worker)
     if hasattr(args, 'pocket_center') and args.pocket_center is not None and g_list is not None:
         target_com = torch.tensor(args.pocket_center, device=device, dtype=torch.float32)
-        # Shift ligand nodes to the pocket center if they exist
         for g in g_list:
             if g.num_nodes('lig') > 0:
                 current_com = g.nodes['lig'].data['x_1_true'].mean(dim=0)
                 g.nodes['lig'].data['x_1_true'] += (target_com - current_com)
-        # Set coms to the target center
         coms = [target_com] * len(g_list)
-        
-    elif g_list is not None and 'protein_identity' in task.groups_present:
-        if g_list[0].num_nodes('lig') > 0 and 'x_1_true' in g_list[0].nodes['lig'].data:
-            coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
-        # fallback protein atom com if present
-        elif g_list[0].num_nodes('prot_atom') > 0 and 'x_1_true' in g_list[0].nodes['prot_atom'].data:
-            coms = [ g.nodes['prot_atom'].data['x_1_true'].mean(dim=0) for g in g_list ]
+
+    elif g_list is not None:
+        task_requires_ligand = any(
+            group in task.groups_present
+            for group in ["ligand_identity", "ligand_identity_condensed"]
+        )
+        reference_ligand_present = (
+            task_requires_ligand and 'x_1_true' in g_list[0].nodes['lig'].data
+        )
+        if reference_ligand_present:
+            coms = [g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list]
+        elif 'protein_identity' in task.groups_present:
+            if g_list[0].num_nodes('lig') > 0 and 'x_1_true' in g_list[0].nodes['lig'].data:
+                coms = [g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list]
+            elif (
+                g_list[0].num_nodes('prot_atom') > 0
+                and 'x_1_true' in g_list[0].nodes['prot_atom'].data
+            ):
+                coms = [g.nodes['prot_atom'].data['x_1_true'].mean(dim=0) for g in g_list]
 
     sampled_systems = model.sample(
         g_list=g_list,
@@ -379,9 +445,11 @@ def main(args):
         eps=args.eps,
         n_lig_atom_margin=args.n_lig_atom_margin if args.use_gt_n_lig_atoms else None,
         n_lig_atoms_mean=getattr(args, 'n_lig_atoms_mean', None),
-
-        n_lig_atoms_std=getattr(args, 'n_lig_atoms_std', None),
-        pharm_pos_std=getattr(args, 'pharmacophore_tolerance', 0.0)
+        n_lig_atoms_std=getattr(args, 'n_lig_atoms_std', 0.0),
+        fixed_coord_max_std=getattr(args, 'fixed_coord_max_std', None),
+        fixed_coord_std=getattr(args, 'fixed_coord_std', None),
+        fixed_token_max_prob=getattr(args, 'fixed_token_max_prob', None),
+        fixed_token_prob=getattr(args, 'fixed_token_prob', None),
     )
 
     if args.output_dir is None:
@@ -394,9 +462,10 @@ def main(args):
     print(f"Saving samples to {output_dir}")
 
     if task.unconditional and not args.visualize:
+        sys_gt_dir = output_dir / "sys_0_gt"
+        sys_gt_dir.mkdir(parents=True, exist_ok=True)
         lig_samples = [ s.get_rdkit_ligand() for s in sampled_systems ]
-        output_file = output_dir / f"{task_name}_lig.sdf"
-        write_mols_to_sdf(lig_samples, output_file)
+        write_mols_to_sdf(lig_samples, sys_gt_dir / "gen_ligands.sdf")
     elif task.unconditional and args.visualize:
         for i, sys in enumerate(sampled_systems):
             lig_xt_file = output_dir / f"sys{i}_xt.sdf"
@@ -494,9 +563,82 @@ def main(args):
                 system.write_pharmacophore(pharm_xt_file, trajectory=True, endpoint=False)
                 system.write_pharmacophore(pharm_xhat_file, trajectory=True, endpoint=True)
 
+    # --- Docking evaluation metrics ---
+    if getattr(args, 'eval', None) is not None:
+        if task.unconditional:
+            print("Warning: --eval is not supported for unconditional tasks. Skipping.")
+        elif 'protein_identity' not in task.groups_present:
+            print("Warning: --eval requires protein-conditioned tasks. Skipping.")
+        elif args.visualize:
+            print("Warning: --eval is not supported with --visualize. Skipping.")
+        elif hasattr(args, 'g_list_from_files') and args.g_list_from_files is not None:
+            print("Warning: --eval is not yet supported with file inputs. Skipping.")
+        else:
+            import pandas as pd
+            from omtra.eval.metrics.compute import (
+                compute_metrics, system_pairs_from_path,
+                determine_applicable_metrics, determine_pb_mode,
+                VALID_EVAL_METRICS,
+            )
+
+            # Validate requested metrics
+            requested = args.eval if args.eval else None
+            if requested:
+                invalid = set(requested) - VALID_EVAL_METRICS
+                if invalid:
+                    print(f"Unknown eval metrics: {invalid}. "
+                          f"Valid: {sorted(VALID_EVAL_METRICS)}")
+                    import sys as _sys
+                    _sys.exit(1)
+
+            metrics_to_run = determine_applicable_metrics(task, requested)
+            metrics_to_run['interaction_recovery'] = (
+                getattr(args, 'eval_interaction_recovery', False)
+                and metrics_to_run.get('posecheck', False)
+            )
+
+            # Ensure PDB files exist for gnina/posecheck
+            needs_pdb = metrics_to_run.get('gnina') or metrics_to_run.get('posecheck') or metrics_to_run.get('pb_valid')
+            if needs_pdb and g_list is not None:
+                for cond_idx in range(n_systems):
+                    sys_obj = sampled_systems[cond_idx * n_replicates]
+                    sys_gt_dir = output_dir / f"sys_{cond_idx}_gt"
+                    pdb_path = sys_gt_dir / "protein_0.pdb"
+                    if not pdb_path.exists():
+                        sys_obj.write_protein_pdb(sys_gt_dir, filename='protein',
+                                                  ground_truth=True)
+
+            # Build system_pairs from disk
+            system_pairs = system_pairs_from_path(
+                samples_dir=output_dir, task=task,
+                n_samples=n_systems, sample_start_idx=0,
+                n_replicates=n_replicates,
+            )
+
+            pb_mode = determine_pb_mode(task)
+            eval_timeout = getattr(args, 'eval_timeout', 600)
+            eval_no_strain = getattr(args, 'eval_no_strain', False)
+            eval_df = compute_metrics(
+                system_pairs=system_pairs, pb_mode=pb_mode,
+                metrics_to_run=metrics_to_run, timeout=eval_timeout,
+                disable_strain=eval_no_strain,
+            )
+
+            eval_df = eval_df.reset_index()
+            eval_csv = output_dir / "eval_metrics.csv"
+            eval_df.to_csv(str(eval_csv), index=False)
+            print(f"\nEval metrics written to {eval_csv}")
+
+            # Print summary
+            numeric_cols = eval_df.select_dtypes(include='number').columns
+            summary = eval_df[numeric_cols].mean()
+            for k, v in summary.items():
+                if not pd.isna(v):
+                    print(f"  {k}: {v:.4f}")
+
     if args.metrics:
         # use config from default.yaml not ckpt
-        default_eval_path = Path(omtra_root()) / 'configs' / 'eval' / 'default.yaml'    
+        default_eval_path = Path(omtra_root()) / 'configs' / 'eval' / 'default.yaml'
         default_eval_cfg = OmegaConf.load(default_eval_path)
 
         metrics = {}
@@ -510,7 +652,7 @@ def main(args):
         for k, v in metrics.items():
             print(f"{k}: {v:.3f}")
         
-        
+
 
 if __name__ == "__main__":
     args = parse_args()

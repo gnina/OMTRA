@@ -1,0 +1,23 @@
+# this block must be included in all task_group configs
+# especially the datamodule: default attribue
+defaults:
+  - _self_
+  - datamodule: default
+
+
+# Define tasks with time-varying probabilities
+# this is p(task) but p(task) can change through the course of training
+task_phases:
+  - duration_batches: null
+    tasks:
+      - name: fixed_protein_ligand_denovo_condensed
+        probability: 0.92
+      # - name: denovo_ligand_condensed
+        # probability: 0.08
+
+# define p(dataset|task) coupling (assume static for simplicity)
+dataset_task_coupling:
+  fixed_protein_ligand_denovo_condensed:
+    - [crossdocked, 1.0]
+  # denovo_ligand_condensed:
+    # - [pharmit, 1.0]

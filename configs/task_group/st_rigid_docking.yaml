@@ -11,7 +11,7 @@ task_phases:
   - duration_batches: null
     tasks:
       - name: rigid_docking_condensed
-        probability: 0.92
+        probability: 1.0
       # - name: ligand_conformer_condensed
         # probability: 0.08
 
