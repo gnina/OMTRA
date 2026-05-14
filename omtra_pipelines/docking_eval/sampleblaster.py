@@ -128,6 +128,12 @@ def parse_args():
         default=None,
         help="Beta distribution beta parameter for Plinder dynamic cropping (default: None)"
     )
+    parser.add_argument(
+        "--additional_prot_crop",
+        type=float,
+        default=None,
+        help="Additional fixed protein crop distance for Plinder test-time cropping (default: None)"
+    )
     return parser.parse_args()
 
 
@@ -193,6 +199,8 @@ def generate_commands(chunks, chunk_files, args):
                 cmd_parts.append(f'--alpha={args.alpha}')
             if args.beta is not None:
                 cmd_parts.append(f'--beta={args.beta}')
+            if args.additional_prot_crop is not None:
+                cmd_parts.append(f'--additional_prot_crop={args.additional_prot_crop}')
             if args.crossdocked_path is not None:
                 cmd_parts.append(f'--crossdocked_path={args.crossdocked_path}')
             
