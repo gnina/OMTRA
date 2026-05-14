@@ -46,18 +46,18 @@ export function HelpTab() {
             <li className="flex gap-4">
               <div className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-sm">A</div>
               <div>
-                <strong className="text-slate-900">Detected Pockets</strong>
+                <strong className="text-slate-900">Reference Ligand</strong>
                 <p className="text-sm text-slate-600 mt-1">
-                  Upload a protein to auto-detect binding sites (yellow boxes) using Pocketeer. Click a box to select it.
+                  Upload a ligand file (.sdf). The pocket is defined within 8Å of this ligand.
                 </p>
               </div>
             </li>
             <li className="flex gap-4">
               <div className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-sm">B</div>
               <div>
-                <strong className="text-slate-900">Reference Ligand</strong>
+                <strong className="text-slate-900">Detected Pockets</strong>
                 <p className="text-sm text-slate-600 mt-1">
-                  Upload a simplified ligand file (.sdf). The pocket is defined within 8Å of this ligand.
+                  Upload a protein to auto-detect binding sites using Pocketeer. Select one to define the pocket.
                 </p>
               </div>
             </li>
@@ -85,6 +85,13 @@ export function HelpTab() {
               <ul className="list-disc pl-5 text-sm space-y-1">
                 <li><strong>Upload a pharmacophore file</strong>: Upload a <strong>JSON file exported from <a href="https://pharmit.csb.pitt.edu" target="_blank" rel="noopener noreferrer" className="text-primary-600 underline">Pharmit</a></strong> or an <strong>XYZ file</strong> with pharmacophore features.</li>
                 <li><strong>Select constraints</strong>: Pharmacophores appear as wireframe spheres in the 3D viewer. Click any sphere to select it as a conditioning constraint (solid = selected). We recommend selecting fewer than 8.</li>
+              </ul>
+            </div>
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <h4 className="font-bold text-slate-900 mb-2">Fixing BRICS fragments</h4>
+              <ul className="list-disc pl-5 text-sm space-y-1">
+                <li><strong>Select fragments</strong>: For supported protein-conditioned design and rigid docking jobs, upload an SDF ligand and choose BRICS fragments to keep fixed during sampling.</li>
+                <li><strong>Output viewer</strong>: Fixed atoms are highlighted with colored wireframe spheres in generated molecules.</li>
               </ul>
             </div>
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">

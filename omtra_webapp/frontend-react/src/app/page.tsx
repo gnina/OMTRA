@@ -8,7 +8,7 @@ import { JobViewer } from '@/components/JobViewer';
 import { HelpTab } from '@/components/HelpTab';
 import { CentralSelectionViewer } from '@/components/CentralSelectionViewer';
 
-import type { PocketInfo } from '@/types';
+import type { PocketInfo, BricsFragment } from '@/types';
 
 export default function HomePage() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -31,10 +31,11 @@ export default function HomePage() {
   // Docking-specific state
   const [detectedPockets, setDetectedPockets] = useState<PocketInfo[]>([]);
   const [selectedPocketId, setSelectedPocketId] = useState<string | null>(null);
+  const [hiddenPocketIds, setHiddenPocketIds] = useState<string[]>([]);
   const [selectedPharmacophoreIndices, setSelectedPharmacophoreIndices] = useState<number[]>([]);
 
   // Pocket selection state (lifted)
-  const [pocketSelectionMethod, setPocketSelectionMethod] = useState<'detected' | 'ligand' | 'manual'>('detected');
+  const [pocketSelectionMethod, setPocketSelectionMethod] = useState<'detected' | 'ligand' | 'manual'>('ligand');
   const [manualCenter, setManualCenter] = useState({ x: '0', y: '0', z: '0' });
   const [bboxLength, setBboxLength] = useState('15.0');
   const [ligandCenter, setLigandCenter] = useState<[number, number, number] | null>(null);
@@ -42,6 +43,11 @@ export default function HomePage() {
   const [refLigandToken, setRefLigandToken] = useState<string | null>(null);
   const [refLigandFileName, setRefLigandFileName] = useState<string | null>(null);
   const [pharmacophoreTolerance, setPharmacophoreTolerance] = useState('0.0');
+
+  // BRICS fragment state (lifted from forms)
+  const [bricsFragments, setBricsFragments] = useState<BricsFragment[]>([]);
+  const [selectedFragmentIds, setSelectedFragmentIds] = useState<number[]>([]);
+  const [bricsRawSdf, setBricsRawSdf] = useState<string | null>(null);
 
   // UI State
 
@@ -101,6 +107,12 @@ export default function HomePage() {
     }
   }, [selectedJobId]);
 
+  const handlePocketsDetected = (pockets: PocketInfo[]) => {
+    setDetectedPockets(pockets);
+    setHiddenPocketIds([]);
+    setSelectedPocketId(null);
+  };
+
   return (
     <div className="flex min-h-screen flex-col bg-slate-50">
       {/* Header */}
@@ -109,7 +121,7 @@ export default function HomePage() {
           <div className="flex h-20 items-center gap-8">
             {/* Logo - Left Side */}
             <div className="flex items-center gap-3">
-              <img src="/omtra/logo.png" alt="OMTRA Logo" className="h-14 w-auto" />
+              <img src={`${process.env.NODE_ENV === 'production' ? '/omtra' : ''}/logo.png`} alt="OMTRA Logo" className="h-14 w-auto" />
               <div className="flex flex-col">
                 <span className="text-3xl font-bold text-slate-900">OMTRA</span>
                 <span className="text-sm text-slate-500 font-medium -mt-1">Generative Structure-Based Drug Design</span>
@@ -214,13 +226,17 @@ export default function HomePage() {
                             setExtractedPharmacophores([]);
                             setDetectedPockets([]);
                             setSelectedPocketId(null);
+                            setHiddenPocketIds([]);
                             setSelectedPharmacophoreIndices([]);
-                            setPocketSelectionMethod('detected');
+                            setPocketSelectionMethod('ligand');
                             setManualCenter({ x: '0', y: '0', z: '0' });
                             setBboxLength('15.0');
                             setLigandCenter(null);
                             setRefLigandContent(null);
                             setRefLigandToken(null);
+                            setBricsFragments([]);
+                            setSelectedFragmentIds([]);
+                            setBricsRawSdf(null);
                           }
                         }}
                         className={`px-4 py-2.5 rounded-xl font-medium text-sm transition-all ${workflowMode === 'denovo'
@@ -241,13 +257,17 @@ export default function HomePage() {
                             setExtractedPharmacophores([]);
                             setDetectedPockets([]);
                             setSelectedPocketId(null);
+                            setHiddenPocketIds([]);
                             setSelectedPharmacophoreIndices([]);
-                            setPocketSelectionMethod('detected');
+                            setPocketSelectionMethod('ligand');
                             setManualCenter({ x: '0', y: '0', z: '0' });
                             setBboxLength('15.0');
                             setLigandCenter(null);
                             setRefLigandContent(null);
                             setRefLigandToken(null);
+                            setBricsFragments([]);
+                            setSelectedFragmentIds([]);
+                            setBricsRawSdf(null);
                           }
                         }}
                         className={`px-4 py-2.5 rounded-xl font-medium text-sm transition-all ${workflowMode === 'docking'
@@ -271,10 +291,12 @@ export default function HomePage() {
                       pharmacophores={extractedPharmacophores}
                       selectedPharmacophoreIndices={selectedPharmacophoreIndices}
                       onPharmacophoreSelectionChange={setSelectedPharmacophoreIndices}
-                      onPocketsDetected={setDetectedPockets}
+                      onPocketsDetected={handlePocketsDetected}
                       detectedPockets={detectedPockets}
                       selectedPocketId={selectedPocketId}
                       onPocketSelect={setSelectedPocketId}
+                      hiddenPocketIds={hiddenPocketIds}
+                      onHiddenPocketsChange={setHiddenPocketIds}
                       pocketSelectionMethod={pocketSelectionMethod}
                       setPocketSelectionMethod={setPocketSelectionMethod}
                       manualCenter={manualCenter}
@@ -291,6 +313,12 @@ export default function HomePage() {
                       setRefLigandFileName={setRefLigandFileName}
                       pharmacophoreTolerance={pharmacophoreTolerance}
                       onPharmacophoreToleranceChange={setPharmacophoreTolerance}
+                      bricsFragments={bricsFragments}
+                      setBricsFragments={setBricsFragments}
+                      selectedFragmentIds={selectedFragmentIds}
+                      setSelectedFragmentIds={setSelectedFragmentIds}
+                      bricsRawSdf={bricsRawSdf}
+                      setBricsRawSdf={setBricsRawSdf}
                     />
                   ) : (
                     <DockingForm
@@ -298,10 +326,12 @@ export default function HomePage() {
                       onProteinContentChange={setProteinContent}
                       onProteinFormatChange={setProteinFormat}
                       onLigandContentChange={setLigandContent}
-                      onPocketsDetected={setDetectedPockets}
+                      onPocketsDetected={handlePocketsDetected}
                       detectedPockets={detectedPockets}
                       selectedPocketId={selectedPocketId}
                       onPocketSelect={setSelectedPocketId}
+                      hiddenPocketIds={hiddenPocketIds}
+                      onHiddenPocketsChange={setHiddenPocketIds}
                       onPharmacophoresChange={setExtractedPharmacophores}
                       pharmacophores={extractedPharmacophores}
                       selectedPharmacophoreIndices={selectedPharmacophoreIndices}
@@ -320,6 +350,12 @@ export default function HomePage() {
                       setRefLigandToken={setRefLigandToken}
                       refLigandFileName={refLigandFileName}
                       setRefLigandFileName={setRefLigandFileName}
+                      bricsFragments={bricsFragments}
+                      setBricsFragments={setBricsFragments}
+                      selectedFragmentIds={selectedFragmentIds}
+                      setSelectedFragmentIds={setSelectedFragmentIds}
+                      bricsRawSdf={bricsRawSdf}
+                      setBricsRawSdf={setBricsRawSdf}
                     />
                   )}
                 </div>
@@ -357,12 +393,17 @@ export default function HomePage() {
                   detectedPockets={detectedPockets}
                   selectedPocketId={selectedPocketId}
                   onPocketSelect={setSelectedPocketId}
+                  hiddenPocketIds={hiddenPocketIds}
                   pocketSelectionMethod={pocketSelectionMethod}
                   manualCenter={manualCenter}
                   bboxLength={bboxLength}
                   ligandCenter={ligandCenter}
                   refLigandContent={refLigandContent || undefined}
                   pharmacophoreTolerance={parseFloat(pharmacophoreTolerance)}
+                  bricsFragments={bricsFragments}
+                  selectedFragmentIds={selectedFragmentIds}
+                  onFragmentSelectionChange={setSelectedFragmentIds}
+                  bricsRawSdf={bricsRawSdf || undefined}
                 />
               </div>
             </div>

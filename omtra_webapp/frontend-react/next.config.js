@@ -6,14 +6,18 @@ const nextConfig = {
   assetPrefix: process.env.NODE_ENV === 'production' ? '/omtra' : undefined,
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+    // Optional override when the UI is not at site root (e.g. set to "/omtra/api").
+    NEXT_PUBLIC_API_BASE_PATH: process.env.NEXT_PUBLIC_API_BASE_PATH || '',
   },
   // Proxy API requests to avoid CORS and connection issues
   async rewrites() {
-    // Use localhost when running dev server outside Docker, otherwise use Docker service name
-    // Check if we're in development mode (dev server) vs production (Docker)
-    const isDev = process.env.NODE_ENV !== 'production';
-    // Hardcode API URL to avoid environment variable issues in Docker
-    const apiUrl = isDev ? 'http://localhost:8000' : 'http://api:8000';
+    // Prefer API_URL when set (Docker compose sets http://api:8000). For `next dev` on the
+    // host without Docker, fall back to localhost on the default API port.
+    const apiUrl =
+      process.env.API_URL ||
+      (process.env.NODE_ENV !== 'production'
+        ? 'http://localhost:8000'
+        : 'http://api:8000');
     return [
       {
         source: '/api/:path*',

@@ -6,7 +6,7 @@ python package mounted inside the container
 
 from __future__ import annotations
 
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 from rdkit import Chem
@@ -25,6 +25,15 @@ ph_idx_to_type: List[str] = [
 ph_idx_to_elem: List[str] = ["P", "S", "F", "N", "O", "C", "Cl"]
 ph_type_to_idx: Dict[str, int] = {ptype: idx for idx, ptype in enumerate(ph_idx_to_type)}
 ph_elem_to_idx: Dict[str, int] = {elem: idx for idx, elem in enumerate(ph_idx_to_elem)}
+
+
+def _pharmacophore_type_index(kind: str, *, line_desc: str) -> int:
+    if kind in ph_type_to_idx:
+        return ph_type_to_idx[kind]
+    if kind in ph_elem_to_idx:
+        return ph_elem_to_idx[kind]
+    allowed = ", ".join(ph_idx_to_type + ph_idx_to_elem)
+    raise ValueError(f"Unknown pharmacophore type '{kind}' at {line_desc}. Allowed values: {allowed}")
 
 
 smarts_patterns: Dict[str, List[str]] = {
@@ -114,7 +123,7 @@ def load_pharmacophore_xyz(xyz_content: str) -> Tuple[np.ndarray, np.ndarray]:
     """
     lines = xyz_content.strip().splitlines()
     if not lines:
-        return np.zeros((0, 3)), np.zeros(0)
+        raise ValueError("Pharmacophore XYZ is empty")
     
     # Basic XYZ check: skip header lines if they look like N_ATOMS / Comment
     start_idx = 0
@@ -123,36 +132,30 @@ def load_pharmacophore_xyz(xyz_content: str) -> Tuple[np.ndarray, np.ndarray]:
     
     positions = []
     type_indices = []
-    
-    unk_code = ph_type_to_idx["Hydrophobic"] # Fallback
-    
+
     for i in range(start_idx, len(lines)):
         line = lines[i].strip()
         if not line:
             continue
         parts = line.split()
         if len(parts) < 4:
-            continue
+            raise ValueError(f"Invalid pharmacophore XYZ line {i + 1}: expected 'TYPE X Y Z'")
         
         kind = parts[0]
         try:
             x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
         except ValueError:
-            continue
-            
-        # Map kind (can be type name OR element symbol)
-        if kind in ph_type_to_idx:
-            t_idx = ph_type_to_idx[kind]
-        elif kind in ph_elem_to_idx:
-            t_idx = ph_elem_to_idx[kind]
-        else:
-            t_idx = unk_code
+            raise ValueError(f"Invalid coordinates on pharmacophore XYZ line {i + 1}: expected numeric X Y Z")
+        if not np.isfinite([x, y, z]).all():
+            raise ValueError(f"Invalid coordinates on pharmacophore XYZ line {i + 1}: coordinates must be finite")
+
+        t_idx = _pharmacophore_type_index(kind, line_desc=f"XYZ line {i + 1}")
             
         positions.append([x, y, z])
         type_indices.append(t_idx)
     
     if not positions:
-        return np.zeros((0, 3)), np.zeros(0)
+        raise ValueError("Pharmacophore XYZ contains no feature rows")
         
     return np.array(positions, dtype=np.float32), np.array(type_indices, dtype=np.int64)
 
@@ -165,59 +168,57 @@ def load_pharmacophore_json(json_content: str) -> Tuple[np.ndarray, np.ndarray]:
     import json
     try:
         data = json.loads(json_content)
-    except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"load_pharmacophore_json: Failed to parse JSON: {e}")
-        return np.zeros((0, 3)), np.zeros(0)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid pharmacophore JSON: {e}") from e
         
     # Handle both {"points": [...]} and direct array
-    points = data.get('points', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+    if isinstance(data, dict):
+        points = data.get('points')
+    elif isinstance(data, list):
+        points = data
+    else:
+        raise ValueError("Pharmacophore JSON must be an array or an object with a 'points' array")
+
+    if not isinstance(points, list):
+        raise ValueError("Pharmacophore JSON must contain a 'points' array")
     
     # Filter for enabled points
-    enabled_points = [p for p in points if isinstance(p, dict) and p.get('enabled', True)]
+    enabled_points = []
+    for i, point in enumerate(points):
+        if not isinstance(point, dict):
+            raise ValueError(f"Invalid pharmacophore JSON point {i}: expected an object")
+        if point.get('enabled', True):
+            enabled_points.append((i, point))
     
     if not enabled_points:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"load_pharmacophore_json: No enabled points found in {len(points)} total points")
-        return np.zeros((0, 3)), np.zeros(0)
+        raise ValueError("Pharmacophore JSON contains no enabled points")
     
     coords = []
-    kinds = []
+    type_indices = []
     
-    for p in enabled_points:
+    for original_idx, point in enabled_points:
+        missing = [key for key in ("x", "y", "z", "name") if key not in point]
+        if missing:
+            raise ValueError(f"Invalid pharmacophore JSON point {original_idx}: missing required key(s): {', '.join(missing)}")
+
         try:
-            # Extract coordinates - CLI expects x, y, z keys
-            coords.append([p['x'], p['y'], p['z']])
-            # Extract name - CLI expects 'name' key
-            kinds.append(p['name'])
-        except KeyError as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.debug(f"load_pharmacophore_json: Skipping point missing key: {e}")
-            continue
-    
-    if not coords:
-        return np.zeros((0, 3)), np.zeros(0)
+            x, y, z = float(point["x"]), float(point["y"]), float(point["z"])
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Invalid pharmacophore JSON point {original_idx}: coordinates must be numeric") from e
+        if not np.isfinite([x, y, z]).all():
+            raise ValueError(f"Invalid pharmacophore JSON point {original_idx}: coordinates must be finite")
+
+        kind = str(point["name"])
+        coords.append([x, y, z])
+        type_indices.append(_pharmacophore_type_index(kind, line_desc=f"JSON point {original_idx}"))
     
     coords = np.asarray(coords, dtype=np.float32)
-    kinds = np.asarray(kinds)
-    
-    # CLI logic: unique kinds, then map to indices
-    unique_kinds, inverse = np.unique(kinds, return_inverse=True)
-    unk_code = ph_type_to_idx.get('UNK', 0)  # Default to 0 if UNK not in mapping
-    
-    unique_codes = np.array([
-        ph_type_to_idx[kind] if kind in ph_type_to_idx else unk_code
-        for kind in unique_kinds
-    ], dtype=np.int64)
-    kind_idx = unique_codes[inverse]
+    kind_idx = np.asarray(type_indices, dtype=np.int64)
     
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"load_pharmacophore_json: Successfully loaded {len(coords)} pharmacophores")
-    logger.debug(f"  Types: {dict(zip(*np.unique(kinds, return_counts=True)))}")
+    logger.debug(f"  Type indices: {dict(zip(*np.unique(kind_idx, return_counts=True)))}")
     
     return coords, kind_idx
 

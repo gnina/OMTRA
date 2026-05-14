@@ -70,6 +70,34 @@ MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 26214400))
 MAX_FILES_PER_JOB = int(os.getenv('MAX_FILES_PER_JOB', 3))
 JOB_TTL_HOURS = int(os.getenv('JOB_TTL_HOURS', 48))
 
+# ProteinsPlus (PoseView 2D diagrams): optional mirror / timeouts; requests honors HTTPS_PROXY/HTTP_PROXY.
+PROTEINS_PLUS_BASE = os.environ.get("PROTEINS_PLUS_BASE", "https://proteins.plus").rstrip("/")
+PROTEINS_PLUS_CONNECT_TIMEOUT = float(os.environ.get("PROTEINS_PLUS_CONNECT_TIMEOUT", "90"))
+PROTEINS_PLUS_READ_TIMEOUT = float(os.environ.get("PROTEINS_PLUS_READ_TIMEOUT", "360"))
+
+
+class ProteinsPlusUnreachableError(Exception):
+    """Raised when this API host cannot reach proteins.plus (firewall, DNS, proxy, etc.)."""
+
+
+def _proteins_plus_unreachable_user_message(exc: BaseException, api_base: str) -> str:
+    import requests
+
+    bits = [
+        f"The OMTRA API server could not reach {api_base} (external PoseView / ProteinsPlus API).",
+        "Allow outbound HTTPS from the API host/container, or set HTTPS_PROXY and HTTP_PROXY on the API service if a proxy is required.",
+    ]
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        bits.insert(1, "Connection timed out before the server responded (often blocked outbound HTTPS or no path to the internet).")
+    elif isinstance(exc, requests.exceptions.ReadTimeout):
+        bits.insert(1, "The remote server was too slow to respond (read timeout).")
+    elif isinstance(exc, requests.exceptions.SSLError):
+        bits.insert(1, "TLS/SSL verification or handshake failed.")
+    elif isinstance(exc, requests.exceptions.ConnectionError):
+        bits.insert(1, "No TCP connection could be established (DNS failure, refused, or no route).")
+    return " ".join(bits)
+
+
 # Checkpoint configuration
 CHECKPOINT_DIR = Path(os.getenv('CHECKPOINT_DIR', '/srv/app/checkpoints'))
 CHECKPOINT_MAPPING = WEBAPP_TO_CHECKPOINT
@@ -239,6 +267,72 @@ async def upload_file(upload_token: str, file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail="Upload failed")
+
+
+@app.post("/extract-brics-fragments")
+async def extract_brics_fragments_endpoint(
+    file: UploadFile = File(...),
+):
+    """Extract BRICS fragments from an SDF file, returning per-fragment atom indices."""
+    import asyncio
+
+    filename = file.filename or ""
+    if not filename.lower().endswith(".sdf"):
+        raise HTTPException(status_code=400, detail="File must be an SDF file")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file provided")
+
+    def _extract(raw: bytes):
+        from rdkit import Chem
+        from rdkit.Chem import BRICS
+        import numpy as np
+
+        mol = Chem.MolFromMolBlock(raw.decode("utf-8", errors="replace"), removeHs=True)
+        if mol is None:
+            raise ValueError("Could not parse SDF content as a valid molecule")
+
+        N = mol.GetNumAtoms()
+        broken = BRICS.BreakBRICSBonds(mol)
+        comps = Chem.GetMolFrags(broken, asMols=False)
+        atom_to_fragment = [-1] * N
+        for frag_idx, comp in enumerate(comps):
+            for ai in comp:
+                atom = broken.GetAtomWithIdx(ai)
+                if atom.GetSymbol() != "*" and ai < N:
+                    atom_to_fragment[ai] = frag_idx
+        frags = np.array(atom_to_fragment, dtype=np.int8)
+
+        unique_ids = sorted(int(i) for i in set(frags) if i >= 0)
+        fragments = []
+        for fid in unique_ids:
+            atom_indices = [int(a) for a in np.where(frags == fid)[0]]
+            fragments.append({
+                "id": fid,
+                "atom_indices": atom_indices,
+                "num_atoms": len(atom_indices),
+            })
+        return {
+            "fragments": fragments,
+            "num_atoms": N,
+            "num_fragments": len(fragments),
+        }
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, _extract, content), timeout=60.0
+        )
+        logger.info(f"Extracted {result['num_fragments']} BRICS fragments from {filename}")
+        return result
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="BRICS extraction timed out")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"BRICS extraction failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"BRICS extraction failed: {e}")
 
 
 @app.post("/extract-pharmacophore")
@@ -424,6 +518,8 @@ async def detect_pockets_endpoint(file: UploadFile = File(...)):
                     'bbox_length': pocket['bbox_length'],
                     'score': pocket.get('score'),
                     'volume': pocket.get('volume'),
+                    'alpha_sphere_centers': pocket.get('alpha_sphere_centers', []),
+                    'alpha_sphere_radii': pocket.get('alpha_sphere_radii', []),
                 })
             
             logger.info(f"Detected {len(pockets)} pockets in {file.filename}")
@@ -455,7 +551,6 @@ async def detect_pockets_endpoint(file: UploadFile = File(...)):
         logger.error(f"Unexpected error in pocket detection: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Pocket detection failed: {str(e)}")
 
-
 @app.post("/sample", response_model=JobResponse)
 async def submit_job(job_data: JobSubmission):
     """Submit a sampling job"""
@@ -476,7 +571,15 @@ async def submit_job(job_data: JobSubmission):
     try:
         # Validate sampling mode and checkpoint availability
         sampling_mode = job_data.params.sampling_mode
-        checkpoint_path = get_checkpoint_path(sampling_mode)
+        has_fixed_fragments = bool(
+            getattr(job_data.params, 'fixed_brics_fragments', None)
+            and len(job_data.params.fixed_brics_fragments) > 0
+        )
+        if has_fixed_fragments and sampling_mode in ('Protein-conditioned', 'Rigid Docking'):
+            partial_ckpt = CHECKPOINT_DIR / 'gnn_partial_prot_cond.ckpt'
+            checkpoint_path = partial_ckpt if partial_ckpt.exists() else None
+        else:
+            checkpoint_path = get_checkpoint_path(sampling_mode)
         if checkpoint_path is None:
             checkpoint_name = CHECKPOINT_MAPPING.get(sampling_mode, "unknown")
             raise HTTPException(
@@ -527,13 +630,13 @@ async def submit_job(job_data: JobSubmission):
                     detail="Protein-conditioned mode requires a protein file (PDB/CIF format)"
                 )
             
-            # If no ligand file is provided, we MUST have a pocket_selection with a center
+            # If no ligand file is provided, we MUST have an explicit pocket selection
             if not ligand_files:
                 pocket_selection = job_data.params.pocket_selection
-                if not pocket_selection or (pocket_selection.get('type') != 'center' and pocket_selection.get('type') != 'residues'):
+                if not pocket_selection or pocket_selection.get('type') not in {'center', 'residues', 'coords'}:
                     raise HTTPException(
                         status_code=400, 
-                        detail="Protein-conditioned mode requires either a reference ligand (SDF) or a pocket definition (center/residues)"
+                        detail="Protein-conditioned mode requires either a reference ligand (SDF) or a pocket definition (center/residues/coords)"
                     )
         
         # Get checkpoint path and add to params
@@ -623,7 +726,15 @@ async def submit_docking_job(job_data: DockingJobSubmission):
     try:
         # Validate docking mode and checkpoint availability
         docking_mode = job_data.params.docking_mode
-        checkpoint_path = get_checkpoint_path(docking_mode)
+        has_fixed_fragments = bool(
+            getattr(job_data.params, 'fixed_brics_fragments', None)
+            and len(job_data.params.fixed_brics_fragments) > 0
+        )
+        if has_fixed_fragments and docking_mode in ('Rigid Docking',):
+            partial_ckpt = CHECKPOINT_DIR / 'gnn_partial_prot_cond.ckpt'
+            checkpoint_path = partial_ckpt if partial_ckpt.exists() else None
+        else:
+            checkpoint_path = get_checkpoint_path(docking_mode)
         if checkpoint_path is None:
             checkpoint_name = CHECKPOINT_MAPPING.get(docking_mode, "unknown")
             raise HTTPException(
@@ -1231,7 +1342,7 @@ def _poll_job(job_id: str, poll_url: str, poll_interval: int = 1, max_polls: int
     import time
     import logging
     logger = logging.getLogger(__name__)
-    job = requests.get(poll_url + job_id + '/').json()
+    job = requests.get(poll_url + job_id + '/', timeout=(10, 30)).json()
     status = job.get('status', '')
     current_poll = 0
     
@@ -1239,7 +1350,7 @@ def _poll_job(job_id: str, poll_url: str, poll_interval: int = 1, max_polls: int
         if current_poll >= max_polls:
             return job
         time.sleep(poll_interval)
-        job = requests.get(poll_url + job_id + '/').json()
+        job = requests.get(poll_url + job_id + '/', timeout=(10, 30)).json()
         status = job.get('status', '')
         current_poll += 1
     return job
@@ -1275,17 +1386,16 @@ async def _cache_error(job_id: str, filename: str, status_code: int, detail: str
 
 
 @app.get("/interaction-diagram/{job_id}/{filename}")
-async def get_interaction_diagram(job_id: str, filename: str):
+async def get_interaction_diagram(
+    job_id: str,
+    filename: str,
+):
     """Generate a 2D interaction diagram using ProteinsPlus API v2"""
     
     try:
         import re
         import asyncio
-        
-        # ProteinsPlus API v2 base URL
-        PROTEINS_PLUS_BASE = "https://proteins.plus"
-        API_BASE = f"{PROTEINS_PLUS_BASE}/api/v2"
-        
+
         # Get job directory
         job_dir = get_job_directory(job_id)
         logger.info(f"Generating interaction diagram for job_id={job_id}, filename={filename}, job_dir={job_dir}")
@@ -1335,7 +1445,7 @@ async def get_interaction_diagram(job_id: str, filename: str):
         # Check if cached error exists (store as {filename}_diagram_error.json)
         error_filename = f"{filename}_diagram_error.json"
         cached_error_path = outputs_dir / error_filename
-        
+
         # If cached error exists, return it immediately
         if cached_error_path.exists():
             try:
@@ -1442,11 +1552,22 @@ async def get_interaction_diagram(job_id: str, filename: str):
             """
             try:
                 import requests
+
+                pp_base = os.environ.get("PROTEINS_PLUS_BASE", PROTEINS_PLUS_BASE).rstrip("/")
+                conn_t = float(os.environ.get("PROTEINS_PLUS_CONNECT_TIMEOUT", str(PROTEINS_PLUS_CONNECT_TIMEOUT)))
+                read_t = float(os.environ.get("PROTEINS_PLUS_READ_TIMEOUT", str(PROTEINS_PLUS_READ_TIMEOUT)))
+                PP_TIMEOUT = (conn_t, read_t)
+                logger.info(
+                    "ProteinsPlus PoseView: base_url=%s connect_timeout=%s read_timeout=%s",
+                    pp_base,
+                    conn_t,
+                    read_t,
+                )
+
                 # Log what we're about to process
                 logger.info(f"generate_diagram called for ligand_filename={ligand_filename_param}, protein_len={len(protein_str_param)}, ligand_len={len(ligand_str_param)}")
                 logger.info(f"Ligand file first 100 chars: {ligand_str_param[:100]}")
-                PROTEINS_PLUS_BASE = "https://proteins.plus"
-                API_BASE = f"{PROTEINS_PLUS_BASE}/api/v2"
+                API_BASE = f"{pp_base}/api/v2"
                 UPLOAD_URL = f"{API_BASE}/molecule_handler/upload/"
                 UPLOAD_JOBS_URL = f"{API_BASE}/molecule_handler/upload/jobs/"
                 PROTEINS_URL = f"{API_BASE}/molecule_handler/proteins/"
@@ -1473,16 +1594,17 @@ async def get_interaction_diagram(job_id: str, filename: str):
                 combined_pdb_file_obj.seek(0)
                 files = {'protein_file': ('protein.pdb', combined_pdb_file_obj, 'chemical/x-pdb')}
                 
+                # Long timeouts: ProteinsPlus can be slow; connect vs read split avoids spurious read timeouts during upload.
                 try:
-                    preprocessing_job_submission = requests.post(UPLOAD_URL, files=files, timeout=120).json()
+                    preprocessing_job_submission = requests.post(UPLOAD_URL, files=files, timeout=PP_TIMEOUT).json()
                     preprocessing_job = _poll_job(preprocessing_job_submission['job_id'], UPLOAD_JOBS_URL, poll_interval=1, max_polls=30)
                     
                     if preprocessing_job.get('status') == 'success':
-                        protein_combined = requests.get(f"{PROTEINS_URL}{preprocessing_job['output_protein']}/", timeout=15).json()
+                        protein_combined = requests.get(f"{PROTEINS_URL}{preprocessing_job['output_protein']}/", timeout=(15, 60)).json()
                         
                         if protein_combined.get('ligand_set'):
                             ligand_id = protein_combined['ligand_set'][0]
-                            ligand = requests.get(f"{LIGANDS_URL}{ligand_id}/", timeout=15).json()
+                            ligand = requests.get(f"{LIGANDS_URL}{ligand_id}/", timeout=(15, 60)).json()
                             logger.info(f"✓ Extracted ligand: {ligand.get('name', 'N/A')} (ID: {ligand_id})")
                             # Log ligand details for debugging
                             logger.info(f"Extracted ligand details: name={ligand.get('name')}, id={ligand_id}, original_filename={ligand_filename_param}")
@@ -1497,16 +1619,16 @@ async def get_interaction_diagram(job_id: str, filename: str):
                             original_protein_file_obj = io.BytesIO(original_protein_bytes)
                             original_protein_file_obj.seek(0)
                             files2 = {'protein_file': ('protein.pdb', original_protein_file_obj, 'chemical/x-pdb')}
-                            preprocessing_job_submission2 = requests.post(UPLOAD_URL, files=files2, timeout=120).json()
+                            preprocessing_job_submission2 = requests.post(UPLOAD_URL, files=files2, timeout=PP_TIMEOUT).json()
                             preprocessing_job2 = _poll_job(preprocessing_job_submission2['job_id'], UPLOAD_JOBS_URL, poll_interval=1, max_polls=30)
                             
                             if preprocessing_job2.get('status') == 'success':
-                                protein_original = requests.get(f"{PROTEINS_URL}{preprocessing_job2['output_protein']}/", timeout=15).json()
+                                protein_original = requests.get(f"{PROTEINS_URL}{preprocessing_job2['output_protein']}/", timeout=(15, 60)).json()
                                 
                                 # Step 4: Generate PoseView with extracted ligand
                                 logger.info("Step 4: Generating PoseView diagram...")
                                 query = {'protein_id': protein_original['id'], 'ligand_id': ligand_id}
-                                poseview_job_submission = requests.post(POSEVIEW_URL, data=query, timeout=120).json()
+                                poseview_job_submission = requests.post(POSEVIEW_URL, data=query, timeout=PP_TIMEOUT).json()
                                 poseview_job = _poll_job(poseview_job_submission['job_id'], POSEVIEW_JOBS_URL, poll_interval=1, max_polls=60)
                                 
                                 if poseview_job.get('status') == 'success':
@@ -1516,7 +1638,7 @@ async def get_interaction_diagram(job_id: str, filename: str):
                                         logger.info(f"Using protein_id={protein_original['id']}, ligand_id={ligand_id} for PoseView")
                                         # Fetch the SVG from the URL
                                         try:
-                                            svg_response = requests.get(image_url, timeout=30)
+                                            svg_response = requests.get(image_url, timeout=(30, 120))
                                             svg_response.raise_for_status()
                                             svg_content = svg_response.text
                                             logger.info(f"Downloaded SVG, length: {len(svg_content)} bytes")
@@ -1540,6 +1662,9 @@ async def get_interaction_diagram(job_id: str, filename: str):
                     else:
                         logger.warning(f"✗ Preprocessing failed: {preprocessing_job.get('error')}")
                         return None
+                except requests.exceptions.RequestException as e:
+                    logger.warning("ProteinsPlus HTTP error in embed→extract workflow: %s", e, exc_info=True)
+                    raise ProteinsPlusUnreachableError(_proteins_plus_unreachable_user_message(e, pp_base)) from e
                 except Exception as e:
                     logger.warning(f"Error in embed→extract workflow: {e}")
                     return None
@@ -1547,6 +1672,8 @@ async def get_interaction_diagram(job_id: str, filename: str):
                 logger.error("All PoseView generation methods failed")
                 return None
                 
+            except ProteinsPlusUnreachableError:
+                raise
             except Exception as e:
                 logger.error(f"Error in generate_diagram: {e}", exc_info=True)
                 return None
@@ -1587,6 +1714,10 @@ async def get_interaction_diagram(job_id: str, filename: str):
             headers={"Cache-Control": "public, max-age=3600"}
         )
         
+    except ProteinsPlusUnreachableError as e:
+        detail = str(e)
+        await _cache_error(job_id, filename, 503, detail)
+        raise HTTPException(status_code=503, detail=detail)
     except asyncio.TimeoutError:
         logger.error(f"PoseView generation timed out for job {job_id}, file {filename}")
         error_detail = "Interaction diagram generation timed out. Please try again later."

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import type { BricsFragment } from '@/types';
 
 type ProteinStyle = 'cartoon' | 'surface' | 'sticks' | 'backbone';
 type LigandStyle = 'stick' | 'sphere' | 'line';
@@ -11,18 +12,27 @@ declare global {
   }
 }
 
+const FRAGMENT_COLORS = [
+  '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c',
+  '#0891b2', '#ca8a04', '#db2777', '#4f46e5', '#65a30d',
+];
+const DIMMED_COLOR = '#d1d5db';
+
 interface CentralSelectionViewerProps {
-  proteinContent?: string; // base64 encoded protein file content
+  proteinContent?: string;
   proteinFormat?: 'pdb' | 'cif';
-  ligandContent?: string; // base64 encoded ligand file content
+  ligandContent?: string;
   detectedPockets?: Array<{
     id: string;
     center: [number, number, number];
     bbox_length: number;
     score?: number;
+    alpha_sphere_centers?: [number, number, number][];
+    alpha_sphere_radii?: number[];
   }>;
   selectedPocketId?: string | null;
-  onPocketSelect?: (pocketId: string) => void;
+  onPocketSelect?: (pocketId: string | null) => void;
+  hiddenPocketIds?: string[];
   pharmacophores?: Array<{
     index: number;
     type: string;
@@ -40,6 +50,10 @@ interface CentralSelectionViewerProps {
   ligandCenter?: [number, number, number] | null;
   refLigandContent?: string | null;
   pharmacophoreTolerance?: number;
+  bricsFragments?: BricsFragment[];
+  selectedFragmentIds?: number[];
+  onFragmentSelectionChange?: (ids: number[]) => void;
+  bricsRawSdf?: string;
 }
 
 export function CentralSelectionViewer({
@@ -49,6 +63,7 @@ export function CentralSelectionViewer({
   detectedPockets = [],
   selectedPocketId,
   onPocketSelect,
+  hiddenPocketIds = [],
   pharmacophores = [],
   selectedPharmacophoreIndices = [],
   onPharmacophoreSelectionChange,
@@ -58,6 +73,10 @@ export function CentralSelectionViewer({
   ligandCenter,
   refLigandContent,
   pharmacophoreTolerance,
+  bricsFragments = [],
+  selectedFragmentIds = [],
+  onFragmentSelectionChange,
+  bricsRawSdf,
 }: CentralSelectionViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
@@ -129,6 +148,7 @@ export function CentralSelectionViewer({
     // Capture view to keep camera steady if needed
     const currentView = viewer.getView();
     let shouldZoom = false;
+    let zoomTarget: any = undefined; // undefined = zoom to all, or a specific model
 
     // 1. Protein Layer
     if (proteinContent && proteinFormat) {
@@ -140,7 +160,7 @@ export function CentralSelectionViewer({
         const protModel = viewer.addModel(proteinData, proteinFormat);
         viewerAny._proteinModel = protModel;
         viewerAny._proteinData = proteinData;
-        shouldZoom = true; // Always zoom when protein changes (it's the main context)
+        shouldZoom = true;
 
         // Style protein ATOM records (cartoon/sticks per toggle)
         const protStyle: any = {};
@@ -149,23 +169,36 @@ export function CentralSelectionViewer({
         viewer.setStyle({ model: protModel, hetflag: false }, protStyle);
         // HETATM records (cofactors, small molecules in PDB) always as sticks
         viewer.setStyle({ model: protModel, hetflag: true }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
-        if (showSurface) viewer.addSurface(window.$3Dmol.VDW, { opacity: 0.6, colorscheme: 'whiteCarbon', depthWrite: true }, { model: protModel });
+        if (showSurface) viewer.addSurface(window.$3Dmol.VDW, { opacity: 0.6, colorscheme: 'whiteCarbon' }, { model: protModel });
+
       }
     } else if (viewerAny._proteinModel) {
       // Protein was removed
       try {
         viewer.removeModel(viewerAny._proteinModel);
         viewer.removeAllSurfaces();
-        // Remove bounding box shapes if they exist
-        if (viewerAny._bboxShapes) {
-          viewerAny._bboxShapes.forEach((s: any) => { try { viewer.removeShape(s); } catch (e) { } });
-          viewerAny._bboxShapes = undefined;
-        }
       } catch (e) { console.warn(e); }
       viewerAny._proteinModel = undefined;
       viewerAny._proteinData = undefined;
-      shouldZoom = true; // Re-center on remaining items
+      shouldZoom = true;
     }
+
+    const hasBrics = bricsFragments.length > 1 && !!bricsRawSdf;
+    const bricsB64 = hasBrics ? btoa(bricsRawSdf) : null;
+    const fragsOnLigand = hasBrics && !!ligandContent && bricsB64 === ligandContent;
+    const fragsOnRef = hasBrics && !fragsOnLigand && !!refLigandContent && bricsB64 === refLigandContent;
+
+    const setupFragmentClicks = (model: any) => {
+      viewer.setClickable({ model }, true, (atom: any) => {
+        if (!onFragmentSelectionChange) return;
+        const fragId = findFragmentForAtom(atom.index, bricsFragments);
+        if (fragId === null) return;
+        const newIds = selectedFragmentIds.includes(fragId)
+          ? selectedFragmentIds.filter((id) => id !== fragId)
+          : [...selectedFragmentIds, fragId];
+        onFragmentSelectionChange(newIds);
+      });
+    };
 
     // 2. Ligand Layer
     if (ligandContent) {
@@ -177,8 +210,15 @@ export function CentralSelectionViewer({
         const ligModel = viewer.addModel(ligandData, 'sdf');
         viewerAny._ligandModel = ligModel;
         viewerAny._ligandData = ligandData;
-        viewer.setStyle({ model: ligModel }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
-        if (!viewerAny._proteinModel) shouldZoom = true; // Zoom if no protein to anchor
+
+        if (fragsOnLigand) {
+          applyFragmentStyles(viewer, ligModel, bricsFragments, selectedFragmentIds);
+          setupFragmentClicks(ligModel);
+        } else {
+          viewer.setStyle({ model: ligModel }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
+        }
+        shouldZoom = true;
+        zoomTarget = { model: ligModel };
       }
     } else if (viewerAny._ligandModel) {
       try { viewer.removeModel(viewerAny._ligandModel); } catch (e) { console.warn(e); }
@@ -197,8 +237,15 @@ export function CentralSelectionViewer({
         const refModel = viewer.addModel(refData, 'sdf');
         viewerAny._refLigandModel = refModel;
         viewerAny._refData = refData;
-        viewer.setStyle({ model: refModel }, { stick: { radius: 0.2, colorscheme: 'lightgreyCarbon', color: 'lime' } });
-        if (!viewerAny._proteinModel) shouldZoom = true;
+
+        if (fragsOnRef) {
+          applyFragmentStyles(viewer, refModel, bricsFragments, selectedFragmentIds);
+          setupFragmentClicks(refModel);
+        } else {
+          viewer.setStyle({ model: refModel }, { stick: { radius: 0.2, colorscheme: 'lightgreyCarbon', color: 'lime' } });
+        }
+        shouldZoom = true;
+        zoomTarget = { model: refModel };
       }
     } else if (viewerAny._refLigandModel) {
       try { viewer.removeModel(viewerAny._refLigandModel); } catch (e) { console.warn(e); }
@@ -207,9 +254,13 @@ export function CentralSelectionViewer({
       if (!viewerAny._proteinModel) shouldZoom = true;
     }
 
-    // Smart Zoom Logic
+    // Smart Zoom Logic — center on ligand when available, otherwise fit all
     if (shouldZoom || !isSceneReady) {
-      viewer.zoomTo();
+      if (zoomTarget) {
+        viewer.zoomTo(zoomTarget);
+      } else {
+        viewer.zoomTo();
+      }
     } else {
       viewer.setView(currentView);
     }
@@ -218,7 +269,31 @@ export function CentralSelectionViewer({
     if (!isSceneReady) {
       setIsSceneReady(true);
     }
-  }, [proteinContent, proteinFormat, ligandContent, refLigandContent, pharmacophores]);
+  }, [proteinContent, proteinFormat, ligandContent, refLigandContent, bricsRawSdf, pharmacophores, bricsFragments, selectedFragmentIds, onFragmentSelectionChange]);
+
+  // Update fragment styles when selection changes (without reloading model)
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !isSceneReady || bricsFragments.length <= 1) return;
+    const viewerAny = viewer as any;
+
+    // Pick the model that owns the fragments (match bricsRawSdf to model content)
+    const b64 = bricsRawSdf ? btoa(bricsRawSdf) : null;
+    const onLig = b64 && ligandContent && b64 === ligandContent;
+    const model = onLig ? viewerAny._ligandModel : viewerAny._refLigandModel;
+    if (!model) return;
+
+    applyFragmentStyles(viewer, model, bricsFragments, selectedFragmentIds);
+    viewer.setClickable({ model }, true, (atom: any) => {
+      if (!onFragmentSelectionChange) return;
+      const fragId = findFragmentForAtom(atom.index, bricsFragments);
+      if (fragId === null) return;
+      const newIds = selectedFragmentIds.includes(fragId)
+        ? selectedFragmentIds.filter((id) => id !== fragId)
+        : [...selectedFragmentIds, fragId];
+      onFragmentSelectionChange(newIds);
+    });
+  }, [selectedFragmentIds, bricsFragments, isSceneReady, onFragmentSelectionChange, ligandContent, refLigandContent, bricsRawSdf]);
 
   // 1. Handle Style Toggles (Cartoon, Sticks) - Lightweight
   useEffect(() => {
@@ -231,7 +306,6 @@ export function CentralSelectionViewer({
       if (showBackbone) protStyle.cartoon = { color: 'lightblue' };
       if (showSticks) protStyle.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
       viewer.setStyle({ model: viewerAny._proteinModel, hetflag: false }, protStyle);
-      // HETATM always as sticks
       viewer.setStyle({ model: viewerAny._proteinModel, hetflag: true }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
     }
 
@@ -247,129 +321,46 @@ export function CentralSelectionViewer({
     viewer.removeAllShapes();
     console.log(`Adding ${pharmacophores.length} pharmacophore spheres to scene`);
 
-    // Bounding Boxes
+    // Pocket visualization
     const parsedBboxLen = parseFloat(bboxLength);
+    const POCKET_COLORS = ['#f59e0b', '#3b82f6', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'];
+    const DETECTED_POCKET_REFERENCE_RADIUS = 8.0;
     if (showBoxes) {
       if (pocketSelectionMethod === 'detected') {
-        // Helper to create a thick wireframe using cylinders
-        const createThickBox = (
-          center: { x: number, y: number, z: number },
-          dims: { w: number, h: number, d: number },
-          color: string,
-          radius: number = 0.01,
-          callback?: () => void
-        ) => {
-          const { x, y, z } = center;
-          const { w, h, d } = dims;
-          const hw = w / 2;
-          const hh = h / 2;
-          const hd = d / 2;
+        // Render pockets as alpha sphere blobs
+        detectedPockets.forEach((pocket, pocketIdx) => {
+          if (hiddenPocketIds.includes(pocket.id)) return;
+          const isSelected = pocket.id === selectedPocketId;
+          const color = POCKET_COLORS[pocketIdx % POCKET_COLORS.length];
+          const alphaSphereCenters = pocket.alpha_sphere_centers;
 
-          // 8 Corners
-          const c1 = { x: x - hw, y: y - hh, z: z - hd };
-          const c2 = { x: x + hw, y: y - hh, z: z - hd };
-          const c3 = { x: x + hw, y: y + hh, z: z - hd };
-          const c4 = { x: x - hw, y: y + hh, z: z - hd };
-          const c5 = { x: x - hw, y: y - hh, z: z + hd };
-          const c6 = { x: x + hw, y: y - hh, z: z + hd };
-          const c7 = { x: x + hw, y: y + hh, z: z + hd };
-          const c8 = { x: x - hw, y: y + hh, z: z + hd };
-
-          // 12 Edges
-          const edges = [
-            [c1, c2], [c2, c3], [c3, c4], [c4, c1], // Front face (z-minus)
-            [c5, c6], [c6, c7], [c7, c8], [c8, c5], // Back face (z-plus)
-            [c1, c5], [c2, c6], [c3, c7], [c4, c8]  // Connecting edges
-          ];
-
-          edges.forEach(([start, end]) => {
-            viewer.addCylinder({
-              start, end,
-              radius,
-              color,
-              fromCap: 1, toCap: 1, // Rounded caps
-              clickable: !!callback, // Add click ability if callback exists
-              callback: callback
-            });
-          });
-        };
-
-        // Pass 1: Render all UNSELECTED pockets first
-        detectedPockets.forEach((pocket) => {
-          if (pocket.id === selectedPocketId) return; // Skip selected for now
-
-          const center = { x: pocket.center[0], y: pocket.center[1], z: pocket.center[2] };
-          const dims = { w: parsedBboxLen, h: parsedBboxLen, d: parsedBboxLen };
-
-          // 1. Thick Visual Wireframe (Cylinders) - Now Clickable!
-          createThickBox(center, dims, 'black', 0.035, () => {
-            if (onPocketSelect) onPocketSelect(pocket.id);
-          });
-
-          // 2. Standard Wireframe Box (Fallback Interaction)
-          // This ensures that if the cylinders are missed, the wire outline is still clickable.
-          // Wireframes do not occlude the view.
-          viewer.addBox({
-            center,
-            dimensions: dims,
-            color: 'black',
-            wireframe: true,
-            clickable: true,
-            opacity: 1.0, // Fully visible thin lines (hidden inside thick cylinders usually)
-            callback: () => {
-              if (onPocketSelect) onPocketSelect(pocket.id);
-            }
-          });
-        });
-
-        // Pass 2: Render SELECTED pocket last
-        const selectedPocket = detectedPockets.find(p => p.id === selectedPocketId);
-        if (selectedPocket) {
-          // Selected: High alpha (0.7)
-          const boxOptions: any = {
-            center: { x: selectedPocket.center[0], y: selectedPocket.center[1], z: selectedPocket.center[2] },
-            dimensions: { w: parsedBboxLen, h: parsedBboxLen, d: parsedBboxLen },
-            color: 'yellow',
-            opacity: 0.8,
-            wireframe: false,
-            clickable: true,
-            callback: () => {
-              if (onPocketSelect) onPocketSelect(selectedPocket.id);
-            }
+          const clickHandler = () => {
+            if (onPocketSelect) onPocketSelect(isSelected ? null : pocket.id);
           };
-          const shape = viewer.addBox(boxOptions);
 
-          // Force selected to be visible but slightly transparent
-          if (shape) {
-            setTimeout(() => {
-              try {
-                const setProps = (obj: any) => {
-                  if (!obj) return;
-                  if (obj.renderOrder !== undefined) obj.renderOrder = 9999;
-                  if (obj.material) {
-                    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-                    mats.forEach((m: any) => {
-                      m.depthTest = false;
-                      m.depthWrite = false;
-                      m.transparent = true;
-                      m.opacity = 0.8;
-                      m.needsUpdate = true;
-                    });
-                  }
-                  if (obj.children) obj.children.forEach(setProps);
-                  if (obj.mesh) setProps(obj.mesh);
-                };
-                setProps(shape);
-                viewer.render();
-              } catch (e) { }
-            }, 50);
+          if (alphaSphereCenters && alphaSphereCenters.length > 0) {
+            for (const centerCoords of alphaSphereCenters) {
+              viewer.addSphere({
+                center: { x: centerCoords[0], y: centerCoords[1], z: centerCoords[2] },
+                radius: DETECTED_POCKET_REFERENCE_RADIUS,
+                color,
+                alpha: isSelected ? 0.8 : 0.5,
+                clickable: true,
+                callback: clickHandler,
+              });
+            }
+          } else {
+            // Fallback: single sphere at pocket center
+            viewer.addSphere({
+              center: { x: pocket.center[0], y: pocket.center[1], z: pocket.center[2] },
+              radius: parsedBboxLen / 2,
+              color,
+              alpha: isSelected ? 0.8 : 0.5,
+              clickable: true,
+              callback: clickHandler,
+            });
           }
-
-          // 3. Thick Visual Wireframe for Selected (Cylinders)
-          const center = { x: selectedPocket.center[0], y: selectedPocket.center[1], z: selectedPocket.center[2] };
-          const dims = { w: parsedBboxLen, h: parsedBboxLen, d: parsedBboxLen };
-          createThickBox(center, dims, 'black', 0.035);
-        }
+        });
 
       } else if (pocketSelectionMethod === 'manual') {
         const center = [parseFloat(manualCenter.x), parseFloat(manualCenter.y), parseFloat(manualCenter.z)];
@@ -444,6 +435,33 @@ export function CentralSelectionViewer({
       }
     });
 
+    // Re-add fragment wireframe spheres (removeAllShapes above clears them)
+    (viewer as any)._fragSpheres = [];
+    if (bricsFragments.length > 1 && selectedFragmentIds.length > 0) {
+      const b64 = bricsRawSdf ? btoa(bricsRawSdf) : null;
+      const onLig = b64 && ligandContent && b64 === ligandContent;
+      const fragModel = onLig ? (viewer as any)._ligandModel : (viewer as any)._refLigandModel;
+      if (fragModel) {
+        const atoms = fragModel.selectedAtoms({});
+        for (const frag of bricsFragments) {
+          if (!selectedFragmentIds.includes(frag.id)) continue;
+          const color = FRAGMENT_COLORS[frag.id % FRAGMENT_COLORS.length];
+          for (const atomIdx of frag.atom_indices) {
+            const atom = atoms.find((a: any) => a.index === atomIdx);
+            if (!atom) continue;
+            const shape = viewer.addSphere({
+              center: { x: atom.x, y: atom.y, z: atom.z },
+              radius: 0.35,
+              color,
+              wireframe: true,
+              linewidth: 1.5,
+            });
+            (viewer as any)._fragSpheres.push(shape);
+          }
+        }
+      }
+    }
+
     viewer.render();
 
     // For pharmacophore-only mode, zoom to fit pharmacophores after rendering
@@ -455,7 +473,8 @@ export function CentralSelectionViewer({
     isSceneReady,
     detectedPockets,
     selectedPocketId,
-    pharmacophores, // Re-run if pharmacophores array changes
+    hiddenPocketIds,
+    pharmacophores,
     selectedPharmacophoreIndices,
     pocketSelectionMethod,
     manualCenter,
@@ -463,7 +482,11 @@ export function CentralSelectionViewer({
     onPocketSelect,
     onPharmacophoreSelectionChange,
     pharmacophoreTolerance,
-    showBoxes
+    showBoxes,
+    bricsFragments,
+    selectedFragmentIds,
+    bricsRawSdf,
+    ligandContent,
   ]);
 
   // 3. Handle Surface Toggles
@@ -479,7 +502,6 @@ export function CentralSelectionViewer({
           viewer.addSurface(window.$3Dmol.VDW, {
             opacity: 0.6,
             colorscheme: 'whiteCarbon',
-            depthWrite: true
           }, { model: viewerAny._proteinModel });
         }
         viewer.render();
@@ -536,7 +558,7 @@ export function CentralSelectionViewer({
               onChange={(e) => setShowBoxes(e.target.checked)}
               className="w-3.5 h-3.5 rounded"
             />
-            Bounding Boxes
+            Pockets
           </label>
         </div>
       )}
@@ -551,4 +573,49 @@ export function CentralSelectionViewer({
       )}
     </div>
   );
+}
+
+function applyFragmentStyles(
+  viewer: any,
+  model: any,
+  fragments: BricsFragment[],
+  selectedIds: number[]
+) {
+  // Base: standard element-colored sticks (unchanged from default look)
+  viewer.setStyle({ model }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
+
+  // Clean up previous fragment spheres
+  if ((viewer as any)._fragSpheres) {
+    for (const s of (viewer as any)._fragSpheres) {
+      try { viewer.removeShape(s); } catch (_) {}
+    }
+  }
+  (viewer as any)._fragSpheres = [];
+
+  if (selectedIds.length === 0) return;
+
+  const atoms = model.selectedAtoms({});
+  for (const frag of fragments) {
+    if (!selectedIds.includes(frag.id)) continue;
+    const color = FRAGMENT_COLORS[frag.id % FRAGMENT_COLORS.length];
+    for (const atomIdx of frag.atom_indices) {
+      const atom = atoms.find((a: any) => a.index === atomIdx);
+      if (!atom) continue;
+      const shape = viewer.addSphere({
+        center: { x: atom.x, y: atom.y, z: atom.z },
+        radius: 0.35,
+        color,
+        wireframe: true,
+        linewidth: 1.5,
+      });
+      (viewer as any)._fragSpheres.push(shape);
+    }
+  }
+}
+
+function findFragmentForAtom(atomIndex: number, fragments: BricsFragment[]): number | null {
+  for (const frag of fragments) {
+    if (frag.atom_indices.includes(atomIndex)) return frag.id;
+  }
+  return null;
 }

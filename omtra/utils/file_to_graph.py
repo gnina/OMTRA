@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from rdkit import Chem
 
@@ -69,7 +69,64 @@ def load_protein_biotite(protein_file: Path) -> StructureData:
     )
 
 
-def load_ligand_rdkit(ligand_file: Path, compute_condensed: bool = False) -> LigandData:
+def _build_edge_mask(fixed_atom_mask: np.ndarray, xace_edge_idxs: torch.Tensor) -> np.ndarray:
+    """Derive edge mask from atom mask: an edge is fixed iff both endpoints are fixed."""
+    ei = xace_edge_idxs.detach().cpu().numpy()
+    if ei.ndim != 2:
+        raise ValueError("Unexpected edge_idxs shape for fixed-edge mask")
+    if ei.shape[0] == 2:
+        src, dst = ei[0], ei[1]
+    else:
+        src, dst = ei[:, 0], ei[:, 1]
+    return (fixed_atom_mask[src] & fixed_atom_mask[dst]).astype(np.int64)
+
+
+def _fixed_masks_from_brics(
+    mol: Chem.Mol,
+    xace_edge_idxs: torch.Tensor,
+    fixed_brics_fragment_ids: Sequence[int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build atom/edge fixed masks from BRICS fragment ids.
+
+    WARNING: This calls fragment_molecule(mol) which uses BRICS bond detection.
+    If mol has been kekulized (clearAromaticFlags=True), the fragmentation will
+    differ from the original. Prefer _fixed_masks_from_brics_precomputed when
+    fragments were computed before kekulization.
+    """
+    from omtra.data.extra_ligand_features import fragment_molecule
+
+    frags = fragment_molecule(mol).squeeze(-1)
+    return _fixed_masks_from_brics_precomputed(frags, xace_edge_idxs, fixed_brics_fragment_ids)
+
+
+def _fixed_masks_from_brics_precomputed(
+    frags: np.ndarray,
+    xace_edge_idxs: torch.Tensor,
+    fixed_brics_fragment_ids: Sequence[int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build atom/edge fixed masks from pre-computed BRICS fragment assignments."""
+    if fixed_brics_fragment_ids:
+        frag_ids_arr = np.asarray(list(fixed_brics_fragment_ids), dtype=np.int64)
+        present = np.unique(frags[frags >= 0])
+        missing = np.setdiff1d(frag_ids_arr, present)
+        if missing.size > 0:
+            raise ValueError(
+                f"BRICS fragment id(s) {missing.tolist()} not present in ligand "
+                f"(available fragment indices: {sorted(present.tolist())})"
+            )
+        fixed_atom_mask = np.isin(frags, frag_ids_arr).astype(np.int64)
+    else:
+        fixed_atom_mask = np.zeros(len(frags), dtype=np.int64)
+
+    fixed_edge_mask = _build_edge_mask(fixed_atom_mask, xace_edge_idxs)
+    return fixed_atom_mask, fixed_edge_mask
+
+
+def load_ligand_rdkit(
+    ligand_file: Path,
+    compute_condensed: bool = False,
+    fixed_brics_fragments: Optional[Sequence[int]] = None,
+) -> LigandData:
     supplier = Chem.SDMolSupplier(str(ligand_file))
     mol = next(supplier)
     if mol is None:
@@ -78,6 +135,13 @@ def load_ligand_rdkit(ligand_file: Path, compute_condensed: bool = False) -> Lig
         raise ValueError("Ligand has zero atoms")
     if not mol.GetNumConformers():
         raise ValueError("Ligand has no 3D conformer")
+
+    # Compute BRICS fragmentation before featurization bc
+    # featurize_molecules changes BRICS bond detection
+    pre_kekulize_brics_frags = None
+    if fixed_brics_fragments is not None:
+        from omtra.data.extra_ligand_features import fragment_molecule
+        pre_kekulize_brics_frags = fragment_molecule(mol).squeeze(-1)
 
     tensorizer = MoleculeTensorizer(lig_atom_type_map, n_cpus=1)
     valid_mols, failed, failures, _ = tensorizer.featurize_molecules([mol])
@@ -106,6 +170,13 @@ def load_ligand_rdkit(ligand_file: Path, compute_condensed: bool = False) -> Lig
             extra_feats=extra_feats
         )
 
+    fixed_atom_mask = None
+    fixed_edge_mask = None
+    if fixed_brics_fragments is not None:
+        fixed_atom_mask, fixed_edge_mask = _fixed_masks_from_brics_precomputed(
+            pre_kekulize_brics_frags, xace.edge_idxs, fixed_brics_fragments
+        )
+
     return LigandData(
         coords=xace.x,
         bond_types=xace.e,
@@ -122,6 +193,8 @@ def load_ligand_rdkit(ligand_file: Path, compute_condensed: bool = False) -> Lig
         atom_chiral=getattr(xace, 'chiral', None),
         atom_cond_a=atom_cond_a,
         fragments=None,
+        fixed_atom_mask=fixed_atom_mask,
+        fixed_edge_mask=fixed_edge_mask,
     )
 
 
@@ -194,13 +267,10 @@ def load_pharmacophore_json(pharm_file: Path):
 
 def extract_backbone_data(backbone_atoms) -> BackboneData:
     """Extract backbone data from backbone atoms (N, CA, C per residue)."""
-    import biotite.structure as struc
-    
-    compound_keys = np.array(
-        [f"{chain}_{res}" for chain, res in zip(backbone_atoms.chain_id, backbone_atoms.res_id)]
+    unique_compound_keys = sorted(
+        set(zip(backbone_atoms.chain_id.tolist(), backbone_atoms.res_id.tolist())),
+        key=lambda item: (str(item[0]), int(item[1])),
     )
-
-    unique_compound_keys = np.unique(compound_keys)
     num_residues = len(unique_compound_keys)
 
     coords = np.zeros((num_residues, 3, 3))
@@ -208,11 +278,13 @@ def extract_backbone_data(backbone_atoms) -> BackboneData:
     res_names_list = []
     chain_ids_list = []
 
-    for i, compound_key in enumerate(unique_compound_keys):
-        chain_id, res_id = compound_key.split("_")
+    for i, (chain_id, res_id) in enumerate(unique_compound_keys):
         res_id = int(res_id)
 
-        res_mask = (backbone_atoms.chain_id == chain_id) & (backbone_atoms.res_id == res_id)
+        res_mask = (
+            (backbone_atoms.chain_id == chain_id)
+            & (backbone_atoms.res_id == res_id)
+        )
         res_atoms = backbone_atoms[res_mask]
 
         res_ids[i] = res_id
@@ -244,7 +316,10 @@ def _atoms_to_residue_mask(atom_array, atom_mask):
     unique_res_pairs = set(zip(close_res_ids, close_chain_ids))
     mask = np.zeros(len(atom_array), dtype=bool)
     for res_id, chain_id in unique_res_pairs:
-        mask |= (atom_array.res_id == res_id) & (atom_array.chain_id == chain_id)
+        mask |= (
+            (atom_array.res_id == res_id)
+            & (atom_array.chain_id == chain_id)
+        )
     return mask
 
 def extract_pocket(
@@ -348,6 +423,18 @@ def _create_pocket_from_indices(
         cif=None,
     )
 
+def _residue_spec_mask(atom_array, residue_specs):
+    masks = []
+    for spec in residue_specs:
+        if len(spec) == 2:
+            chain_id, res_id = spec
+            masks.append((atom_array.chain_id == chain_id) & (atom_array.res_id == res_id))
+        else:
+            raise ValueError(f"Invalid residue spec: {spec}")
+    if not masks:
+        return np.zeros(len(atom_array), dtype=bool)
+    return np.any(masks, axis=0)
+
 # graph construction
 def create_conditional_graphs_from_files(
     task: Task,
@@ -359,11 +446,20 @@ def create_conditional_graphs_from_files(
     pharmacophore_file: Optional[Path] = None,
     pocket_cutoff: Optional[float] = 8.0,
     use_pocket: bool = True,
+    fixed_brics_fragments: Optional[Sequence[int]] = None,
 ):
     receptor = load_protein_biotite(protein_file) if protein_file is not None else None
     
     needs_condensed = 'ligand_identity_condensed' in task.groups_present
-    ligand = load_ligand_rdkit(ligand_file, compute_condensed=needs_condensed) if ligand_file is not None else None
+    ligand = (
+        load_ligand_rdkit(
+            ligand_file,
+            compute_condensed=needs_condensed,
+            fixed_brics_fragments=fixed_brics_fragments,
+        )
+        if ligand_file is not None
+        else None
+    )
     
     # Load pharmacophore from file (JSON, XYZ, or SDF)
     if pharmacophore_file is not None:
@@ -398,6 +494,17 @@ def create_conditional_graphs_from_files(
                     pocket = extract_pocket(receptor, reference_coords, pocket_cutoff=pocket_cutoff)
                     if pocket is not None:
                         receptor = pocket
+
+            elif pocket_type == 'coords':
+                # for Pocketeer alpha sphere centers.
+                coords_value = pocket_definition['value']
+                if isinstance(coords_value, (str, Path)):
+                    reference_coords = np.load(coords_value)
+                else:
+                    reference_coords = np.asarray(coords_value, dtype=np.float32)
+                pocket = extract_pocket(receptor, reference_coords, pocket_cutoff=pocket_cutoff)
+                if pocket is not None:
+                    receptor = pocket
                         
             elif pocket_type == 'center':
                 # Create pocket from bounding box around center point
@@ -420,7 +527,7 @@ def create_conditional_graphs_from_files(
                 residue_specs = pocket_definition['value']
                 receptor = _create_pocket_from_indices(
                     receptor,
-                    selector=lambda aa: np.any([(aa.chain_id == c) & (aa.res_id == r) for c, r in residue_specs], axis=0),
+                    selector=lambda aa: _residue_spec_mask(aa, residue_specs),
                     error_context=f"specified residues: {residue_specs}",
                 )
         else:
@@ -468,6 +575,15 @@ def create_conditional_graphs_from_files(
             edge_data['lig_to_lig'] = {
                 'e_1_true': lig_xace.e,
             }
+
+            if len(task.partial_modalities_fixed) > 0:
+                if lig_xace.fixed_atom_mask is None or lig_xace.fixed_edge_mask is None:
+                    raise ValueError(
+                        "This task uses partial ligand conditioning; provide fixed BRICS fragments "
+                        "via --fixed-brics-fragments when using --ligand_file."
+                    )
+                node_data['lig']['atom_mask_1_true'] = lig_xace.fixed_atom_mask.long()
+                edge_data['lig_to_lig']['edge_mask_1_true'] = lig_xace.fixed_edge_mask.long()
 
         # no ligand file provided, declare the 'lig' node type with zero nodes
         if ligand is None and ('ligand_structure' in task.groups_generated or 'ligand_identity_condensed' in task.groups_generated):

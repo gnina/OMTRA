@@ -52,13 +52,15 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
 
   const sdfFiles = useMemo(() => {
     if (!result?.artifacts) return [];
-    return result.artifacts
+    const refs = result.artifacts.filter((a: any) => a.filename === 'reference_ligand.sdf');
+    const samples = result.artifacts
       .filter((a: any) => a.filename.startsWith('sample_') && a.filename.endsWith('.sdf'))
       .sort((a: any, b: any) => {
         const numA = parseInt(a.filename.match(/\d+/)?.[0] || '0');
         const numB = parseInt(b.filename.match(/\d+/)?.[0] || '0');
         return numA - numB;
       });
+    return [...refs, ...samples];
   }, [result]);
 
   // Bulk Pre-fetch result molecules, structural data, and interaction diagrams
@@ -76,11 +78,12 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
           const needsProtein = ['Protein-conditioned', 'Protein+Pharmacophore-conditioned', 'Rigid Docking', 'Rigid Docking + Pharmacophore'].includes(mode) || mode.toLowerCase().includes('protein') || mode.toLowerCase().includes('docking');
           const needsPharmacophore = ['Pharmacophore-conditioned', 'Protein+Pharmacophore-conditioned', 'Rigid Docking + Pharmacophore'].includes(mode) || mode.toLowerCase().includes('pharmacophore');
 
-          // Parallel fetch for speed
+          const files = Array.isArray(inputs) ? inputs : (inputs as any).files ?? [];
+
           const structuralPromises = [];
 
           if (needsProtein) {
-            const protFile = inputs.files.find(f => f.extension === '.pdb' || f.extension === '.cif');
+            const protFile = files.find((f: any) => f.extension === '.pdb' || f.extension === '.cif');
             if (protFile) {
               structuralPromises.push(apiClient.downloadInputFile(jobId, protFile.filename).then(async b => ({
                 type: 'protein' as const,
@@ -91,8 +94,8 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
           }
 
           if (needsPharmacophore) {
-            const pharmFile = inputs.files.find(f => ['.xyz', '.json'].includes(f.extension.toLowerCase())) ||
-              inputs.files.find(f => f.extension.toLowerCase() === '.sdf');
+            const pharmFile = files.find((f: any) => ['.xyz', '.json'].includes(f.extension.toLowerCase())) ||
+              files.find((f: any) => f.extension.toLowerCase() === '.sdf');
             if (pharmFile) {
               structuralPromises.push(apiClient.downloadInputFile(jobId, pharmFile.filename).then(async b => ({
                 type: 'pharm' as const,
@@ -333,7 +336,9 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
 
         <div className="text-center">
           <span className="font-semibold text-slate-900">
-            Sample {moleculeIndex} of {sdfFiles.length - 1}
+            {sdfFiles[moleculeIndex]?.filename === 'reference_ligand.sdf'
+              ? 'Reference Ligand'
+              : `Sample ${sdfFiles[0]?.filename === 'reference_ligand.sdf' ? moleculeIndex - 1 : moleculeIndex} of ${sdfFiles.length - 1 - (sdfFiles[0]?.filename === 'reference_ligand.sdf' ? 1 : 0)}`}
           </span>
         </div>
         <input
@@ -409,6 +414,7 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
                 samplingMode={(result.params as any).docking_mode || result.params.sampling_mode}
                 inputFilesList={inputFiles}
                 prefetchedContent={prefetchedMolecules[currentFile.filename]}
+                fixedBricsFragments={currentFile.filename !== 'reference_ligand.sdf' ? (result.params as any).fixed_brics_fragments : undefined}
               />
             </div>
             <div className={activeTab === '2d' ? 'block' : 'hidden'}>
@@ -428,6 +434,7 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
             pocketSelection={result.params.pocket_selection}
             inputFilesList={inputFiles}
             prefetchedContent={prefetchedMolecules[currentFile.filename]}
+            fixedBricsFragments={currentFile.filename !== 'reference_ligand.sdf' ? (result.params as any).fixed_brics_fragments : undefined}
           />
         </div>
       )}

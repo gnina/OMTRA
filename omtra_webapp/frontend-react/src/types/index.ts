@@ -24,10 +24,23 @@ export interface SamplingParams {
   n_lig_atoms_mean?: number | null;
   n_lig_atoms_std?: number | null;
   pocket_selection?: {
-    type: 'center' | 'residues' | 'file';
-    value: [number, number, number] | Array<{ chain: string; res_id: number }> | string;
+    type: 'center' | 'residues' | 'file' | 'coords';
+    value: [number, number, number] | number[][] | Array<{ chain: string; res_id: number }> | string;
     bbox_length?: number;
   };
+  fixed_brics_fragments?: number[];
+}
+
+export interface BricsFragment {
+  id: number;
+  atom_indices: number[];
+  num_atoms: number;
+}
+
+export interface BricsFragmentResult {
+  fragments: BricsFragment[];
+  num_atoms: number;
+  num_fragments: number;
 }
 
 export interface JobSubmission {
@@ -127,8 +140,10 @@ export interface PocketInfo {
   id: string;
   center: [number, number, number];
   bbox_length: number;
-  residues?: Array<{ chain: string; res_id: number }>;
   score?: number;
+  volume?: number;
+  alpha_sphere_centers?: [number, number, number][];
+  alpha_sphere_radii?: number[];
 }
 
 export interface DockingParams {
@@ -138,10 +153,11 @@ export interface DockingParams {
   steps: number;
   device?: string;
   pocket_selection?: {
-    type: 'center' | 'residues' | 'file';
-    value: [number, number, number] | Array<{ chain: string; res_id: number }> | string;
+    type: 'center' | 'residues' | 'file' | 'coords';
+    value: [number, number, number] | number[][] | Array<{ chain: string; res_id: number }> | string;
     bbox_length?: number;
   };
+  fixed_brics_fragments?: number[];
 }
 
 export interface DockingJobSubmission {

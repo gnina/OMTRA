@@ -25,7 +25,11 @@ class SamplingParams(BaseModel):
     n_lig_atoms_std: Optional[float] = Field(default=None, ge=0.1, description="Standard deviation for number of atoms (required if n_lig_atoms_mean is provided)")
     pocket_selection: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Pocket selection: {type: 'center'|'residues'|'file', value: coordinates|residues|upload_token, bbox_length?: float}"
+        description="Pocket selection: {type: 'center'|'residues'|'file'|'coords', value: coordinates|residues|upload_token|reference_coords, bbox_length?: float}"
+    )
+    fixed_brics_fragments: Optional[List[int]] = Field(
+        default=None,
+        description="BRICS fragment IDs to hold fixed during partial-modality sampling"
     )
     
     @validator('sampling_mode')
@@ -133,7 +137,11 @@ class DockingParams(BaseModel):
     device: Optional[str] = Field(default="cuda", description="Device to run on")
     pocket_selection: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Pocket selection: {type: 'center'|'residues'|'file', value: coordinates|residues|file_path, bbox_length?: float}"
+        description="Pocket selection: {type: 'center'|'residues'|'file'|'coords', value: coordinates|residues|file_path|reference_coords, bbox_length?: float}"
+    )
+    fixed_brics_fragments: Optional[List[int]] = Field(
+        default=None,
+        description="BRICS fragment IDs to hold fixed during partial-modality sampling"
     )
     
     @validator('docking_mode')
@@ -152,7 +160,7 @@ class DockingJobSubmission(BaseModel):
     
     @validator('uploads')
     def validate_uploads(cls, v):
-        if len(v) > 3:  # MAX_FILES_PER_JOB
-            raise ValueError("Maximum 3 files per job")
+        if len(v) > 4:
+            raise ValueError("Maximum 4 files per docking job")
         return v
 

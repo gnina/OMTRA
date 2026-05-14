@@ -4,8 +4,7 @@ Pocket detection using pocketeer.
 import logging
 import tempfile
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-import uuid
+from typing import List, Dict, Any
 import numpy as np
 import warnings
 
@@ -51,7 +50,7 @@ def detect_pockets(
         protein_format: Format of the protein file ('pdb' or 'cif')
         min_pocket_volume: Minimum pocket volume in Angstrom^3
         max_pockets: Maximum number of pockets to return
-        
+
     Returns:
         List of pocket dictionaries with keys:
         - id: Unique pocket identifier
@@ -59,6 +58,8 @@ def detect_pockets(
         - bbox_length: Bounding box side length in Angstrom (cubic approximation)
         - score: Confidence score (if available)
         - volume: Pocket volume in Angstrom^3 (if available)
+        - alpha_sphere_centers: Pocketeer alpha sphere centers
+        - alpha_sphere_radii: Pocketeer alpha sphere radii
     """
     try:
         import pocketeer as pt
@@ -91,9 +92,10 @@ def detect_pockets(
             raise ValueError(f"Pocket detection failed: {e}")
             
         logger.info(f"Pocketeer found {len(pockets)} pockets")
-        
+
         # Convert pocketeer results to our format
         result = []
+        invalid_pockets = 0
         for i, pocket in enumerate(pockets):
             # Extract pocket volume
             volume = getattr(pocket, 'volume', 0.0)
@@ -107,39 +109,61 @@ def detect_pockets(
                 break
                 
             pocket_id = getattr(pocket, 'pocket_id', i+1)
-            
-            # Get center coordinates
-            center = getattr(pocket, 'centroid', None)
-            if center is None:
-                # Fallback to calculating from spheres
-                if hasattr(pocket, 'spheres') and len(pocket.spheres) > 0:
-                     centers = np.array([s.center for s in pocket.spheres])
-                     center = np.mean(centers, axis=0)
-                else:
-                    center = np.array([0.0, 0.0, 0.0]) # Should not happen for valid pocket
-            
-            # Calculate bounding box from spheres
-            bbox_length = 20.0 # Default fallback
-            if hasattr(pocket, "spheres") and len(pocket.spheres) > 0:
-                 centers = np.array([s.center for s in pocket.spheres])
-                 min_coords = np.min(centers, axis=0)
-                 max_coords = np.max(centers, axis=0)
-                 # Add some padding (radius of alpha spheres is roughly 1-4A)
-                 padding = 4.0 
-                 bbox_size = np.max(max_coords - min_coords) + padding
-                 bbox_length = float(bbox_size)
+
+            try:
+                spheres = getattr(pocket, "spheres", None)
+                if not spheres:
+                    raise ValueError("missing alpha spheres")
+
+                centers = np.array([s.center for s in spheres], dtype=np.float32)
+                if centers.ndim != 2 or centers.shape[1] != 3 or centers.shape[0] == 0:
+                    raise ValueError(f"invalid sphere center shape {centers.shape}")
+                if not np.isfinite(centers).all():
+                    raise ValueError("sphere centers contain non-finite coordinates")
+
+                radii = np.array([float(s.radius) for s in spheres], dtype=np.float32)
+                if radii.shape[0] != centers.shape[0] or not np.isfinite(radii).all() or np.any(radii <= 0):
+                    raise ValueError("sphere radii must be positive finite values")
+
+                # Get center coordinates
+                center = getattr(pocket, 'centroid', None)
+                if center is None:
+                    center = np.mean(centers, axis=0)
+                center = np.asarray(center, dtype=np.float32)
+                if center.shape != (3,) or not np.isfinite(center).all():
+                    raise ValueError("pocket centroid must be a finite 3D coordinate")
+
+                # Calculate bounding box from spheres; do not invent one if geometry is absent.
+                min_coords = np.min(centers, axis=0)
+                max_coords = np.max(centers, axis=0)
+                padding = 4.0
+                bbox_length = float(np.max(max_coords - min_coords) + padding)
+                if not np.isfinite(bbox_length) or bbox_length <= 0:
+                    raise ValueError("computed bounding box length is invalid")
+
+                alpha_centers = centers.astype(float).tolist()
+                alpha_radii = radii.astype(float).tolist()
+            except (AttributeError, IndexError, TypeError, ValueError) as e:
+                invalid_pockets += 1
+                logger.warning(f"Skipping pocket {pocket_id}: incomplete pocket geometry ({e})")
+                continue
             
             # Get score
             score = getattr(pocket, 'score', 0.0)
-            
+
             result.append({
                 'id': f"pocket_{pocket_id}",
                 'center': [float(center[0]), float(center[1]), float(center[2])],
                 'bbox_length': float(bbox_length),
                 'score': float(score),
                 'volume': float(volume),
+                'alpha_sphere_centers': alpha_centers,
+                'alpha_sphere_radii': alpha_radii,
             })
         
+        if not result and invalid_pockets:
+            raise ValueError("Pocketeer returned pockets, but none had complete geometry")
+
         logger.info(f"Returning {len(result)} valid pockets after filtering")
         return result
         

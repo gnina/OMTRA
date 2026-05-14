@@ -50,7 +50,7 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
 
   // Filter out unwanted columns  
   const filteredMetrics = metrics.map((m, originalIndex) => {
-    const { tpsa, n_connected_components, molecular_weight, qed, is_invalid, smiles, Warning, PiStacking, ...rest } = m;
+    const { tpsa, n_connected_components, molecular_weight, qed, is_invalid, smiles, Warning, PiStacking, is_reference, ...rest } = m;
     return { __originalIndex: originalIndex, ...rest };
   });
 
@@ -273,13 +273,16 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
             {sortedMetrics.map((row) => {
               const originalIndex = row.__originalIndex ?? 0;
               const isSelected = selectedRow === originalIndex;
+              const isRef = metrics[originalIndex]?.is_reference === true;
               return (
                 <tr
                   key={originalIndex}
                   onClick={() => handleRowClick(originalIndex)}
                   className={`cursor-pointer transition-colors ${isSelected
                     ? 'bg-primary-100/70 hover:bg-primary-100/70 border-l-4 border-primary-600'
-                    : 'hover:bg-slate-50'
+                    : isRef
+                      ? 'bg-amber-50/70 hover:bg-amber-100/50'
+                      : 'hover:bg-slate-50'
                     }`}
                   style={isSelected ? { borderLeftColor: '#0284c7' } : undefined}
                 >
@@ -287,7 +290,7 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
                     <td
                       key={col}
                       className={`px-4 py-3.5 text-sm text-slate-900 ${col === 'sample_name'
-                        ? `sticky left-0 z-10 font-mono ${isSelected ? 'bg-primary-100/70' : 'bg-white'}`
+                        ? `sticky left-0 z-10 font-mono ${isSelected ? 'bg-primary-100/70' : isRef ? 'bg-amber-50/70' : 'bg-white'}`
                         : isSelected ? 'bg-primary-100/70' : ''
                         }`}
                     >

@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiClient } from '@/lib/api-client';
-import type { SamplingMode, SamplingParams, JobResultResponse } from '@/types';
+import type { SamplingMode, SamplingParams, JobResultResponse, BricsFragment } from '@/types';
 import { FileUpload } from './FileUpload';
-import { AlertCircle, CheckCircle2, Loader2, X, MapPin, Settings2, Play, Info, RefreshCw, Upload } from 'lucide-react';
+import { FragmentSelector } from './FragmentSelector';
+import { AlertCircle, CheckCircle2, Loader2, X, MapPin, Settings2, Play, Info, RefreshCw, Upload, ChevronDown, ChevronRight } from 'lucide-react';
 
 interface JobSubmissionFormProps {
     onJobSubmitted: (jobId: string) => void;
@@ -24,6 +25,8 @@ interface JobSubmissionFormProps {
     detectedPockets: any[];
     selectedPocketId: string | null;
     onPocketSelect: (id: string | null) => void;
+    hiddenPocketIds?: string[];
+    onHiddenPocketsChange?: (ids: string[]) => void;
     pocketSelectionMethod: 'detected' | 'ligand' | 'manual';
     setPocketSelectionMethod: (method: 'detected' | 'ligand' | 'manual') => void;
     manualCenter: { x: string; y: string; z: string };
@@ -40,6 +43,12 @@ interface JobSubmissionFormProps {
     setRefLigandFileName?: (name: string | null) => void;
     pharmacophoreTolerance: string;
     onPharmacophoreToleranceChange: (val: string) => void;
+    bricsFragments: BricsFragment[];
+    setBricsFragments: (frags: BricsFragment[]) => void;
+    selectedFragmentIds: number[];
+    setSelectedFragmentIds: (ids: number[]) => void;
+    bricsRawSdf: string | null;
+    setBricsRawSdf: (sdf: string | null) => void;
 }
 
 export function JobSubmissionForm({
@@ -53,6 +62,8 @@ export function JobSubmissionForm({
     detectedPockets = [],
     selectedPocketId,
     onPocketSelect,
+    hiddenPocketIds = [],
+    onHiddenPocketsChange,
     pocketSelectionMethod,
     setPocketSelectionMethod,
     manualCenter,
@@ -71,6 +82,12 @@ export function JobSubmissionForm({
     onPharmacophoreToleranceChange,
     pharmacophores = [],
     selectedPharmacophoreIndices = [],
+    bricsFragments,
+    setBricsFragments,
+    selectedFragmentIds,
+    setSelectedFragmentIds,
+    bricsRawSdf,
+    setBricsRawSdf,
 }: JobSubmissionFormProps) {
     const [apiConnected, setApiConnected] = useState<boolean | null>(null);
     const [samplingMode, setSamplingMode] = useState<SamplingMode>('Unconditional');
@@ -114,6 +131,21 @@ export function JobSubmissionForm({
     // State for content viewing
     const [proteinContent, setProteinContent] = useState<string | null>(null);
 
+    // BRICS fragment selection state (fragments/selectedIds/rawSdf lifted to parent)
+    const [bricsLoading, setBricsLoading] = useState(false);
+    const [bricsExpanded, setBricsExpanded] = useState(false);
+
+    const togglePocketHidden = useCallback((pocketId: string) => {
+        const isHidden = hiddenPocketIds.includes(pocketId);
+        const nextHidden = isHidden
+            ? hiddenPocketIds.filter((id) => id !== pocketId)
+            : [...hiddenPocketIds, pocketId];
+        onHiddenPocketsChange?.(nextHidden);
+        if (!isHidden && selectedPocketId === pocketId) {
+            onPocketSelect(null);
+        }
+    }, [hiddenPocketIds, onHiddenPocketsChange, onPocketSelect, selectedPocketId]);
+
     const resetForm = useCallback(() => {
         setSamplingMode('Unconditional');
         setSeedInput('42');
@@ -150,13 +182,17 @@ export function JobSubmissionForm({
         onPocketsDetected?.([]);
         onPocketSelect?.(null);
 
-        setPocketSelectionMethod('detected');
+        setPocketSelectionMethod('ligand');
         setManualCenter({ x: '0', y: '0', z: '0' });
         setBboxLength('15.0');
         setLigandCenter(null);
         setRefLigandFileName?.(null);
         setRefLigandContent?.(null);
         setRefLigandToken?.(null);
+        setBricsFragments([]);
+        setSelectedFragmentIds([]);
+        setBricsRawSdf(null);
+        setBricsExpanded(false);
     }, [
         onProteinContentChange,
         onProteinFormatChange,
@@ -283,6 +319,9 @@ export function JobSubmissionForm({
 
     const handleRefLigandUpload = async (file: File) => {
         setError(null);
+        setBricsFragments([]);
+        setSelectedFragmentIds([]);
+        setBricsRawSdf(null);
         try {
             const token = await uploadFileToApi(file);
             setRefLigandToken?.(token);
@@ -291,6 +330,7 @@ export function JobSubmissionForm({
             const base64Content = btoa(content);
             setRefLigandContent?.(base64Content);
             setRefLigandFileName?.(file.name);
+            setBricsRawSdf(content);
 
             const center = calculateCenterFromSdf(content);
             if (center) setLigandCenter(center);
@@ -299,9 +339,20 @@ export function JobSubmissionForm({
             const atomCount = estimateAtomCountFromSdf(content);
             if (atomCount && atomCount > 0) {
                 setNLigAtomsMeanInput(atomCount.toString());
-                // Set std to 20% of mean, capped at 5.0
                 const suggestedStd = Math.min(atomCount * 0.2, 5.0);
                 setNLigAtomsStdInput(suggestedStd.toFixed(1));
+            }
+
+            // Extract BRICS fragments in background
+            setBricsLoading(true);
+            try {
+                const result = await apiClient.extractBricsFragments(file);
+                setBricsFragments(result.fragments);
+                if (result.num_fragments > 1) setBricsExpanded(true);
+            } catch (e) {
+                console.error('BRICS extraction failed:', e);
+            } finally {
+                setBricsLoading(false);
             }
         } catch (err: any) {
             console.error('Ref ligand upload failed:', err);
@@ -377,6 +428,8 @@ export function JobSubmissionForm({
             if (nLigAtomsMeanInput && nLigAtomsStdInput) {
                 parsedMean = Number(nLigAtomsMeanInput);
                 parsedStd = Number(nLigAtomsStdInput);
+                if (parsedMean < 4 || parsedMean > 100) throw new Error("Mean number of atoms must be between 4 and 100");
+                if (parsedStd < 0) throw new Error("Standard deviation must be non-negative");
             }
 
             let finalTokens: string[] = [];
@@ -407,19 +460,29 @@ export function JobSubmissionForm({
                 finalTokens.push(pharmacophoreToken);
             }
 
-            // Build Pocket Selection Param based on selected method
+            const isProteinInvolving =
+                samplingMode === 'Protein-conditioned' ||
+                samplingMode === 'Protein+Pharmacophore-conditioned';
+
+
             let pocketSelectionParam = undefined;
 
-            if (pocketSelectionMethod === 'detected' && selectedPocketId) {
+            if (isProteinInvolving && pocketSelectionMethod === 'detected' && selectedPocketId) {
                 const pocket = detectedPockets.find(p => p.id === selectedPocketId);
-                if (pocket) {
+                const alphaSphereCenters = pocket?.alpha_sphere_centers;
+                if (pocket && alphaSphereCenters.length > 0) {
+                    pocketSelectionParam = {
+                        type: 'coords',
+                        value: alphaSphereCenters,
+                    };
+                } else if (pocket) {
                     pocketSelectionParam = {
                         type: 'center',
                         value: pocket.center,
                         bbox_length: parseFloat(bboxLength)
                     };
                 }
-            } else if (pocketSelectionMethod === 'manual') {
+            } else if (isProteinInvolving && pocketSelectionMethod === 'manual') {
                 const center: [number, number, number] = [
                     parseFloat(manualCenter.x),
                     parseFloat(manualCenter.y),
@@ -432,7 +495,7 @@ export function JobSubmissionForm({
                     value: center,
                     bbox_length: parseFloat(bboxLength)
                 };
-            } else if (pocketSelectionMethod === 'ligand') {
+            } else if (isProteinInvolving && pocketSelectionMethod === 'ligand') {
                 if (!refLigandToken) throw new Error("Reference ligand file is required for this pocket definition. Please upload one in Step 2.");
 
                 pocketSelectionParam = {
@@ -442,16 +505,16 @@ export function JobSubmissionForm({
             }
 
             // Submit job
-            const params: any = { // Using any cast to matching SamplingParams extended structure if TS complains
+            const params: any = {
                 sampling_mode: samplingMode,
                 seed: seedInput ? Number(seedInput) : null,
                 n_samples: parsedSamples,
                 steps: parsedSteps,
                 n_lig_atoms_mean: parsedMean,
-
                 n_lig_atoms_std: parsedStd,
                 pocket_selection: pocketSelectionParam,
-                pharmacophore_tolerance: 0.0,  // Tolerance not implemented yet
+                pharmacophore_tolerance: 0.0,
+                ...(samplingMode === 'Protein-conditioned' && selectedFragmentIds.length > 0 ? { fixed_brics_fragments: selectedFragmentIds } : {}),
             };
 
             const jobData = {
@@ -635,22 +698,22 @@ export function JobSubmissionForm({
                 {(proteinFile || refLigandToken) && (samplingMode === 'Protein-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned') && (
                     <div className="animate-in fade-in slide-in-from-top-4 duration-500 space-y-4">
                         <h4 className="text-sm font-semibold text-slate-700 mb-2">2. Binding Site Definition</h4>
-                        <p className="text-xs text-slate-500 mb-2">Recommend deselecting protein surface to view boxes.</p>
+                        <p className="text-xs text-slate-500 mb-2">Recommend deselecting protein surface to view pocket.</p>
                         <div className="flex flex-col gap-3 p-1 bg-slate-100 rounded-xl mb-4">
                             <div className="grid grid-cols-3 gap-1">
-                                <button
-                                    onClick={() => setPocketSelectionMethod('detected')}
-                                    className={`px-3 py-2 rounded-lg text-xs font-semibold transition-all ${pocketSelectionMethod === 'detected' ? 'bg-white text-primary-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
-                                        }`}
-                                >
-                                    Detected
-                                </button>
                                 <button
                                     onClick={() => setPocketSelectionMethod('ligand')}
                                     className={`px-3 py-2 rounded-lg text-xs font-semibold transition-all ${pocketSelectionMethod === 'ligand' ? 'bg-white text-primary-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
                                         }`}
                                 >
                                     Ref Ligand
+                                </button>
+                                <button
+                                    onClick={() => setPocketSelectionMethod('detected')}
+                                    className={`px-3 py-2 rounded-lg text-xs font-semibold transition-all ${pocketSelectionMethod === 'detected' ? 'bg-white text-primary-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                                        }`}
+                                >
+                                    Detected
                                 </button>
                                 <button
                                     onClick={() => setPocketSelectionMethod('manual')}
@@ -667,6 +730,46 @@ export function JobSubmissionForm({
                                 {detectedPockets && detectedPockets.length > 0 ? (
                                     <div className="p-3 border border-emerald-200 bg-emerald-50/50 rounded-xl">
                                         <p className="text-xs text-emerald-800 font-medium">✓ Pockets detected.</p>
+                                        <div className="mt-2 space-y-1.5">
+                                            {detectedPockets.map((pocket: any, idx: number) => {
+                                                const isHidden = hiddenPocketIds.includes(pocket.id);
+                                                const isSelected = selectedPocketId === pocket.id;
+                                                return (
+                                                    <div
+                                                        key={pocket.id}
+                                                        className={`flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-xs ${
+                                                            isSelected
+                                                                ? 'border-primary-300 bg-white text-primary-700'
+                                                                : 'border-emerald-100 bg-white/70 text-slate-600'
+                                                        } ${isHidden ? 'opacity-60' : ''}`}
+                                                    >
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                if (!isHidden) onPocketSelect(isSelected ? null : pocket.id);
+                                                            }}
+                                                            className="min-w-0 flex-1 text-left"
+                                                        >
+                                                            <span className="font-semibold">Pocket {idx + 1}</span>
+                                                            <span className="ml-1 font-mono text-[10px] text-slate-500">
+                                                                score {typeof pocket.score === 'number' ? pocket.score.toFixed(3) : 'n/a'} · volume {typeof pocket.volume === 'number' ? pocket.volume.toFixed(1) : 'n/a'}
+                                                            </span>
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => togglePocketHidden(pocket.id)}
+                                                            className={`rounded-md px-2 py-1 font-semibold ${
+                                                                isHidden
+                                                                    ? 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                                    : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                                            }`}
+                                                        >
+                                                            {isHidden ? 'Show' : 'Hide'}
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
                                         {selectedPocketId ? (
                                             <div className="mt-1">
                                                 <p className="text-xs text-slate-600">
@@ -674,7 +777,11 @@ export function JobSubmissionForm({
                                                 </p>
                                                 {detectedPockets.find(p => p.id === selectedPocketId) && (
                                                     <p className="text-xs text-slate-600">
-                                                        Center: {detectedPockets.find(p => p.id === selectedPocketId)?.center.map((c: number) => c.toFixed(2)).join(', ')}
+                                                        Score: {typeof detectedPockets.find(p => p.id === selectedPocketId)?.score === 'number'
+                                                            ? detectedPockets.find(p => p.id === selectedPocketId)?.score.toFixed(3)
+                                                            : 'n/a'} · Volume: {typeof detectedPockets.find(p => p.id === selectedPocketId)?.volume === 'number'
+                                                            ? detectedPockets.find(p => p.id === selectedPocketId)?.volume.toFixed(1)
+                                                            : 'n/a'}
                                                     </p>
                                                 )}
                                             </div>
@@ -705,6 +812,10 @@ export function JobSubmissionForm({
                                                 setRefLigandToken?.(null);
                                                 setRefLigandFileName?.(null);
                                                 setLigandCenter(null);
+                                                setBricsFragments([]);
+                                                setSelectedFragmentIds([]);
+                                                setBricsRawSdf(null);
+                                                setBricsExpanded(false);
                                             }
                                         }}
                                         acceptedTypes={['.sdf']}
@@ -719,6 +830,10 @@ export function JobSubmissionForm({
                                                 setRefLigandToken?.(null);
                                                 setRefLigandFileName?.(null);
                                                 setLigandCenter(null);
+                                                setBricsFragments([]);
+                                                setSelectedFragmentIds([]);
+                                                setBricsRawSdf(null);
+                                                setBricsExpanded(false);
                                             }}
                                             className="absolute top-2 right-2 p-1 text-blue-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
                                             title="Remove reference ligand"
@@ -742,6 +857,43 @@ export function JobSubmissionForm({
                                                 <p className="text-[10px] font-mono text-blue-700 bg-blue-100/30 px-1.5 py-0.5 rounded inline-block">
                                                     [{ligandCenter[0].toFixed(2)}, {ligandCenter[1].toFixed(2)}, {ligandCenter[2].toFixed(2)}]
                                                 </p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* BRICS Fragment Selection (only for Protein-conditioned, not Protein+Pharmacophore) */}
+                                {samplingMode === 'Protein-conditioned' && refLigandToken && (bricsLoading || bricsFragments.length > 0) && (
+                                    <div className="mt-3 border border-slate-200 rounded-xl overflow-hidden">
+                                        <button
+                                            onClick={() => setBricsExpanded(!bricsExpanded)}
+                                            className="w-full flex items-center justify-between px-3 py-2 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
+                                        >
+                                            <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                                                Fix Fragments
+                                                <span className="text-[10px] font-normal text-slate-400">(optional)</span>
+                                                {selectedFragmentIds.length > 0 && (
+                                                    <span className="ml-1 px-1.5 py-0.5 bg-primary-100 text-primary-700 rounded-full text-[10px] font-bold">
+                                                        {selectedFragmentIds.length}
+                                                    </span>
+                                                )}
+                                            </span>
+                                            {bricsExpanded ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
+                                        </button>
+                                        {bricsExpanded && (
+                                            <div className="p-3 border-t border-slate-200">
+                                                {bricsLoading ? (
+                                                    <div className="flex items-center gap-2 text-xs text-slate-500 py-4 justify-center">
+                                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                        Analyzing fragments...
+                                                    </div>
+                                                ) : bricsRawSdf ? (
+                                                    <FragmentSelector
+                                                        fragments={bricsFragments}
+                                                        selectedFragmentIds={selectedFragmentIds}
+                                                        onSelectionChange={setSelectedFragmentIds}
+                                                    />
+                                                ) : null}
                                             </div>
                                         )}
                                     </div>
@@ -787,7 +939,8 @@ export function JobSubmissionForm({
                             </div>
                         )}
 
-                        <div className={`pt-2 ${pocketSelectionMethod === 'ligand' ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
+                        {pocketSelectionMethod === 'manual' && (
+                        <div className="pt-2">
                             <label className="block text-sm font-semibold text-slate-700 mb-2">
                                 Adjust Bounding Box Length
                             </label>
@@ -799,14 +952,14 @@ export function JobSubmissionForm({
                                     step="0.5"
                                     value={bboxLength}
                                     onChange={(e) => setBboxLength(e.target.value)}
-                                    disabled={pocketSelectionMethod === 'ligand'}
                                     className="flex-1 accent-primary-600"
                                 />
-                                <div className="w-16 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-center text-sm font-mono font-bold text-slate-700">
+                                <div className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-center text-sm font-mono font-bold text-slate-700">
                                     {parseFloat(bboxLength).toFixed(1)}
                                 </div>
                             </div>
                         </div>
+                        )}
                     </div>
                 )}
 
@@ -884,6 +1037,7 @@ export function JobSubmissionForm({
                             value={nLigAtomsMeanInput}
                             onChange={(e) => setNLigAtomsMeanInput(e.target.value)}
                             min={4}
+                            max={100}
                             step={1}
                             placeholder="e.g., 25"
                             className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"

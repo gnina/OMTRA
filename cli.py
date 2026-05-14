@@ -1,6 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import List, Optional
 import omtra.tasks
 from omtra.utils import omtra_root
 from omtra.tasks.register import TASK_REGISTER
@@ -161,6 +162,12 @@ def create_parser():
         default=None,
         help="Pocket residues as 'CHAIN:RESID,CHAIN:START-END' (e.g., 'A:123-125,B:200')"
     )
+    pocket_group.add_argument(
+        "--pocket_coords",
+        type=Path,
+        default=None,
+        help="Path to .npy file with alpha sphere centers (from Pocketeer, used in webapp)"
+    )
     parser.add_argument(
         "--pharmacophore_file",
         type=Path, 
@@ -179,14 +186,44 @@ def create_parser():
         default=23.0,
         help="Bounding box length (Angstroms) when using --pocket_center. Default: 23.0"
     )
+    parser.add_argument(
+        "--fixed-brics-fragments",
+        type=str,
+        default=None,
+        metavar="IDS",
+        help=(
+            "Comma-separated BRICS fragment indices to keep fixed during sampling for partial-modality "
+            "tasks when using --ligand_file (e.g. '0,2,3'). Indices match RDKit BRICS fragmentation "
+            "Required for partial-modality tasks."
+        ),
+    )
     return parser
 
 
-def _build_pocket_definition(pocket_ligand, pocket_center, pocket_residues, bbox_length):
+def _parse_fixed_brics_fragments(arg: Optional[str]) -> Optional[List[int]]:
+    """Parse --fixed-brics-fragments: None = unset, '' = [], '0,1' = [0, 1]."""
+    if arg is None:
+        return None
+    s = arg.strip()
+    if not s:
+        return []
+    out = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        out.append(int(part))
+    return out
+
+
+def _build_pocket_definition(pocket_ligand, pocket_center, pocket_residues, pocket_coords, bbox_length):
     """Build pocket_definition dict from separate CLI arguments."""
     # Argparse enforces mutual exclusivity, so at most one will be provided
     if pocket_ligand is not None:
         return {'type': 'file', 'value': Path(pocket_ligand)}
+
+    if pocket_coords is not None:
+        return {'type': 'coords', 'value': Path(pocket_coords)}
     
     if pocket_center is not None:
         parts = [x.strip() for x in pocket_center.split(',')]
@@ -210,13 +247,17 @@ def _build_pocket_definition(pocket_ligand, pocket_center, pocket_residues, bbox
             spec = spec.strip()
             if ':' not in spec:
                 raise ValueError(f"Expected 'CHAIN:RESID', got '{spec}'")
-            chain, res_part = spec.split(':', 1)
+            parts = spec.split(':')
+            if len(parts) != 2:
+                raise ValueError(f"Expected 'CHAIN:RESID', got '{spec}'")
+            chain, res_part = parts[0], parts[1]
             try:
                 if '-' in res_part:
                     start, end = map(int, res_part.split('-'))
                     residue_specs.extend((chain, r) for r in range(start, end + 1))
                 else:
-                    residue_specs.append((chain, int(res_part)))
+                    res_id = int(res_part)
+                    residue_specs.append((chain, res_id))
             except ValueError:
                 raise ValueError(f"Invalid residue: '{spec}'")
         
@@ -234,12 +275,14 @@ def _validate_task_inputs(args, task):
     has_dataset_path = args.pharmit_path is not None or args.plinder_path is not None
     
     pocket_definition = None
-    if args.pocket_ligand is not None or args.pocket_center is not None or args.pocket_residues is not None:
+    pocket_coords = getattr(args, "pocket_coords", None)
+    if args.pocket_ligand is not None or args.pocket_center is not None or args.pocket_residues is not None or pocket_coords is not None:
         try:
             pocket_definition = _build_pocket_definition(
                 args.pocket_ligand,
                 args.pocket_center,
                 args.pocket_residues,
+                pocket_coords,
                 args.bbox_length
             )
         except ValueError as e:
@@ -266,7 +309,7 @@ def _validate_task_inputs(args, task):
         missing.append("pharmacophore file (--pharmacophore_file)")
     if 'protein_identity' in required and not has_dataset_path and not has_pocket_definition:
         missing.append(
-            "pocket definition (--pocket_ligand, --pocket_center, or --pocket_residues)"
+            "pocket definition (--pocket_ligand, --pocket_center, --pocket_residues, or --pocket_coords)"
         )
     
     if missing:
@@ -290,23 +333,52 @@ def run_sample(args):
     from omtra.tasks.register import task_name_to_class
     from omtra.utils.checkpoints import get_checkpoint_path_for_task, TASK_TO_CHECKPOINT
     
+    fixed_brics_parsed = _parse_fixed_brics_fragments(args.fixed_brics_fragments)
+
+    if fixed_brics_parsed is not None and args.ligand_file is None:
+        print(
+            "Error: --fixed-brics-fragments requires --ligand_file. "
+            "--pocket_ligand only defines the protein pocket; pass the same SDF "
+            "as --ligand_file too if you want to fix fragments from it."
+        )
+        sys.exit(1)
+
+    # Auto-switch to the partial variant when --fixed-brics-fragments is provided
+    if fixed_brics_parsed is not None and not args.task.startswith("partial_"):
+        partial_task_name = f"partial_{args.task}"
+        if partial_task_name in TASK_TO_CHECKPOINT:
+            print(f"--fixed-brics-fragments provided: switching task {args.task} → {partial_task_name}")
+            args.task = partial_task_name
+        else:
+            print(
+                f"Error: --fixed-brics-fragments was provided for task '{args.task}', "
+                f"but no matching partial task '{partial_task_name}' exists."
+            )
+            sys.exit(1)
+
     task = task_name_to_class(args.task)
     
     if args.checkpoint is None:
-        checkpoint_dir = Path(omtra_root()) / "omtra/trained_models/"
-        checkpoint_path = get_checkpoint_path_for_task(
-            args.task,
-            checkpoint_dir=checkpoint_dir
-        )
+        checkpoint_path = get_checkpoint_path_for_task(args.task)
         if checkpoint_path is None:
             expected_ckpt = TASK_TO_CHECKPOINT.get(args.task, "unknown")
             print(f"Error: No checkpoint found for task '{args.task}'")
-            print(f"expected checkpoint: {expected_ckpt} at {checkpoint_dir.absolute()}")
+            print(f"expected checkpoint: {expected_ckpt}")
             sys.exit(1)
         args.checkpoint = checkpoint_path
     
     has_protein, has_ligand, has_pharmacophore, has_pocket_ligand_file, pocket_definition = _validate_task_inputs(args, task)
-    
+
+    if len(task.partial_modalities_fixed) > 0 and args.ligand_file is not None:
+        if fixed_brics_parsed is None:
+            print(
+                "Error: --fixed-brics-fragments is required for partial-modality tasks "
+                "Pass a comma-separated list of BRICS fragment indices (e.g. 0,1), "
+                "or an empty string '' to fix no atoms."
+            )
+            sys.exit(1)
+    fixed_for_load = fixed_brics_parsed if len(task.partial_modalities_fixed) > 0 else None
+
     # validate --use_gt_n_lig_atoms: requires pocket ligand 
     if args.use_gt_n_lig_atoms:
         if not has_pocket_ligand_file:
@@ -314,7 +386,7 @@ def run_sample(args):
             sys.exit(1)
     
     # create graphs from files
-    has_pocket_arg = args.pocket_ligand is not None or args.pocket_center is not None or args.pocket_residues is not None
+    has_pocket_arg = args.pocket_ligand is not None or args.pocket_center is not None or args.pocket_residues is not None or getattr(args, "pocket_coords", None) is not None
     if args.protein_file or args.ligand_file or has_pocket_arg or args.pharmacophore_file:
         import torch
         from omtra.utils.file_to_graph import create_conditional_graphs_from_files
@@ -336,6 +408,7 @@ def run_sample(args):
             task=task,
             n_samples=1,  # 1 graph from the input file
             device=device,
+            fixed_brics_fragments=fixed_for_load,
         )
         
         if pocket_definition and not args.pocket_center:
@@ -346,6 +419,9 @@ def run_sample(args):
                 coords = load_ligand_rdkit(pocket_definition['value'], compute_condensed=False).coords
                 if isinstance(coords, torch.Tensor):
                     coords = coords.cpu().numpy()
+                args.pocket_center = np.mean(coords, axis=0).tolist()
+            elif pocket_type == 'coords':
+                coords = np.load(pocket_definition['value'])
                 args.pocket_center = np.mean(coords, axis=0).tolist()
             elif pocket_type == 'residues' and g_list:
                 coords = g_list[0].nodes['prot_atom'].data.get('x_1_true')

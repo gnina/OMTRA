@@ -393,17 +393,34 @@ def sampling_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[st
     
     try:
         log_job_event(job_logger, job_id, "sampling_started", params=params)
-        
+
         # Get sampling mode and checkpoint path
-        sampling_mode = params.get('sampling_mode', 'Unconditional')
+        sampling_mode = params.get('sampling_mode')
+        valid_sampling_modes = {
+            'Unconditional',
+            'Pharmacophore-conditioned',
+            'Protein-conditioned',
+            'Protein+Pharmacophore-conditioned',
+        }
+        if sampling_mode not in valid_sampling_modes:
+            raise ValueError(
+                f"Unknown sampling_mode {sampling_mode!r}. "
+                f"Expected one of: {', '.join(sorted(valid_sampling_modes))}"
+            )
         checkpoint_path = params.get('checkpoint_path')
-        
+
         if not checkpoint_path:
             raise ValueError("No checkpoint path provided")
-            
-        model = load_omtra_model(checkpoint_path, sampling_mode)
-        if model is None:
-            raise ValueError("No model found")
+
+        # When fixed fragments are selected, run_omtra_sampler handles model
+        # loading via cli.run_sample (which switches to partial task/checkpoint)
+        has_fixed_frags = bool(params.get('fixed_brics_fragments'))
+        if has_fixed_frags:
+            model = None
+        else:
+            model = load_omtra_model(checkpoint_path, sampling_mode)
+            if model is None:
+                raise ValueError("No model found")
         
         result = run_omtra_sampler(job_id, params, input_files, model, job_logger)
         
@@ -465,6 +482,19 @@ def sampling_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[st
         raise
 
 
+def _format_pocket_residue(residue: Dict[str, Any]) -> str:
+    return f"{residue['chain']}:{residue['res_id']}"
+
+
+def _save_pocket_reference_coords(coords: Any, output_dir: Path) -> Path:
+    coord_array = np.asarray(coords, dtype=np.float32)
+    if coord_array.ndim != 2 or coord_array.shape[1] != 3 or coord_array.shape[0] == 0:
+        raise ValueError("Detected pocket coordinate selection must be a non-empty Nx3 array")
+    coord_path = output_dir / "pocket_reference_coords.npy"
+    np.save(coord_path, coord_array)
+    return coord_path
+
+
 def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Execute a docking job.
@@ -483,28 +513,42 @@ def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str
         outputs_dir.mkdir(exist_ok=True)
         
         # Extract parameters
-        docking_mode = params.get('docking_mode', 'Rigid Docking')
+        docking_mode = params.get('docking_mode')
         n_samples = params.get('n_samples', 10)
         n_timesteps = params.get('steps', 100)
         seed = params.get('seed')
         pocket_selection = params.get('pocket_selection')
-        
-        # Get checkpoint path
-        from omtra.utils.checkpoints import get_checkpoint_path_for_webapp
-        checkpoint_path = get_checkpoint_path_for_webapp(docking_mode, CHECKPOINT_DIR)
-        if not checkpoint_path or not checkpoint_path.exists():
-            raise ValueError(f"Checkpoint not found for {docking_mode}")
         
         # Map docking mode to task name
         docking_task_mapping = {
             'Rigid Docking': 'rigid_docking_condensed',
             'Rigid Docking + Pharmacophore': 'rigid_docking_pharmacophore_condensed'
         }
-        
-        task_name = docking_task_mapping.get(docking_mode, 'rigid_docking_condensed')
+        if docking_mode not in docking_task_mapping:
+            raise ValueError(
+                f"Unknown docking_mode {docking_mode!r}. "
+                f"Expected one of: {', '.join(sorted(docking_task_mapping))}"
+            )
+        task_name = docking_task_mapping[docking_mode]
+
+        # Handle fixed_brics_fragments
+        fixed_brics_list = params.get('fixed_brics_fragments')
+        fixed_brics_str = None
+        if fixed_brics_list and len(fixed_brics_list) > 0:
+            fixed_brics_str = ','.join(str(i) for i in fixed_brics_list)
+            if task_name == 'rigid_docking_condensed':
+                task_name = 'partial_rigid_docking_condensed'
+
+        # Get checkpoint path (partial tasks use gnn_partial_prot_cond.ckpt directly)
+        from omtra.utils.checkpoints import get_checkpoint_path_for_webapp
+        if fixed_brics_str and task_name.startswith('partial_'):
+            checkpoint_path = CHECKPOINT_DIR / 'gnn_partial_prot_cond.ckpt'
+        else:
+            checkpoint_path = get_checkpoint_path_for_webapp(docking_mode, CHECKPOINT_DIR)
+        if not checkpoint_path or not checkpoint_path.exists():
+            raise ValueError(f"Checkpoint not found for {docking_mode}")
         
         # Use the same run_omtra_sampler infrastructure
-        # Create mock args similar to sampling_task
         class MockArgs:
             def __init__(self):
                 self.checkpoint = Path(checkpoint_path)
@@ -535,9 +579,11 @@ def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str
                 self.pocket_ligand = None
                 self.pocket_center = None
                 self.pocket_residues = None
+                self.pocket_coords = None
                 self.bbox_length = 23.0
                 self.input_files_dir = None
                 self.g_list_from_files = None
+                self.fixed_brics_fragments = fixed_brics_str
         
         # Handle input files
         if not input_files:
@@ -583,14 +629,18 @@ def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str
             elif pocket_type == 'residues':
                 residues = pocket_selection.get('value', [])
                 if residues:
-                    res_strs = [f"{r['chain']}:{r['res_id']}" for r in residues]
+                    res_strs = [_format_pocket_residue(r) for r in residues]
                     args.pocket_residues = ','.join(res_strs)
+            elif pocket_type == 'coords':
+                args.pocket_coords = _save_pocket_reference_coords(
+                    pocket_selection.get('value', []),
+                    outputs_dir,
+                )
             elif pocket_type == 'file':
                 pocket_filename = pocket_selection.get('value')
                 if pocket_filename in all_sdfs:
                     args.pocket_ligand = all_sdfs[pocket_filename]
                 else:
-                    # Fallback or error
                     args.pocket_ligand = main_ligand_file
                     job_logger.warning(f"Pocket ligand filename {pocket_filename} not in all_sdfs, falling back to {main_ligand_file}")
         
@@ -947,11 +997,8 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
             if metrics.get('is_connected', True):
                 try:
                     # Compute pb_valid using PoseBusters
-                    import logging as _logging
-                    from omtra_pipelines.docking_eval.docking_eval import pb_valid as de_pb_valid
-                    from omtra.tasks.register import task_name_to_class
-                    task = task_name_to_class('fixed_protein_ligand_denovo_condensed')
-                    df_pb = de_pb_valid(gen_ligs=[mol], true_lig=None, prot_file=str(protein_file), task=task)
+                    from omtra.eval.metrics.posebusters import pb_validate
+                    df_pb = pb_validate(gen_ligs=[mol], mode="dock", true_lig=None, prot_file=str(protein_file))
                     if len(df_pb) > 0:
 
                         row_mask = df_pb['pb_sanitization'] == True
@@ -1133,16 +1180,8 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
             if sampling_mode in ['Unconditional', 'Pharmacophore-conditioned'] and metrics.get('is_connected', True):
                 try:
                     # Compute pb_valid using PoseBusters with 'dock' config (no protein required)
-                    from omtra_pipelines.docking_eval.docking_eval import pb_valid as de_pb_valid
-                    from omtra.tasks.register import task_name_to_class
-                    
-                    # Use correct task based on sampling mode
-                    if sampling_mode == 'Unconditional':
-                        task = task_name_to_class('denovo_ligand_condensed')
-                    else:  # Pharmacophore-conditioned
-                        task = task_name_to_class('denovo_ligand_from_pharmacophore_condensed')
-                    
-                    df_pb = de_pb_valid(gen_ligs=[mol], true_lig=None, prot_file=None, task=task)
+                    from omtra.eval.metrics.posebusters import pb_validate
+                    df_pb = pb_validate(gen_ligs=[mol], mode="dock", true_lig=None, prot_file=None)
                     if len(df_pb) > 0:
                         # Match docking_eval: pb_valid True only if sanitization True AND all checks pass
                         row_mask = df_pb['pb_sanitization'] == True
@@ -1282,7 +1321,7 @@ def run_omtra_sampler(
         outputs_dir.mkdir(exist_ok=True)
         
         # Get parameters
-        sampling_mode = params.get('sampling_mode', 'Unconditional')
+        sampling_mode = params.get('sampling_mode')
         n_samples = params.get('n_samples', 10)
         n_timesteps = params.get('steps', 100)
         checkpoint_path = params.get('checkpoint_path')
@@ -1310,15 +1349,32 @@ def run_omtra_sampler(
             'Protein-conditioned': 'fixed_protein_ligand_denovo_condensed',
             'Protein+Pharmacophore-conditioned': 'fixed_protein_pharmacophore_ligand_denovo_condensed'
         }
+        if sampling_mode not in task_mapping:
+            raise ValueError(
+                f"Unknown sampling_mode {sampling_mode!r}. "
+                f"Expected one of: {', '.join(sorted(task_mapping))}"
+            )
         
-        task_name = task_mapping.get(sampling_mode, 'denovo_ligand_condensed')
+        task_name = task_mapping[sampling_mode]
+
+        # Handle fixed_brics_fragments from params
+        fixed_brics_list = params.get('fixed_brics_fragments')
+        fixed_brics_str = None
+        if fixed_brics_list and len(fixed_brics_list) > 0:
+            fixed_brics_str = ','.join(str(i) for i in fixed_brics_list)
+            # Switch to partial task variant directly
+            partial_mapping = {
+                'fixed_protein_ligand_denovo_condensed': 'partial_fixed_protein_ligand_denovo_condensed',
+                'rigid_docking_condensed': 'partial_rigid_docking_condensed',
+            }
+            task_name = partial_mapping.get(task_name, task_name)
         
         # Create a mock args object like the CLI does
         class MockArgs:
             def __init__(self):
                 self.checkpoint = Path(checkpoint_path)
                 self.task = task_name
-                self.dataset = "pharmit"  # Default dataset
+                self.dataset = "pharmit"
                 self.n_samples = n_samples
                 self.n_replicates = 1
                 self.dataset_start_idx = 0
@@ -1344,9 +1400,11 @@ def run_omtra_sampler(
                 self.pocket_ligand = None
                 self.pocket_center = None
                 self.pocket_residues = None
+                self.pocket_coords = None
                 self.bbox_length = 23.0
                 self.input_files_dir = None
                 self.g_list_from_files = None
+                self.fixed_brics_fragments = fixed_brics_str
         
         # Set up args based on sampling mode
         args = MockArgs()
@@ -1369,8 +1427,13 @@ def run_omtra_sampler(
             elif pocket_type == 'residues':
                 residues = pocket_selection.get('value', [])
                 if residues:
-                    res_strs = [f"{r['chain']}:{r['res_id']}" for r in residues]
+                    res_strs = [_format_pocket_residue(r) for r in residues]
                     args.pocket_residues = ','.join(res_strs)
+            elif pocket_type == 'coords':
+                args.pocket_coords = _save_pocket_reference_coords(
+                    pocket_selection.get('value', []),
+                    outputs_dir,
+                )
             elif pocket_type == 'file':
                 pocket_ligand_filename = pocket_selection.get('value') # Store for later resolution
         
@@ -1483,7 +1546,7 @@ def run_omtra_sampler(
             # Guard this block: only run if temp_input_dir is defined (i.e. we are NOT in pre-configured docking mode)
             if 'temp_input_dir' in locals() and sampling_mode in PROTEIN_INVOLVING_MODES:
                 sdf_files = list(temp_input_dir.glob('*.sdf'))
-                has_pocket = bool(getattr(args, 'pocket_center', None) or getattr(args, 'pocket_residues', None) or (getattr(args, 'pocket_ligand', None) and os.path.exists(str(args.pocket_ligand))))
+                has_pocket = bool(getattr(args, 'pocket_center', None) or getattr(args, 'pocket_residues', None) or getattr(args, 'pocket_coords', None) or (getattr(args, 'pocket_ligand', None) and os.path.exists(str(args.pocket_ligand))))
                 
                 if sampling_mode in ['Protein-conditioned', 'Rigid Docking']:
                     if sdf_files:
@@ -1763,6 +1826,46 @@ def run_omtra_sampler(
                 thread.start()
                 diagram_threads.append(thread)
         
+        # Include reference/pocket ligand as the first entry if available
+        pocket_ligand_path = getattr(args, 'pocket_ligand', None)
+        if pocket_ligand_path and Path(str(pocket_ligand_path)).exists() and sampling_mode in PROTEIN_INVOLVING_MODES:
+            try:
+                ref_mol = None
+                supplier = Chem.SDMolSupplier(str(pocket_ligand_path), removeHs=True, sanitize=True)
+                for m in supplier:
+                    if m is not None:
+                        ref_mol = m
+                        break
+
+                if ref_mol is not None:
+                    ref_sdf = outputs_dir / "reference_ligand.sdf"
+                    write_mols_to_sdf([ref_mol], str(ref_sdf))
+
+                    ref_metrics = compute_fast_molecule_metrics(
+                        ref_mol,
+                        sample_name="reference_ligand",
+                        sampling_mode=sampling_mode,
+                        protein_file=protein_file,
+                        posecheck_obj=posecheck_obj,
+                    )
+                    ref_metrics['is_reference'] = True
+                    all_molecule_metrics.insert(0, ref_metrics)
+
+                    if sampling_mode in PROTEIN_INVOLVING_MODES and protein_file:
+                        thread = threading.Thread(
+                            target=generate_diagram_for_sample,
+                            args=(ref_sdf, protein_file, -1),
+                            daemon=False,
+                        )
+                        thread.start()
+                        diagram_threads.append(thread)
+
+                    job_logger.info(f"Added reference ligand from {pocket_ligand_path} with metrics")
+                else:
+                    job_logger.warning(f"Could not parse reference ligand from {pocket_ligand_path}")
+            except Exception as ref_e:
+                job_logger.warning(f"Failed to add reference ligand: {ref_e}")
+
         # Wait for all diagram generation threads to complete
         if diagram_threads:
             job_logger.info(f"Waiting for {len(diagram_threads)} diagram generation threads to complete...")

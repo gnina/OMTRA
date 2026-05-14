@@ -326,6 +326,9 @@ def create_zip_archive(job_id: str, sampling_mode: Optional[str] = None) -> Opti
                         zipf.write(file_path, f"molecules/{filename}")
                         continue
                     
+                    if filename == "reference_ligand.sdf":
+                        continue
+                    
                     # Diagrams and error files go to 2d_diagrams/ 
                     if is_protein_conditioned:
                         if (file_path.suffix.lower() == '.svg' and '_diagram.svg' in filename) or \

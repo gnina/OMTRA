@@ -3,8 +3,10 @@ import torch.nn as nn
 import numpy as np
 from functools import lru_cache
 import dgl
+import warnings
 from typing import List, Optional
 from collections import defaultdict
+from pathlib import Path
 from omtra.tasks.tasks import Task
 from omtra.tasks.modalities import (
     Modality, 
@@ -334,7 +336,11 @@ class FixedConditionEmbedder(nn.Module):
             n_corrupt = corrupt_mask.sum().item()
 
             marginal_key = self.marginal_keys.get(modality_name)
-            if self.marginal_path is not None and marginal_key is not None:
+            if (
+                self.marginal_path is not None
+                and marginal_key is not None
+                and Path(self.marginal_path).is_file()
+            ):
                 # Sample from data marginal
                 marginal_probs = _load_marginals(self.marginal_path, marginal_key)
                 marginal_probs = marginal_probs.to(gt.device)
@@ -344,6 +350,11 @@ class FixedConditionEmbedder(nn.Module):
                     replacement=True,
                 )
             else:
+                if self.marginal_path is not None and marginal_key is not None:
+                    warnings.warn(
+                        "Missing fixed-token marginals; using uniform corruption.",
+                        RuntimeWarning,
+                    )
                 # Sample uniformly
                 mask_index = g0.max().item()
                 n_categories = int(mask_index)

@@ -5,13 +5,16 @@ import { apiClient } from '@/lib/api-client';
 import { Download } from 'lucide-react';
 import type { SamplingMode } from '@/types';
 
+type InputFile = { filename: string; size: number; extension: string };
+
 interface MolecularViewerProps {
   jobId: string;
   filename: string;
   samplingMode: SamplingMode;
   pocketSelection?: any;
-  inputFilesList?: { files: Array<{ filename: string; size: number; extension: string }> };
+  inputFilesList?: InputFile[] | { files: InputFile[] };
   prefetchedContent?: string;
+  fixedBricsFragments?: number[];
 }
 
 declare global {
@@ -27,6 +30,7 @@ export function MolecularViewer({
   pocketSelection,
   inputFilesList: propInputFiles,
   prefetchedContent,
+  fixedBricsFragments,
 }: MolecularViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
@@ -41,12 +45,20 @@ export function MolecularViewer({
   const lastJobIdRef = useRef<string | null>(null);
   const isFetchingRef = useRef<boolean>(false);
   const loadIdRef = useRef<number>(0);
+  const fixedFragSpheresRef = useRef<any[]>([]);
+  const [fixedFragAtomCoords, setFixedFragAtomCoords] = useState<Array<{ x: number; y: number; z: number; fragId: number }>>([]);
+  const [nFixedAtoms, setNFixedAtoms] = useState<number>(0);
+  const bricsFragMapRef = useRef<Map<number, number[]>>(new Map());
+  const [bricsFragmentsData, setBricsFragmentsData] = useState<any[] | null>(null);
+  const [bricsReferenceSdf, setBricsReferenceSdf] = useState<string | null>(null);
 
   // Styling state - simple toggles
   const [showSticks, setShowSticks] = useState(false);
   const [showSurface, setShowSurface] = useState(true);
   const [showBackbone, setShowBackbone] = useState(true);
+  const [showFixedFragments, setShowFixedFragments] = useState(true);
   const [hasProtein, setHasProtein] = useState(false);
+  const hasFixedFragments = fixedBricsFragments && fixedBricsFragments.length > 0;
 
   // 1. Load active result file content
   useEffect(() => {
@@ -89,7 +101,7 @@ export function MolecularViewer({
 
       if (!viewerRef.current) {
         const viewer = window.$3Dmol.createViewer(containerRef.current, {
-          backgroundColor: 'white'
+          backgroundColor: 'white',
         });
         viewer.setSlab(-1000, 1000);
         viewerRef.current = viewer;
@@ -150,25 +162,23 @@ export function MolecularViewer({
       setHasProtein(false);
 
       // Fetch structural data inside (using propInputFiles as cache)
-      let inputFilesList = propInputFiles;
+      let rawInputFiles = propInputFiles;
       try {
-        if (!inputFilesList && (needsProtein || needsPharmacophore)) {
+        if (!rawInputFiles && (needsProtein || needsPharmacophore)) {
           console.log(`[MolecularViewer] Fetching input files list...`);
-          inputFilesList = await apiClient.listInputFiles(jobId);
+          rawInputFiles = await apiClient.listInputFiles(jobId);
         }
       } catch (err) {
         console.error('Failed to list input files:', err);
       }
+      const files: InputFile[] = normalizeInputFiles(rawInputFiles);
 
       const proteinPromise = (async () => {
-        // If we don't think we need protein based on mode, but we have input files, 
-        // check if there's a protein file anyway as a fallback.
-        if (!inputFilesList) return null;
+        if (files.length === 0) return null;
 
-        const protFile = inputFilesList.files.find(f => f.extension === '.pdb' || f.extension === '.cif');
+        const protFile = files.find(f => f.extension === '.pdb' || f.extension === '.cif');
         if (!protFile) return null;
 
-        // If we have a protein file and we either need it or it's a docking/protein mode (robust check)
         if (needsProtein || mode.toLowerCase().includes('dock') || mode.toLowerCase().includes('protein')) {
           try {
             const protBlob = await apiClient.downloadInputFile(jobId, protFile.filename);
@@ -179,13 +189,11 @@ export function MolecularViewer({
         return null;
       })();
 
-      const needsPharmacophoreInner = needsPharmacophore;
-
       const pharmacophorePromise = (async () => {
-        if (!needsPharmacophoreInner || !inputFilesList) return null;
+        if (!needsPharmacophore || files.length === 0) return null;
         try {
-          const pharmFile = inputFilesList.files.find(f => ['.xyz', '.json'].includes(f.extension.toLowerCase())) ||
-            inputFilesList.files.find(f => f.extension.toLowerCase() === '.sdf');
+          const pharmFile = files.find(f => ['.xyz', '.json'].includes(f.extension.toLowerCase())) ||
+            files.find(f => f.extension.toLowerCase() === '.sdf');
           if (pharmFile) {
             const blob = await apiClient.downloadInputFile(jobId, pharmFile.filename);
             const text = await blob.text();
@@ -195,7 +203,28 @@ export function MolecularViewer({
         return null;
       })();
 
-      const [proteinData, pharmData] = await Promise.all([proteinPromise, pharmacophorePromise]);
+      // Fetch BRICS fragment info for fixed-fragment visualization
+      // Always fetch if an SDF input exists — fixedBricsFragments may change later
+      // (e.g. navigating from reference_ligand to a generated sample)
+      const bricsPromise = (async () => {
+        if (files.length === 0) return null;
+        const sdfFile = files.find(f => f.extension === '.sdf');
+        if (!sdfFile) return null;
+        try {
+          const sdfBlob = await apiClient.downloadInputFile(jobId, sdfFile.filename);
+          const sdfText = await sdfBlob.text();
+          const sdfFormData = new FormData();
+          sdfFormData.append('file', sdfBlob, sdfFile.filename);
+          const resp = await fetch('/api/extract-brics-fragments', {
+            method: 'POST',
+            body: sdfFormData,
+          });
+          if (resp.ok) return { data: await resp.json(), sdfText };
+        } catch (err) { console.error('BRICS fragment fetch failed:', err); }
+        return null;
+      })();
+
+      const [proteinData, pharmData, bricsData] = await Promise.all([proteinPromise, pharmacophorePromise, bricsPromise]);
 
       if (loadIdRef.current !== currentLoadId) {
         console.log(`[MolecularViewer] Load interrupted by newer request (${currentLoadId})`);
@@ -207,13 +236,12 @@ export function MolecularViewer({
         const model = viewer.addModel(proteinData.text, proteinData.format);
         proteinModelRef.current = model;
         setHasProtein(true);
-        // Protein ATOM records: cartoon/sticks per toggle
         const protStyle: any = {};
         if (showBackbone) protStyle.cartoon = { color: 'lightblue' };
         if (showSticks) protStyle.stick = { radius: 0.15, colorscheme: 'lightgreyCarbon' };
         viewer.setStyle({ model: model.getID(), hetflag: false }, protStyle);
-        // HETATM records always as sticks
         viewer.setStyle({ model: model.getID(), hetflag: true }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
+
       }
 
       if (pharmData) {
@@ -225,6 +253,21 @@ export function MolecularViewer({
         pharmShapesRef.current = addPharmacophoreAtoms(viewer, atoms);
       }
 
+      // Cache BRICS data for fixed fragment visualization (recalculated in separate effect)
+      if (bricsData?.data?.fragments) {
+        setBricsFragmentsData(bricsData.data.fragments);
+        setBricsReferenceSdf(bricsData.sdfText);
+        const fragMap = new Map<number, number[]>();
+        for (const frag of bricsData.data.fragments) {
+          fragMap.set(frag.id, frag.atom_indices);
+        }
+        bricsFragMapRef.current = fragMap;
+      } else {
+        setBricsFragmentsData(null);
+        setBricsReferenceSdf(null);
+        bricsFragMapRef.current = new Map();
+      }
+
       viewer.render();
       isFetchingRef.current = false;
     };
@@ -232,6 +275,20 @@ export function MolecularViewer({
     loadStructuralData();
   }, [jobId, samplingMode, propInputFiles]);
 
+  // Recalculate nFixedAtoms when fixedBricsFragments or bricsFragmentsData changes
+  useEffect(() => {
+    if (!bricsFragmentsData || !hasFixedFragments) {
+      setNFixedAtoms(0);
+      return;
+    }
+    let nFixed = 0;
+    for (const frag of bricsFragmentsData) {
+      if (fixedBricsFragments!.includes(frag.id)) {
+        nFixed += frag.num_atoms;
+      }
+    }
+    setNFixedAtoms(nFixed);
+  }, [fixedBricsFragments, hasFixedFragments, bricsFragmentsData]);
 
   // 4. Molecule SWITCHING (Ligand only)
   useEffect(() => {
@@ -254,18 +311,51 @@ export function MolecularViewer({
     // Apply ligand style
     viewer.setStyle({ model: ligandModel }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
 
+    if (nFixedAtoms > 0 && hasFixedFragments && fileContent && bricsFragmentsData && bricsReferenceSdf) {
+      const referenceAtoms = parseFixedFragmentAtomCoords(bricsReferenceSdf, bricsFragmentsData, fixedBricsFragments!);
+      const coords = mapReferenceFixedAtomsToDisplayedCoords(referenceAtoms, fileContent);
+      setFixedFragAtomCoords(coords);
+    } else {
+      setFixedFragAtomCoords([]);
+    }
+
     if (!hasExistingLigand) {
-      // First model load: zoom to it
       viewer.zoomTo({ model: ligandModel });
     } else {
-      // Subsequent swaps: restore previous camera view exactly
       viewer.setView(currentView);
     }
 
     viewer.render();
-  }, [fileContent, filename, isSceneReady]);
+  }, [fileContent, filename, isSceneReady, nFixedAtoms, bricsFragmentsData, bricsReferenceSdf, fixedBricsFragments, hasFixedFragments]);
 
-  // 5. Handle Style Toggles (Cartoon, Sticks) - Unified
+  // Fixed Fragment Spheres
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !isSceneReady) return;
+
+    fixedFragSpheresRef.current.forEach(s => {
+      try { viewer.removeShape(s); } catch (_) {}
+    });
+    fixedFragSpheresRef.current = [];
+
+    if (showFixedFragments && fixedFragAtomCoords.length > 0) {
+      for (const atom of fixedFragAtomCoords) {
+        const colorIdx = atom.fragId % FRAGMENT_COLORS.length;
+        const shape = viewer.addSphere({
+          center: { x: atom.x, y: atom.y, z: atom.z },
+          radius: 0.35,
+          color: FRAGMENT_COLORS[colorIdx],
+          wireframe: true,
+          linewidth: 1.5,
+        });
+        fixedFragSpheresRef.current.push(shape);
+      }
+    }
+
+    viewer.render();
+  }, [fixedFragAtomCoords, showFixedFragments, isSceneReady]);
+
+  // Handle Style Toggles (Cartoon, Sticks) - Unified
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || !isSceneReady) return;
@@ -289,7 +379,7 @@ export function MolecularViewer({
     viewer.render();
   }, [showSticks, showBackbone, isSceneReady, hasProtein]);
 
-  // 6. Handle Surface Toggles (Global Protein Surface)
+  // Handle Surface Toggles (Global Protein Surface)
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || !isSceneReady) return;
@@ -342,18 +432,19 @@ export function MolecularViewer({
           Download
         </button>
       </div>
-      <div
-        ref={containerRef}
-        style={{ width: '100%', height: '500px', position: 'relative' }}
-        className="three-d-viewer-container border border-slate-200 rounded-2xl overflow-hidden shadow-inner bg-slate-50"
+      <div style={{ width: '100%', height: '500px', position: 'relative' }}
+        className="border border-slate-200 rounded-2xl overflow-hidden shadow-inner bg-slate-50"
       >
-        {/* No spinner needed for seamless experience */}
+        <div
+          ref={containerRef}
+          className="three-d-viewer-container"
+          style={{ width: '100%', height: '100%', position: 'relative' }}
+        />
 
-        {/* Style Controls Panel - Persistent to prevent flickering */}
-        {hasProtein && (
+        {/* Style Controls Panel */}
+        {(hasProtein || hasFixedFragments) && (
           <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-slate-200/60 p-3 space-y-2 z-20 text-sm">
             <div className="font-semibold text-slate-700 text-xs mb-2">Style</div>
-
 
             {hasProtein && (
               <>
@@ -386,6 +477,18 @@ export function MolecularViewer({
                 </label>
               </>
             )}
+
+            {hasFixedFragments && (
+              <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 py-1 px-2 rounded-lg transition-colors">
+                <input
+                  type="checkbox"
+                  checked={showFixedFragments}
+                  onChange={(e) => setShowFixedFragments(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded"
+                />
+                Fixed Atoms
+              </label>
+            )}
           </div>
         )}
       </div>
@@ -409,7 +512,115 @@ export function MolecularViewer({
 }
 
 // Helper Functions
-// Helper Functions
+
+function normalizeInputFiles(raw: InputFile[] | { files: InputFile[] } | undefined | null): InputFile[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'object' && 'files' in raw && Array.isArray(raw.files)) return raw.files;
+  return [];
+}
+
+const FRAGMENT_COLORS = [
+  '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c',
+  '#0891b2', '#ca8a04', '#db2777', '#4f46e5', '#65a30d',
+];
+
+function parseFixedFragmentAtomCoords(
+  sdfContent: string,
+  fragments: Array<{ id: number; atom_indices: number[] }>,
+  fixedFragIds: number[],
+): Array<{ x: number; y: number; z: number; fragId: number }> {
+  const lines = sdfContent.split('\n');
+  if (lines.length < 4) return [];
+
+  const countsLine = lines[3];
+  const parts = countsLine.trim().split(/\s+/);
+  const numAtoms = parseInt(parts[0], 10);
+  if (isNaN(numAtoms) || numAtoms <= 0) return [];
+
+  const fixedIds = new Set(fixedFragIds);
+  const result: Array<{ x: number; y: number; z: number; fragId: number }> = [];
+
+  for (const frag of fragments) {
+    if (!fixedIds.has(frag.id)) continue;
+    for (const atomIdx of frag.atom_indices) {
+      if (atomIdx < 0 || atomIdx >= numAtoms) continue;
+      const line = lines[4 + atomIdx];
+      if (!line) continue;
+      const p = line.trim().split(/\s+/);
+      result.push({
+        x: parseFloat(p[0]),
+        y: parseFloat(p[1]),
+        z: parseFloat(p[2]),
+        fragId: frag.id,
+      });
+    }
+  }
+
+  return result;
+}
+
+function mapReferenceFixedAtomsToDisplayedCoords(
+  referenceAtoms: Array<{ x: number; y: number; z: number; fragId: number }>,
+  displayedSdfContent: string,
+): Array<{ x: number; y: number; z: number; fragId: number }> {
+  const displayedAtoms = parseSdfAtomCoords(displayedSdfContent);
+  const usedDisplayedAtoms = new Set<number>();
+  const matched: Array<{ x: number; y: number; z: number; fragId: number }> = [];
+  const maxMatchDistance = 0.5;
+
+  for (const refAtom of referenceAtoms) {
+    let bestIdx = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < displayedAtoms.length; i++) {
+      if (usedDisplayedAtoms.has(i)) continue;
+      const candidate = displayedAtoms[i];
+      const distance = Math.hypot(
+        refAtom.x - candidate.x,
+        refAtom.y - candidate.y,
+        refAtom.z - candidate.z,
+      );
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx >= 0 && bestDistance <= maxMatchDistance) {
+      usedDisplayedAtoms.add(bestIdx);
+      matched.push({
+        ...displayedAtoms[bestIdx],
+        fragId: refAtom.fragId,
+      });
+    }
+  }
+
+  return matched;
+}
+
+function parseSdfAtomCoords(sdfContent: string): Array<{ x: number; y: number; z: number }> {
+  const lines = sdfContent.split('\n');
+  if (lines.length < 4) return [];
+
+  const countsLine = lines[3];
+  const parts = countsLine.trim().split(/\s+/);
+  const numAtoms = parseInt(parts[0], 10);
+  if (isNaN(numAtoms) || numAtoms <= 0) return [];
+
+  const coords: Array<{ x: number; y: number; z: number }> = [];
+  for (let i = 0; i < numAtoms; i++) {
+    const line = lines[4 + i];
+    if (!line) continue;
+    const p = line.trim().split(/\s+/);
+    coords.push({
+      x: parseFloat(p[0]),
+      y: parseFloat(p[1]),
+      z: parseFloat(p[2]),
+    });
+  }
+  return coords;
+}
 
 const PHARMACOPHORE_COLORS: Record<string, string> = {
   // Pharmit/Standard Types
