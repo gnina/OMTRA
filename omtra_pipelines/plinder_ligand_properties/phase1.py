@@ -8,6 +8,7 @@ def parse_args():
 
     p.add_argument('--plinder_path', type=str, help='Path to the Plinder Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/plinder')
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
+    p.add_argument('--versions', type=str, nargs='+', default=['exp', 'no_links', 'pred'], help='Plinder link versions to process (subdirs of plinder_path).')
     p.add_argument('--n_feats', type=int, default=6, help='Number of additional features per molecule.')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
     p.add_argument('--feat_names', type=list, default=['impl_H', 'aro', 'hyb', 'ring', 'chiral', 'frag'], help='Name of the new Zarr array.')
@@ -22,7 +23,7 @@ if __name__ == '__main__':
     n_feats = args.n_feats
     array_name = args.array_name
 
-    for version in ['exp', 'no_links', 'pred']:
+    for version in args.versions:
         print(f"Creating Zarr array for Plinder version '{version}'")
 
         store_path = args.plinder_path+'/'+version+'/'+args.store_name+'.zarr'

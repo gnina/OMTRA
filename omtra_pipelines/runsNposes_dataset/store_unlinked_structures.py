@@ -9,12 +9,12 @@ import os
 log_file_path = os.environ.get("LOG_FILE_PATH", "plinder_storage.log")
 os.environ["LOG_FILE_PATH"] = log_file_path
 
-from omtra_pipelines.plinder_dataset.plinder_pipeline import SystemProcessor
-from omtra_pipelines.plinder_dataset.plinder_unlink_zarr import (
+from omtra_pipelines.runsNposes_dataset.plinder_pipeline import SystemProcessor
+from omtra_pipelines.runsNposes_dataset.plinder_unlink_zarr import (
     PlinderNoLinksZarrConverter,
 )
 from omtra.constants import lig_atom_type_map, npnde_atom_type_map
-from omtra_pipelines.plinder_dataset.utils import setup_logger
+from omtra_pipelines.runsNposes_dataset.utils import setup_logger
 
 
 logger = setup_logger(
@@ -28,6 +28,12 @@ def parse_args():
     )
     parser.add_argument(
         "--data", type=str, required=True, help="Path to systems parquet"
+    )
+    parser.add_argument(
+        "--ground_truth",
+        type=str,
+        required=True,
+        help="Path to extracted ground_truth directory",
     )
     parser.add_argument(
         "--split",
@@ -70,6 +76,8 @@ def main():
 
     converter = PlinderNoLinksZarrConverter(
         output_path=args.output,
+        ground_truth_dir=args.ground_truth,
+        parquet_path=args.data,
         num_workers=args.num_cpus,
         category=None,
     )
@@ -80,12 +88,6 @@ def main():
 
     if args.num_systems:
         system_ids = system_ids[: args.num_systems]
-
-    done_ids = {s.get("system_id") for s in converter.system_lookup if isinstance(s, dict)}
-    if done_ids:
-        before = len(system_ids)
-        system_ids = [sid for sid in system_ids if sid not in done_ids]
-        logger.info(f"Resume: skipping {before - len(system_ids)} already-processed systems, {len(system_ids)} remaining")
 
     converter.process_dataset(system_ids, max_pending=args.max_pending)
 

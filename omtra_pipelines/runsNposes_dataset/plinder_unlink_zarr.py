@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd
 import zarr
 from numcodecs import VLenUTF8
-from omtra_pipelines.plinder_dataset.utils import setup_logger
-from omtra_pipelines.plinder_dataset.plinder_pipeline import (
+from omtra_pipelines.runsNposes_dataset.utils import setup_logger
+from omtra_pipelines.runsNposes_dataset.plinder_pipeline import (
     LigandData,
     StructureData,
     PharmacophoreData,
@@ -26,10 +26,38 @@ logger = setup_logger(
     __name__,
 )
 
-class PlinderLinksZarrConverter:
+# Module-level globals for multiprocessing workers
+_worker_ground_truth_dir = None
+_worker_parquet_df = None
+
+
+def _worker_init(ground_truth_dir: str, parquet_path: str):
+    """Initializer for multiprocessing workers — loads shared state."""
+    global _worker_ground_truth_dir, _worker_parquet_df
+    _worker_ground_truth_dir = ground_truth_dir
+    _worker_parquet_df = pd.read_parquet(parquet_path)
+
+
+def _worker_process_system(system_id: str):
+    """Top-level function for multiprocessing workers."""
+    try:
+        processor = SystemProcessor(
+            system_id=system_id,
+            ground_truth_dir=_worker_ground_truth_dir,
+            parquet_df=_worker_parquet_df,
+        )
+        return processor.process_system()
+    except Exception as e:
+        logging.exception(f"Error processing system {system_id}: {e}")
+        return None
+
+
+class PlinderNoLinksZarrConverter:
     def __init__(
         self,
         output_path: str,
+        ground_truth_dir: str,
+        parquet_path: str,
         struc_chunk_size: int = 1500000,
         lig_atom_chunk_size: int = 10000,
         lig_bond_chunk_size: int = 10000,
@@ -41,6 +69,8 @@ class PlinderLinksZarrConverter:
         batch_size: int = 200,
     ):
         self.output_path = Path(output_path)
+        self.ground_truth_dir = ground_truth_dir
+        self.parquet_path = parquet_path
         self.struc_chunk_size = struc_chunk_size
         self.lig_atom_chunk_size = lig_atom_chunk_size
         self.lig_bond_chunk_size = lig_bond_chunk_size
@@ -55,15 +85,13 @@ class PlinderLinksZarrConverter:
             self.root = zarr.group(store=self.store)
 
             self.receptor = self.root.create_group("receptor")
-            self.apo = self.root.create_group("apo")
-            self.pred = self.root.create_group("pred")
 
             self.pocket = self.root.create_group("pocket")
             self.pharmacophore = self.root.create_group("pharmacophore")
             self.ligand = self.root.create_group("ligand")
             self.npnde = self.root.create_group("npnde")
 
-            for group in [self.receptor, self.apo, self.pred, self.pocket]:
+            for group in [self.receptor, self.pocket]:
                 chunk = self.struc_chunk_size
                 if group == self.pocket:
                     chunk = self.pocket_chunk_size
@@ -217,8 +245,6 @@ class PlinderLinksZarrConverter:
             self.root = zarr.open_group(store=str(self.output_path), mode="r+")
 
             self.receptor = self.root["receptor"]
-            self.apo = self.root["apo"]
-            self.pred = self.root["pred"]
             self.pocket = self.root["pocket"]
             self.ligand = self.root["ligand"]
             self.npnde = self.root["npnde"]
@@ -422,37 +448,23 @@ class PlinderLinksZarrConverter:
 
         return indices
 
-    def _process_system(self, system_id: str):
-        try:
-            system_processor = SystemProcessor(
-                system_id=system_id, link_type=self.category
-            )
-            return system_processor.process_system()
-
-        except Exception as e:
-            logging.exception(f"Error processing system {system_id}: {e}")
-            return None
-
     def _collect_batch_results(self, results_list):
-        batch_results = {self.category: []}
+        batch_results = []
 
         for system_data in results_list:
-            if system_data and system_data.get(self.category):
-                for link_id, system_list in system_data[self.category].items():
-                    batch_results[self.category].extend(system_list)
+            if system_data and system_data.get("systems_list"):
+                batch_results.extend(system_data["systems_list"])
 
         return batch_results
 
     def _process_system_batch(self, system_ids: List[str]):
-        results = {}
-        results[self.category] = []
+        results = []
 
         for system_id in system_ids:
             try:
-                system_data = self._process_system(system_id)
-                if system_data and system_data.get(self.category):
-                    for link_id, system_list in system_data[self.category].items():
-                        results[self.category].extend(system_list)
+                system_data = _worker_process_system(system_id)
+                if system_data and system_data.get("systems_list"):
+                    results.extend(system_data["systems_list"])
             except Exception as e:
                 logger.exception(f"Error processing system batch {system_id}: {e}")
 
@@ -466,18 +478,10 @@ class PlinderLinksZarrConverter:
         ligand_data = []
         pocket_data = []
         pharm_data = []
-        link_data = []
         npnde_data = []
 
         system_info = []
         for system_data in system_data_batch:
-            link_type = system_data.link_type
-            link_cif = None
-            if link_type == "apo" or link_type == "pred":
-                link_cif = system_data.link.cif
-            else:
-                continue
-
             system_idx = len(self.system_lookup) + len(system_info)
             system_entry = {
                 "system_id": system_data.system_id,
@@ -485,9 +489,7 @@ class PlinderLinksZarrConverter:
                 "system_idx": system_idx,
                 "linkages": system_data.ligand.linkages,
                 "ccd": system_data.ligand.ccd,
-                "link_type": link_type,
-                "link_id": system_data.link_id,
-                "link_cif": link_cif,
+                "link_type": getattr(system_data, "link_type", None),
                 "lig_sdf": system_data.ligand.sdf,
                 "rec_cif": system_data.receptor.cif,
                 "npnde_idxs": None,
@@ -497,7 +499,6 @@ class PlinderLinksZarrConverter:
             ligand_data.append(system_data.ligand)
             pocket_data.append(system_data.pocket)
             pharm_data.append(system_data.pharmacophore)
-            link_data.append(system_data.link)
 
             if system_data.npndes:
                 npnde_idxs = []
@@ -529,12 +530,6 @@ class PlinderLinksZarrConverter:
         pharm_indices = self._append_pharmacophore_data_batch(
             self.pharmacophore, pharm_data
         )
-
-        link_indices = None
-        if self.category == "apo":
-            link_indices = self._append_structure_data_batch(self.apo, link_data)
-        elif self.category == "pred":
-            link_indices = self._append_structure_data_batch(self.pred, link_data)
 
         npnde_entries = []
         if npnde_data:
@@ -585,21 +580,6 @@ class PlinderLinksZarrConverter:
             ) = pocket_indices[i]
             entry["pharm_start"], entry["pharm_end"] = pharm_indices[i]
 
-            if link_indices:
-                (
-                    entry["link_start"],
-                    entry["link_end"],
-                    entry["link_bb_start"],
-                    entry["link_bb_end"],
-                ) = link_indices[i]
-            else:
-                (
-                    entry["link_start"],
-                    entry["link_end"],
-                    entry["link_bb_start"],
-                    entry["link_bb_end"],
-                ) = None, None, None, None
-
         self.system_lookup.extend(system_info)
         self.root.attrs["system_lookup"] = self.system_lookup
 
@@ -614,6 +594,17 @@ class PlinderLinksZarrConverter:
             max_pending = self.num_workers * 2
 
         start = len(self.system_lookup)
+
+        # Skip systems already present in the lookup so a cancelled-and-resumed
+        # run doesn't re-process and append duplicate (system_id, ligand_id) rows.
+        already_processed = {r["system_id"] for r in self.system_lookup}
+        if already_processed:
+            n_before = len(system_ids)
+            system_ids = [s for s in system_ids if s not in already_processed]
+            logger.info(
+                f"Resume: skipping {n_before - len(system_ids)} systems already in zarr"
+            )
+
         logger.info(
             f"Processing {len(system_ids)} systems with {self.num_workers} workers"
         )
@@ -629,14 +620,25 @@ class PlinderLinksZarrConverter:
         successful_count = 0
         failed_count = 0
 
-        for batch_idx, batch in enumerate(batches):
-            logger.info(
-                f"Processing batch {batch_idx + 1}/{len(batches)} with {len(batch)} systems"
-            )
+        # Pre-load ESM3 in parent process before forking.
+        # With fork start method, children inherit this via copy-on-write
+        # so all workers share one ~1.3GB model copy instead of loading their own.
+        from omtra_pipelines.runsNposes_dataset.plinder_pipeline import _get_esm3_model
+        logger.info("Pre-loading ESM3 model in parent process...")
+        _get_esm3_model()
+        logger.info("ESM3 model loaded, creating worker pool")
 
-            batch_results = []
-            with mp.Pool(processes=self.num_workers) as pool:
-                system_results = pool.map(self._process_system, batch)
+        with mp.Pool(
+            processes=self.num_workers,
+            initializer=_worker_init,
+            initargs=(self.ground_truth_dir, self.parquet_path),
+        ) as pool:
+            for batch_idx, batch in enumerate(batches):
+                logger.info(
+                    f"Processing batch {batch_idx + 1}/{len(batches)} with {len(batch)} systems"
+                )
+
+                system_results = pool.map(_worker_process_system, batch)
 
                 valid_results = [r for r in system_results if r is not None]
                 failed_count += len(system_results) - len(valid_results)
@@ -644,11 +646,11 @@ class PlinderLinksZarrConverter:
 
                 if valid_results:
                     batch_data = self._collect_batch_results(valid_results)
-                    if batch_data[self.category]:
-                        self._write_system_batch(batch_data[self.category])
+                    if batch_data:
+                        self._write_system_batch(batch_data)
 
-            pbar.set_postfix({"success": successful_count, "failed": failed_count})
-            pbar.update(1)
+                pbar.set_postfix({"success": successful_count, "failed": failed_count})
+                pbar.update(1)
 
         pbar.close()
 

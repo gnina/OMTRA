@@ -39,6 +39,26 @@ class MolXACE:
     tcv_counts: Optional[dict] = None
     failure_mode: Optional[str] = None
 
+    @property
+    def positions(self):
+        return self.x
+
+    @property
+    def atom_types(self):
+        return self.a
+
+    @property
+    def atom_charges(self):
+        return self.c
+
+    @property
+    def bond_types(self):
+        return self.e
+
+    @property
+    def bond_idxs(self):
+        return self.edge_idxs
+
     def to_torch(self):
         self.a = torch.from_numpy(self.a).long()
         self.c = torch.from_numpy(self.c).long()
