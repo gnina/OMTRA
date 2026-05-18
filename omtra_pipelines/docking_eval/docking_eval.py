@@ -56,11 +56,6 @@ def parse_args():
     sampling.add_argument("--n_timesteps", type=int, default=250, help="Number of integration steps to take when sampling.")
     sampling.add_argument("--n_lig_atom_margin", type=float, default=0.075, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
 
-    sampling.add_argument('--fixed_coord_max_std', type=float, default=None, help='Maximum sampled standard deviation of noise added to coordinates of fixed atoms. If not set, falls back to the value used during training.')
-    sampling.add_argument('--fixed_coord_std', type=float, default=None, help='Optionally fix the standard deviation of the noise added to coordinates of fixed atoms')
-    sampling.add_argument('--fixed_token_max_prob', type=float, default=None, help='Maximum sampled probability of replacing categorical tokens of fixed atoms. If not set, falls back to the value used during training.')
-    sampling.add_argument('--fixed_token_prob', type=float, default=None, help='Optionally fix the probability of replacing categorical tokens of fixed atoms')
-
     sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
     sampling.add_argument("--noise_scaler", type=float, default=1.0, help="Noise scaling param for stochastic sampling.")
     sampling.add_argument("--eps", type=float, default=0.01, help="g(t) param for stochastic sampling.")
@@ -144,7 +139,7 @@ def sample_system(ckpt_path: Path,
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
         
-        cfg = quick_load.load_cfg(overrides=['task_group=protein'], plinder_path=plinder_path)
+        cfg = quick_load.load_cfg(overrides=['task_group=flexible_protein_cond_a'], plinder_path=plinder_path)
         plinder_datamodule = datamodule_from_config(cfg)    
         dataset = plinder_datamodule.load_dataset(split).datasets['plinder'][plinder_link_version]
         
@@ -253,7 +248,6 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
         sys_gt_dir = output_dir / sys_name
 
         gen_ligs = [s.get_rdkit_ligand() for s in replicates]
-        num_fixed_atoms = [s.get_n_fixed_atoms() for s in replicates]
 
         for i, lig in enumerate(gen_ligs):
             lig.SetProp("_Name", f"gen_ligands_{i}")
@@ -283,7 +277,6 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
                 # true ligand 
                 pair['true_lig'] = true_lig
                 pair['true_lig_file'] = true_lig_file
-                pair['n_fixed_atoms'] = num_fixed_atoms[i]
                 
                 # generated protein
                 pair["gen_prot_file"] = sys_gt_dir / f"gen_prot_{i}.pdb"
@@ -316,7 +309,6 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
             # true ligand 
             pair['true_lig'] = true_lig
             pair['true_lig_file'] = sys_gt_dir / f"ligand.sdf"
-            pair['n_fixed_atoms'] = num_fixed_atoms[0]
 
             # set generated protein to reference protein
             pair['gen_prot_file'] = true_prot_file
@@ -376,11 +368,7 @@ def main(args):
         kwargs = {'stochastic_sampling': args.stochastic_sampling,
                   'noise_scaler': args.noise_scaler,
                   'eps': args.eps,
-                  'n_lig_atom_margin': args.n_lig_atom_margin,
-                  'fixed_coord_max_std': args.fixed_coord_max_std,
-                  'fixed_coord_std': args.fixed_coord_std,
-                  'fixed_token_max_prob': args.fixed_token_max_prob,
-                  'fixed_token_prob': args.fixed_token_prob}
+                  'n_lig_atom_margin': args.n_lig_atom_margin}
         
         if args.bs_per_gbmem is not None:
             # gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  
