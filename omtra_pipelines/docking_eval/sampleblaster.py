@@ -129,6 +129,18 @@ def parse_args():
         help="Beta distribution beta parameter for Plinder dynamic cropping (default: None)"
     )
     parser.add_argument(
+        "--crop_min_distance", 
+        type=float,
+        default=None,
+        help="Beta distribution minimum cropping distance for Plinder dynamic cropping (default: None)"
+    )
+    parser.add_argument(
+        "--crop_max_distance", 
+        type=float,
+        default=None,
+        help="Beta distribution maximum cropping distance for Plinder dynamic cropping (default: None)"
+    )
+    parser.add_argument(
         "--additional_prot_crop",
         type=float,
         default=None,
@@ -199,6 +211,10 @@ def generate_commands(chunks, chunk_files, args):
                 cmd_parts.append(f'--alpha={args.alpha}')
             if args.beta is not None:
                 cmd_parts.append(f'--beta={args.beta}')
+            if args.crop_min_distance is not None:
+                cmd_parts.append(f'--crop_min_distance={args.crop_min_distance}')
+            if args.crop_max_distance is not None:
+                cmd_parts.append(f'--crop_max_distance={args.crop_max_distance}')
             if args.additional_prot_crop is not None:
                 cmd_parts.append(f'--additional_prot_crop={args.additional_prot_crop}')
             if args.crossdocked_path is not None:
