@@ -79,6 +79,8 @@ def parse_args():
     
     sampling.add_argument("--alpha", type=float, default=None, help="Beta distribution alpha parameter for Plinder dynamic cropping (overrides config).")
     sampling.add_argument("--beta", type=float, default=None, help="Beta distribution beta parameter for Plinder dynamic cropping (overrides config).")
+    sampling.add_argument("--crop_min_distance", type=float, default=None, help="Beta distribution minimum cropping distance for Plinder dynamic cropping (overrides config).")
+    sampling.add_argument("--crop_max_distance", type=float, default=None, help="Beta distribution maximum cropping distance for Plinder dynamic cropping (overrides config).")
     sampling.add_argument("--additional_prot_crop", type=float, default=None, help="Additional fixed distance to crop from pocket residues for Plinder dynamic cropping (overrides config).")
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
@@ -596,15 +598,19 @@ def sample_system(ckpt_path: Path,
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
         
-        # Build config overrides, including alpha/beta if provided
+        # Build config overrides, including alpha/beta and cropping distances if provided
         overrides = ['task_group=protein']
         if args.alpha is not None:
             overrides.append(f'alpha={args.alpha}')
         if args.beta is not None:
             overrides.append(f'beta={args.beta}')
+        if args.crop_min_distance is not None:
+            overrides.append(f'crop_min_distance={args.crop_min_distance}')
+        if args.crop_max_distance is not None:
+            overrides.append(f'crop_max_distance={args.crop_max_distance}')
         if args.additional_prot_crop is not None:
             overrides.append(f'additional_prot_crop={args.additional_prot_crop}')
-        
+
         cfg = quick_load.load_cfg(overrides=overrides, plinder_path=plinder_path)
         plinder_datamodule = datamodule_from_config(cfg)    
         dataset = plinder_datamodule.load_dataset(split).datasets['plinder'][plinder_link_version]
