@@ -188,8 +188,8 @@ For conditional generation tasks, you can provide input structures directly:
 | `--pharmacophore_file` | path | Pharmacophore file (JSON from Pharmit, XYZ, or SDF format) |
 | | | **Pocket definition (choose one):** |
 | `--pocket_ligand` | path | Path to reference ligand file (SDF) to define pocket around ligand atoms |
-| `--pocket_center` | string | Pocket center coordinates as 'x,y,z' |
-| `--pocket_residues` | string | Pocket residues as 'CHAIN:RESID,CHAIN:START-END' (e.g., 'A:123-125,B:200') |
+| `--pocket_center` | three floats | Pocket center as `--pocket_center X Y Z` (Angstroms) |
+| `--pocket_residues` | string | Pocket residues as `CHAIN:RESID` or `CHAIN:START-END`, comma-separated (e.g. `A:123-130,B:50-55`) |
 | `--bbox_length` | float | Bounding box length (Angstroms) when using `--pocket_center` (default: 23.0) |
 
 When input files are provided, `--n_samples` specifies how many samples to generate for that single input system.
@@ -211,6 +211,15 @@ When input files are provided, `--n_samples` specifies how many samples to gener
 | `--n_lig_atom_margin` | float | 0.15 | Margin (±%) around ground truth atom count |
 | `--n_lig_atoms_mean` | float | None | Mean for normal distribution of atom counts |
 | `--n_lig_atoms_std` | float | None | Std dev for normal distribution of atom counts |
+
+### Fixed structure (partial-modality sampling)
+
+Hold parts of a reference ligand fixed while generating or docking the rest. Requires `--ligand_file` (the SDF whose atoms or BRICS fragments you fix). `--pocket_ligand` only defines the protein pocket; pass the same SDF as `--ligand_file` if you also want to fix atoms from it.
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `--fixed-atoms` | string | Comma-separated 0-based atom indices in `--ligand_file` (e.g. `0,2,5,6`) |
+| `--fixed-brics-fragments` | string | Comma-separated BRICS fragment indices from RDKit fragmentation (e.g. `0,2,3`) |
 
 ## Available Tasks
 
@@ -279,7 +288,7 @@ Using coordinates to define the pocket center:
 ```bash
 omtra --task fixed_protein_ligand_denovo_condensed \
   --protein_file my_protein.pdb \
-  --pocket_center 10.5,20.3,15.2 \
+  --pocket_center 10.5 20.3 15.2 \
   --bbox_length 25.0 \
   --n_samples 50 \
   --output_dir outputs/sbdd_samples
@@ -299,8 +308,20 @@ omtra --task fixed_protein_ligand_denovo_condensed \
 omtra --task rigid_docking_condensed \
   --protein_file protein.pdb \
   --ligand_file ligand.sdf \
+  --pocket_ligand ligand.sdf \
   --n_samples 10 \
   --output_dir outputs/docking
+```
+
+### Partial structure (fixed atoms)
+```bash
+omtra --task fixed_protein_ligand_denovo_condensed \
+  --protein_file my_protein.pdb \
+  --ligand_file reference_ligand.sdf \
+  --pocket_ligand reference_ligand.sdf \
+  --fixed-atoms 0,1,2,5,6 \
+  --n_samples 20 \
+  --output_dir outputs/partial_denovo
 ```
 
 ### Conformer Generation

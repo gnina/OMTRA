@@ -14,7 +14,10 @@ interface MolecularViewerProps {
   pocketSelection?: any;
   inputFilesList?: InputFile[] | { files: InputFile[] };
   prefetchedContent?: string;
+  referenceLigandContent?: string;
   fixedBricsFragments?: number[];
+  fixedAtomIndices?: number[];
+  sampleLabel?: string;
 }
 
 declare global {
@@ -30,7 +33,10 @@ export function MolecularViewer({
   pocketSelection,
   inputFilesList: propInputFiles,
   prefetchedContent,
+  referenceLigandContent,
   fixedBricsFragments,
+  fixedAtomIndices,
+  sampleLabel,
 }: MolecularViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
@@ -46,19 +52,19 @@ export function MolecularViewer({
   const isFetchingRef = useRef<boolean>(false);
   const loadIdRef = useRef<number>(0);
   const fixedFragSpheresRef = useRef<any[]>([]);
-  const [fixedFragAtomCoords, setFixedFragAtomCoords] = useState<Array<{ x: number; y: number; z: number; fragId: number }>>([]);
-  const [nFixedAtoms, setNFixedAtoms] = useState<number>(0);
-  const bricsFragMapRef = useRef<Map<number, number[]>>(new Map());
-  const [bricsFragmentsData, setBricsFragmentsData] = useState<any[] | null>(null);
-  const [bricsReferenceSdf, setBricsReferenceSdf] = useState<string | null>(null);
-
+  /** Reference-ligand 3D positions for fixed atoms */
+  const [referenceFixedAtomCoords, setReferenceFixedAtomCoords] = useState<
+    Array<{ x: number; y: number; z: number; fragId: number }>
+  >([]);
   // Styling state - simple toggles
   const [showSticks, setShowSticks] = useState(false);
   const [showSurface, setShowSurface] = useState(true);
   const [showBackbone, setShowBackbone] = useState(true);
   const [showFixedFragments, setShowFixedFragments] = useState(true);
   const [hasProtein, setHasProtein] = useState(false);
-  const hasFixedFragments = fixedBricsFragments && fixedBricsFragments.length > 0;
+  const hasFixedAtomIndices = fixedAtomIndices && fixedAtomIndices.length > 0;
+  const hasFixedBrics = fixedBricsFragments && fixedBricsFragments.length > 0;
+  const hasAnyFixedStructure = hasFixedAtomIndices || hasFixedBrics;
 
   // 1. Load active result file content
   useEffect(() => {
@@ -114,7 +120,6 @@ export function MolecularViewer({
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer) return;
-    const viewerAny = viewer as any;
 
     const mode = samplingMode || '';
     const needsProtein = [
@@ -164,7 +169,7 @@ export function MolecularViewer({
       // Fetch structural data inside (using propInputFiles as cache)
       let rawInputFiles = propInputFiles;
       try {
-        if (!rawInputFiles && (needsProtein || needsPharmacophore)) {
+        if (!rawInputFiles && (needsProtein || needsPharmacophore || hasAnyFixedStructure)) {
           console.log(`[MolecularViewer] Fetching input files list...`);
           rawInputFiles = await apiClient.listInputFiles(jobId);
         }
@@ -203,28 +208,7 @@ export function MolecularViewer({
         return null;
       })();
 
-      // Fetch BRICS fragment info for fixed-fragment visualization
-      // Always fetch if an SDF input exists — fixedBricsFragments may change later
-      // (e.g. navigating from reference_ligand to a generated sample)
-      const bricsPromise = (async () => {
-        if (files.length === 0) return null;
-        const sdfFile = files.find(f => f.extension === '.sdf');
-        if (!sdfFile) return null;
-        try {
-          const sdfBlob = await apiClient.downloadInputFile(jobId, sdfFile.filename);
-          const sdfText = await sdfBlob.text();
-          const sdfFormData = new FormData();
-          sdfFormData.append('file', sdfBlob, sdfFile.filename);
-          const resp = await fetch('/api/extract-brics-fragments', {
-            method: 'POST',
-            body: sdfFormData,
-          });
-          if (resp.ok) return { data: await resp.json(), sdfText };
-        } catch (err) { console.error('BRICS fragment fetch failed:', err); }
-        return null;
-      })();
-
-      const [proteinData, pharmData, bricsData] = await Promise.all([proteinPromise, pharmacophorePromise, bricsPromise]);
+      const [proteinData, pharmData] = await Promise.all([proteinPromise, pharmacophorePromise]);
 
       if (loadIdRef.current !== currentLoadId) {
         console.log(`[MolecularViewer] Load interrupted by newer request (${currentLoadId})`);
@@ -253,42 +237,102 @@ export function MolecularViewer({
         pharmShapesRef.current = addPharmacophoreAtoms(viewer, atoms);
       }
 
-      // Cache BRICS data for fixed fragment visualization (recalculated in separate effect)
-      if (bricsData?.data?.fragments) {
-        setBricsFragmentsData(bricsData.data.fragments);
-        setBricsReferenceSdf(bricsData.sdfText);
-        const fragMap = new Map<number, number[]>();
-        for (const frag of bricsData.data.fragments) {
-          fragMap.set(frag.id, frag.atom_indices);
-        }
-        bricsFragMapRef.current = fragMap;
-      } else {
-        setBricsFragmentsData(null);
-        setBricsReferenceSdf(null);
-        bricsFragMapRef.current = new Map();
-      }
-
       viewer.render();
       isFetchingRef.current = false;
     };
 
     loadStructuralData();
-  }, [jobId, samplingMode, propInputFiles]);
+  }, [jobId, samplingMode, propInputFiles, hasAnyFixedStructure]);
 
-  // Recalculate nFixedAtoms when fixedBricsFragments or bricsFragmentsData changes
+  // 3b. Fixed-atom sphere positions (reference template ligand; independent of sample swap)
   useEffect(() => {
-    if (!bricsFragmentsData || !hasFixedFragments) {
-      setNFixedAtoms(0);
+    if (!hasAnyFixedStructure) {
+      setReferenceFixedAtomCoords([]);
       return;
     }
-    let nFixed = 0;
-    for (const frag of bricsFragmentsData) {
-      if (fixedBricsFragments!.includes(frag.id)) {
-        nFixed += frag.num_atoms;
+
+    let cancelled = false;
+
+    const loadFixedCoords = async () => {
+      let refSdf = referenceLigandContent ?? null;
+      let bricsFragments: Array<{ id: number; atom_indices: number[] }> | null = null;
+
+      if (!refSdf) {
+        try {
+          const blob = await apiClient.downloadFile(jobId, 'fixed_structure_reference.sdf');
+          refSdf = await blob.text();
+        } catch {
+          // optional artifact for older jobs
+        }
       }
-    }
-    setNFixedAtoms(nFixed);
-  }, [fixedBricsFragments, hasFixedFragments, bricsFragmentsData]);
+
+      if (!refSdf) {
+        let rawInputFiles = propInputFiles;
+        try {
+          if (!rawInputFiles) {
+            rawInputFiles = await apiClient.listInputFiles(jobId);
+          }
+        } catch (err) {
+          console.error('Failed to list input files for fixed-structure reference:', err);
+        }
+        const files = normalizeInputFiles(rawInputFiles);
+        const sdfFile = resolveFixedStructureReferenceInput(files, pocketSelection);
+        if (sdfFile) {
+          try {
+            const sdfBlob = await apiClient.downloadInputFile(jobId, sdfFile.filename);
+            refSdf = await sdfBlob.text();
+          } catch (err) {
+            console.error('Failed to load fixed-structure reference from inputs:', err);
+          }
+        }
+      }
+
+      if (!refSdf) return;
+
+      if (hasFixedBrics && fixedBricsFragments) {
+        try {
+          const sdfBlob = new Blob([refSdf], { type: 'chemical/x-mdl-sdfile' });
+          const sdfFormData = new FormData();
+          sdfFormData.append('file', sdfBlob, 'fixed_structure_reference.sdf');
+          const resp = await fetch('/api/extract-brics-fragments', {
+            method: 'POST',
+            body: sdfFormData,
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            bricsFragments = data?.fragments ?? null;
+          }
+        } catch (err) {
+          console.error('BRICS fragment fetch failed:', err);
+        }
+      }
+
+      if (cancelled) return;
+
+      let refFixedCoords: Array<{ x: number; y: number; z: number; fragId: number }> = [];
+      if (hasFixedAtomIndices && fixedAtomIndices) {
+        refFixedCoords = parseFixedAtomIndicesCoords(refSdf, fixedAtomIndices);
+      } else if (hasFixedBrics && fixedBricsFragments && bricsFragments) {
+        refFixedCoords = parseFixedFragmentAtomCoords(refSdf, bricsFragments, fixedBricsFragments);
+      }
+      setReferenceFixedAtomCoords(refFixedCoords);
+    };
+
+    loadFixedCoords();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    jobId,
+    hasAnyFixedStructure,
+    hasFixedAtomIndices,
+    hasFixedBrics,
+    fixedAtomIndices,
+    fixedBricsFragments,
+    referenceLigandContent,
+    propInputFiles,
+    pocketSelection,
+  ]);
 
   // 4. Molecule SWITCHING (Ligand only)
   useEffect(() => {
@@ -311,14 +355,6 @@ export function MolecularViewer({
     // Apply ligand style
     viewer.setStyle({ model: ligandModel }, { stick: { radius: 0.15, colorscheme: 'lightgreyCarbon' } });
 
-    if (nFixedAtoms > 0 && hasFixedFragments && fileContent && bricsFragmentsData && bricsReferenceSdf) {
-      const referenceAtoms = parseFixedFragmentAtomCoords(bricsReferenceSdf, bricsFragmentsData, fixedBricsFragments!);
-      const coords = mapReferenceFixedAtomsToDisplayedCoords(referenceAtoms, fileContent);
-      setFixedFragAtomCoords(coords);
-    } else {
-      setFixedFragAtomCoords([]);
-    }
-
     if (!hasExistingLigand) {
       viewer.zoomTo({ model: ligandModel });
     } else {
@@ -326,25 +362,27 @@ export function MolecularViewer({
     }
 
     viewer.render();
-  }, [fileContent, filename, isSceneReady, nFixedAtoms, bricsFragmentsData, bricsReferenceSdf, fixedBricsFragments, hasFixedFragments]);
+  }, [fileContent, filename, isSceneReady]);
 
-  // Fixed Fragment Spheres
+  // Fixed-atom wireframe spheres at reference ligand positions
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || !isSceneReady) return;
 
-    fixedFragSpheresRef.current.forEach(s => {
+    fixedFragSpheresRef.current.forEach((s) => {
       try { viewer.removeShape(s); } catch (_) {}
     });
     fixedFragSpheresRef.current = [];
 
-    if (showFixedFragments && fixedFragAtomCoords.length > 0) {
-      for (const atom of fixedFragAtomCoords) {
-        const colorIdx = atom.fragId % FRAGMENT_COLORS.length;
+    if (showFixedFragments && referenceFixedAtomCoords.length > 0) {
+      for (const atom of referenceFixedAtomCoords) {
+        const color = hasFixedAtomIndices
+          ? '#f59e0b'
+          : FRAGMENT_COLORS[atom.fragId % FRAGMENT_COLORS.length];
         const shape = viewer.addSphere({
           center: { x: atom.x, y: atom.y, z: atom.z },
           radius: 0.35,
-          color: FRAGMENT_COLORS[colorIdx],
+          color,
           wireframe: true,
           linewidth: 1.5,
         });
@@ -353,7 +391,7 @@ export function MolecularViewer({
     }
 
     viewer.render();
-  }, [fixedFragAtomCoords, showFixedFragments, isSceneReady]);
+  }, [referenceFixedAtomCoords, showFixedFragments, isSceneReady, hasFixedAtomIndices]);
 
   // Handle Style Toggles (Cartoon, Sticks) - Unified
   useEffect(() => {
@@ -422,19 +460,24 @@ export function MolecularViewer({
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <button
-          onClick={handleDownload}
-          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors shadow-sm"
-        >
-          <Download className="w-4 h-4" />
-          Download
-        </button>
-      </div>
+    <div className="relative">
       <div style={{ width: '100%', height: '500px', position: 'relative' }}
         className="border border-slate-200 rounded-2xl overflow-hidden shadow-inner bg-slate-50"
       >
+        <div className="absolute top-4 left-4 z-20 flex flex-col gap-2 pointer-events-auto items-start">
+          {sampleLabel && (
+            <div className="px-3 py-2 bg-white/90 text-slate-800 rounded-lg shadow-sm border border-slate-200 text-sm font-semibold backdrop-blur-sm">
+              {sampleLabel}
+            </div>
+          )}
+          <button
+            onClick={handleDownload}
+            className="flex items-center gap-2 px-4 py-2 bg-white/90 text-slate-700 rounded-lg hover:bg-white transition-colors shadow-sm border border-slate-200 text-sm font-medium backdrop-blur-sm"
+          >
+            <Download className="w-4 h-4" />
+            Download
+          </button>
+        </div>
         <div
           ref={containerRef}
           className="three-d-viewer-container"
@@ -442,7 +485,7 @@ export function MolecularViewer({
         />
 
         {/* Style Controls Panel */}
-        {(hasProtein || hasFixedFragments) && (
+        {(hasProtein || hasAnyFixedStructure) && (
           <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-slate-200/60 p-3 space-y-2 z-20 text-sm">
             <div className="font-semibold text-slate-700 text-xs mb-2">Style</div>
 
@@ -478,7 +521,7 @@ export function MolecularViewer({
               </>
             )}
 
-            {hasFixedFragments && (
+            {hasAnyFixedStructure && (
               <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer hover:bg-slate-50 py-1 px-2 rounded-lg transition-colors">
                 <input
                   type="checkbox"
@@ -486,7 +529,7 @@ export function MolecularViewer({
                   onChange={(e) => setShowFixedFragments(e.target.checked)}
                   className="w-3.5 h-3.5 rounded"
                 />
-                Fixed Atoms
+                Fixed atoms
               </label>
             )}
           </div>
@@ -494,16 +537,16 @@ export function MolecularViewer({
       </div>
 
       {(samplingMode === 'Pharmacophore-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned' || samplingMode === 'Rigid Docking + Pharmacophore') && (
-        <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
-          <h4 className="text-sm font-semibold text-slate-700 mb-3">Pharmacophore Color Legend</h4>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-purple-500" /> Aromatic</div>
-            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-gray-200 border border-slate-300" /> Hydrogen Donor</div>
-            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-orange-500" /> Hydrogen Acceptor</div>
-            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500" /> Positive Ion</div>
-            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500" /> Negative Ion</div>
-            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-green-500" /> Hydrophobic</div>
-            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-cyan-400" /> Halogen</div>
+        <div className="mt-2 p-2 bg-slate-50 border border-slate-200 rounded-lg flex items-center w-full">
+          <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider shrink-0 mr-4">Pharmacophore Legend:</h4>
+          <div className="flex flex-1 items-center justify-between text-xs text-slate-600 font-medium overflow-x-auto scrollbar-hide px-2">
+            <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-purple-500" /> Aromatic</div>
+            <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-gray-200 border border-slate-300" /> H-Donor</div>
+            <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-orange-500" /> H-Acceptor</div>
+            <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-blue-500" /> Pos Ion</div>
+            <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-500" /> Neg Ion</div>
+            <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500" /> Hydrophobic</div>
+            <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-cyan-400" /> Halogen</div>
           </div>
         </div>
       )}
@@ -520,10 +563,59 @@ function normalizeInputFiles(raw: InputFile[] | { files: InputFile[] } | undefin
   return [];
 }
 
+/** Input SDF that fixed_atom_indices refer to (docking ligand). */
+function resolveFixedStructureReferenceInput(
+  files: InputFile[],
+  pocketSelection?: { type?: string; value?: unknown },
+): InputFile | undefined {
+  const sdfs = files.filter((f) => f.extension === '.sdf');
+  if (sdfs.length === 0) return undefined;
+  if (sdfs.length === 1) return sdfs[0];
+
+  const pocketLigandName =
+    pocketSelection?.type === 'file' && typeof pocketSelection.value === 'string'
+      ? pocketSelection.value
+      : null;
+
+  const candidates = sdfs.filter(
+    (f) =>
+      f.filename !== 'reference_ligand.sdf' &&
+      (!pocketLigandName || f.filename !== pocketLigandName),
+  );
+  return candidates[0] ?? sdfs[0];
+}
+
 const FRAGMENT_COLORS = [
   '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c',
   '#0891b2', '#ca8a04', '#db2777', '#4f46e5', '#65a30d',
 ];
+
+function parseFixedAtomIndicesCoords(
+  sdfContent: string,
+  atomIndices: number[],
+): Array<{ x: number; y: number; z: number; fragId: number }> {
+  const lines = sdfContent.split('\n');
+  if (lines.length < 4) return [];
+  const countsLine = lines[3];
+  const parts = countsLine.trim().split(/\s+/);
+  const numAtoms = parseInt(parts[0], 10);
+  if (isNaN(numAtoms) || numAtoms <= 0) return [];
+
+  const result: Array<{ x: number; y: number; z: number; fragId: number }> = [];
+  for (const atomIdx of atomIndices) {
+    if (atomIdx < 0 || atomIdx >= numAtoms) continue;
+    const line = lines[4 + atomIdx];
+    if (!line) continue;
+    const p = line.trim().split(/\s+/);
+    result.push({
+      x: parseFloat(p[0]),
+      y: parseFloat(p[1]),
+      z: parseFloat(p[2]),
+      fragId: 0,
+    });
+  }
+  return result;
+}
 
 function parseFixedFragmentAtomCoords(
   sdfContent: string,
@@ -558,68 +650,6 @@ function parseFixedFragmentAtomCoords(
   }
 
   return result;
-}
-
-function mapReferenceFixedAtomsToDisplayedCoords(
-  referenceAtoms: Array<{ x: number; y: number; z: number; fragId: number }>,
-  displayedSdfContent: string,
-): Array<{ x: number; y: number; z: number; fragId: number }> {
-  const displayedAtoms = parseSdfAtomCoords(displayedSdfContent);
-  const usedDisplayedAtoms = new Set<number>();
-  const matched: Array<{ x: number; y: number; z: number; fragId: number }> = [];
-  const maxMatchDistance = 0.5;
-
-  for (const refAtom of referenceAtoms) {
-    let bestIdx = -1;
-    let bestDistance = Number.POSITIVE_INFINITY;
-
-    for (let i = 0; i < displayedAtoms.length; i++) {
-      if (usedDisplayedAtoms.has(i)) continue;
-      const candidate = displayedAtoms[i];
-      const distance = Math.hypot(
-        refAtom.x - candidate.x,
-        refAtom.y - candidate.y,
-        refAtom.z - candidate.z,
-      );
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestIdx = i;
-      }
-    }
-
-    if (bestIdx >= 0 && bestDistance <= maxMatchDistance) {
-      usedDisplayedAtoms.add(bestIdx);
-      matched.push({
-        ...displayedAtoms[bestIdx],
-        fragId: refAtom.fragId,
-      });
-    }
-  }
-
-  return matched;
-}
-
-function parseSdfAtomCoords(sdfContent: string): Array<{ x: number; y: number; z: number }> {
-  const lines = sdfContent.split('\n');
-  if (lines.length < 4) return [];
-
-  const countsLine = lines[3];
-  const parts = countsLine.trim().split(/\s+/);
-  const numAtoms = parseInt(parts[0], 10);
-  if (isNaN(numAtoms) || numAtoms <= 0) return [];
-
-  const coords: Array<{ x: number; y: number; z: number }> = [];
-  for (let i = 0; i < numAtoms; i++) {
-    const line = lines[4 + i];
-    if (!line) continue;
-    const p = line.trim().split(/\s+/);
-    coords.push({
-      x: parseFloat(p[0]),
-      y: parseFloat(p[1]),
-      z: parseFloat(p[2]),
-    });
-  }
-  return coords;
 }
 
 const PHARMACOPHORE_COLORS: Record<string, string> = {

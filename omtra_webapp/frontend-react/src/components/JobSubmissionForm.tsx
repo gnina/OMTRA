@@ -1,13 +1,23 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { apiClient } from '@/lib/api-client';
-import type { SamplingMode, SamplingParams, JobResultResponse, BricsFragment } from '@/types';
+import {
+    apiClient,
+    encodeBase64Unicode
+} from '@/lib/api-client';
+import type { SamplingMode, MetricsOptions, BricsFragment } from '@/types';
+import { DEFAULT_METRICS_OPTIONS } from '@/types';
 import { FileUpload } from './FileUpload';
-import { FragmentSelector } from './FragmentSelector';
-import { AlertCircle, CheckCircle2, Loader2, X, MapPin, Settings2, Play, Info, RefreshCw, Upload, ChevronDown, ChevronRight } from 'lucide-react';
+import { FixedStructurePanel } from './FixedStructurePanel';
+import { MetricsOptionsForm } from './MetricsOptionsForm';
+import { LoadFromJobPicker } from './LoadFromJobPicker';
+import { PharmacophoreSelector } from './PharmacophoreSelector';
+import { useFixedAtomSelection } from '@/hooks/useFixedAtomSelection';
+import { AlertCircle, CheckCircle2, Loader2, Play, X, Settings2, Info, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 
 interface JobSubmissionFormProps {
+    initialSamplingMode?: SamplingMode;
+    onSamplingModeChange?: (mode: SamplingMode) => void;
     onJobSubmitted: (jobId: string) => void;
     onProteinContentChange?: (content: string | null) => void;
     onProteinFormatChange?: (format: 'pdb' | 'cif' | undefined) => void;
@@ -45,13 +55,17 @@ interface JobSubmissionFormProps {
     onPharmacophoreToleranceChange: (val: string) => void;
     bricsFragments: BricsFragment[];
     setBricsFragments: (frags: BricsFragment[]) => void;
-    selectedFragmentIds: number[];
-    setSelectedFragmentIds: (ids: number[]) => void;
     bricsRawSdf: string | null;
     setBricsRawSdf: (sdf: string | null) => void;
+    fixStructureExpanded: boolean;
+    setFixStructureExpanded: (v: boolean) => void;
+    fixedSelection: ReturnType<typeof useFixedAtomSelection>;
+    totalAtomCount: number;
 }
 
 export function JobSubmissionForm({
+    initialSamplingMode = 'Unconditional',
+    onSamplingModeChange,
     onJobSubmitted,
     onProteinContentChange,
     onProteinFormatChange,
@@ -84,13 +98,21 @@ export function JobSubmissionForm({
     selectedPharmacophoreIndices = [],
     bricsFragments,
     setBricsFragments,
-    selectedFragmentIds,
-    setSelectedFragmentIds,
     bricsRawSdf,
     setBricsRawSdf,
+    fixStructureExpanded,
+    setFixStructureExpanded,
+    fixedSelection,
+    totalAtomCount,
 }: JobSubmissionFormProps) {
     const [apiConnected, setApiConnected] = useState<boolean | null>(null);
-    const [samplingMode, setSamplingMode] = useState<SamplingMode>('Unconditional');
+    const [samplingMode, setSamplingModeState] = useState<SamplingMode>(initialSamplingMode);
+
+    const setSamplingMode = useCallback((mode: SamplingMode) => {
+        setSamplingModeState(mode);
+        onSamplingModeChange?.(mode);
+    }, [onSamplingModeChange]);
+
     const [seedInput, setSeedInput] = useState('42');
     const [nSamplesInput, setNSamplesInput] = useState('10');
     const [stepsInput, setStepsInput] = useState('100');
@@ -110,6 +132,7 @@ export function JobSubmissionForm({
 
     const [ligandFile, setLigandFile] = useState<File | null>(null);
     const [ligandToken, setLigandToken] = useState<string | null>(null);
+    const [refLigandFile, setRefLigandFile] = useState<File | null>(null);
 
     const [uploadedFiles, setUploadedFiles] = useState<File[]>([]); // Deprecated
     const [uploadTokens, setUploadTokens] = useState<string[]>([]); // Deprecated
@@ -118,6 +141,7 @@ export function JobSubmissionForm({
     const [isDetectingPockets, setIsDetectingPockets] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [formResetKey, setFormResetKey] = useState(0);
+    const [metricsOptions, setMetricsOptions] = useState<MetricsOptions>({ ...DEFAULT_METRICS_OPTIONS });
 
 
     // Pharmacophore state
@@ -133,7 +157,6 @@ export function JobSubmissionForm({
 
     // BRICS fragment selection state (fragments/selectedIds/rawSdf lifted to parent)
     const [bricsLoading, setBricsLoading] = useState(false);
-    const [bricsExpanded, setBricsExpanded] = useState(false);
 
     const togglePocketHidden = useCallback((pocketId: string) => {
         const isHidden = hiddenPocketIds.includes(pocketId);
@@ -147,7 +170,6 @@ export function JobSubmissionForm({
     }, [hiddenPocketIds, onHiddenPocketsChange, onPocketSelect, selectedPocketId]);
 
     const resetForm = useCallback(() => {
-        setSamplingMode('Unconditional');
         setSeedInput('42');
         setNSamplesInput('10');
         setStepsInput('100');
@@ -189,10 +211,12 @@ export function JobSubmissionForm({
         setRefLigandFileName?.(null);
         setRefLigandContent?.(null);
         setRefLigandToken?.(null);
+        setRefLigandFile(null);
         setBricsFragments([]);
-        setSelectedFragmentIds([]);
+        fixedSelection.resetSelection();
         setBricsRawSdf(null);
-        setBricsExpanded(false);
+        setFixStructureExpanded(false);
+        setMetricsOptions({ ...DEFAULT_METRICS_OPTIONS });
     }, [
         onProteinContentChange,
         onProteinFormatChange,
@@ -229,8 +253,6 @@ export function JobSubmissionForm({
         // Reset all form state when switching sampling modes
         if (prevSamplingModeRef.current !== samplingMode) {
             resetForm();
-            // Restore sampling mode as resetForm clears it
-            setSamplingMode(samplingMode);
             prevSamplingModeRef.current = samplingMode;
         }
     }, [samplingMode, resetForm]);
@@ -249,7 +271,7 @@ export function JobSubmissionForm({
         const filename = file.name.toLowerCase();
         try {
             const content = await file.text();
-            const proteinB64 = btoa(content);
+            const proteinB64 = encodeBase64Unicode(content);
             setProteinContent(proteinB64);
             onProteinContentChange?.(proteinB64);
             const format = filename.endsWith('.pdb') ? 'pdb' : 'cif';
@@ -301,7 +323,7 @@ export function JobSubmissionForm({
 
                 if (file.name.toLowerCase().endsWith('.sdf')) {
                     const content = await file.text();
-                    const ligandB64 = btoa(content);
+                    const ligandB64 = encodeBase64Unicode(content);
                     setLigandContent(ligandB64);
                     onLigandContentChange?.(ligandB64);
                 } else {
@@ -320,14 +342,15 @@ export function JobSubmissionForm({
     const handleRefLigandUpload = async (file: File) => {
         setError(null);
         setBricsFragments([]);
-        setSelectedFragmentIds([]);
+        fixedSelection.resetSelection();
         setBricsRawSdf(null);
+        setRefLigandFile(file);
         try {
             const token = await uploadFileToApi(file);
             setRefLigandToken?.(token);
 
             const content = await file.text();
-            const base64Content = btoa(content);
+            const base64Content = encodeBase64Unicode(content);
             setRefLigandContent?.(base64Content);
             setRefLigandFileName?.(file.name);
             setBricsRawSdf(content);
@@ -348,7 +371,7 @@ export function JobSubmissionForm({
             try {
                 const result = await apiClient.extractBricsFragments(file);
                 setBricsFragments(result.fragments);
-                if (result.num_fragments > 1) setBricsExpanded(true);
+                if (result.num_fragments > 1) setFixStructureExpanded(true);
             } catch (e) {
                 console.error('BRICS extraction failed:', e);
             } finally {
@@ -364,6 +387,7 @@ export function JobSubmissionForm({
         setRefLigandContent?.(null);
         setRefLigandToken?.(null);
         setRefLigandFileName?.(null);
+        setRefLigandFile(null);
         setError(null);
 
         try {
@@ -371,8 +395,8 @@ export function JobSubmissionForm({
             setLigandToken(token);
 
             const content = await file.text();
-            setLigandContent(btoa(content)); // For viewer
-            onLigandContentChange?.(btoa(content));
+            setLigandContent(encodeBase64Unicode(content)); // For viewer
+            onLigandContentChange?.(encodeBase64Unicode(content));
 
             // Estimate atoms
             const atoms = estimateAtomCountFromSdf(content);
@@ -390,16 +414,23 @@ export function JobSubmissionForm({
     const handleSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
         e?.preventDefault();
         setError(null);
+
+        // Snapshot fixed atoms before any await (pharmacophore upload, etc.)
+        const capturedFixedIndices =
+            samplingMode === 'Protein-conditioned' && fixedSelection.fixedCount > 0
+                ? fixedSelection.getFixedAtomIndicesForSubmit()
+                : undefined;
+
         setIsSubmitting(true);
 
         try {
             // Mode-specific validation
             if (samplingMode === 'Protein-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned') {
-                if (!proteinToken) throw new Error("Please upload a protein file in Step 1.");
+                if (!proteinFile) throw new Error("Please upload a protein file in Step 1.");
 
                 const hasPocket = (pocketSelectionMethod === 'detected' && selectedPocketId) ||
                     (pocketSelectionMethod === 'manual' && manualCenter.x && manualCenter.y && manualCenter.z) ||
-                    (pocketSelectionMethod === 'ligand' && refLigandToken);
+                    (pocketSelectionMethod === 'ligand' && refLigandFile);
 
                 if (!hasPocket) {
                     throw new Error("Please define a binding site in Step 2 (Select a pocket, upload a reference ligand, or enter coordinates).");
@@ -407,7 +438,7 @@ export function JobSubmissionForm({
             }
 
             if (samplingMode === 'Pharmacophore-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned') {
-                const hasPharm = (pharmacophoreToken && !pharmacophores.length) || (pharmacophores.length > 0 && selectedPharmacophoreIndices.length > 0);
+                const hasPharm = (pharmacophoreFile && !pharmacophores.length) || (pharmacophores.length > 0 && selectedPharmacophoreIndices.length > 0);
                 if (!hasPharm) {
                     if (pharmacophores.length > 0) {
                         throw new Error("Please select at least one pharmacophore feature in the 3D viewer.");
@@ -433,9 +464,23 @@ export function JobSubmissionForm({
             }
 
             let finalTokens: string[] = [];
-            if (proteinToken) finalTokens.push(proteinToken);
-            if (ligandToken) finalTokens.push(ligandToken);
-            if (refLigandToken) finalTokens.push(refLigandToken);
+            let freshRefLigandToken: string | null = null;
+
+            if (proteinFile) {
+                const token = await uploadFileToApi(proteinFile);
+                setProteinToken(token);
+                finalTokens.push(token);
+            }
+            if (ligandFile) {
+                const token = await uploadFileToApi(ligandFile);
+                setLigandToken(token);
+                finalTokens.push(token);
+            }
+            if (refLigandFile) {
+                freshRefLigandToken = await uploadFileToApi(refLigandFile);
+                setRefLigandToken?.(freshRefLigandToken);
+                finalTokens.push(freshRefLigandToken);
+            }
 
             // Handle pharmacophore - ALWAYS convert to XYZ with selection if pharmacophores were extracted
             if (pharmacophores.length > 0) {
@@ -455,9 +500,10 @@ export function JobSubmissionForm({
                 const xyzFile = new File([xyzBlob], 'selected_pharmacophore.xyz', { type: 'text/plain' });
                 await apiClient.uploadFile(initResponse.upload_token, xyzFile);
                 finalTokens.push(initResponse.upload_token);
-            } else if (pharmacophoreToken) {
-                // No pharmacophores extracted (shouldn't happen with our upload flow, but fallback)
-                finalTokens.push(pharmacophoreToken);
+            } else if (pharmacophoreFile) {
+                const token = await uploadFileToApi(pharmacophoreFile);
+                setPharmacophoreToken(token);
+                finalTokens.push(token);
             }
 
             const isProteinInvolving =
@@ -496,13 +542,16 @@ export function JobSubmissionForm({
                     bbox_length: parseFloat(bboxLength)
                 };
             } else if (isProteinInvolving && pocketSelectionMethod === 'ligand') {
-                if (!refLigandToken) throw new Error("Reference ligand file is required for this pocket definition. Please upload one in Step 2.");
+                if (!refLigandFile) throw new Error("Reference ligand file is required for this pocket definition. Please upload one in Step 2.");
 
                 pocketSelectionParam = {
                     type: 'file',
-                    value: refLigandToken,
+                    value: freshRefLigandToken,
                 };
             }
+
+
+            const fixedAtomIndicesForJob = capturedFixedIndices?.length ? capturedFixedIndices : undefined;
 
             // Submit job
             const params: any = {
@@ -514,8 +563,11 @@ export function JobSubmissionForm({
                 n_lig_atoms_std: parsedStd,
                 pocket_selection: pocketSelectionParam,
                 pharmacophore_tolerance: 0.0,
-                ...(samplingMode === 'Protein-conditioned' && selectedFragmentIds.length > 0 ? { fixed_brics_fragments: selectedFragmentIds } : {}),
+                metrics_options: metricsOptions,
             };
+            if (samplingMode === 'Protein-conditioned' && fixedAtomIndicesForJob) {
+                params.fixed_atom_indices = fixedAtomIndicesForJob;
+            }
 
             const jobData = {
                 params,
@@ -526,9 +578,8 @@ export function JobSubmissionForm({
             const response = await apiClient.submitJob(jobData);
 
             // Show success notification
-            alert(`✅ Job submitted successfully!\n\nJob ID: ${response.job_id}\n\nYour job is now running. Switch to the "Jobs" tab to view progress.`);
+            alert(`Job submitted successfully.\n\nJob ID: ${response.job_id}\n\nYour job is now running. Switch to the "Jobs" tab to view progress.`);
 
-            resetForm();
             onJobSubmitted(response.job_id);
         } catch (err: any) {
             setError(`Job submission failed: ${err.message}`);
@@ -672,20 +723,56 @@ export function JobSubmissionForm({
                     <div>
                         <h4 className="text-sm font-semibold text-slate-700 mb-2">1. Upload Protein</h4>
                         <p className="text-xs text-slate-500 mb-2">Upload PDB or CIF file defining the target.</p>
-                        <FileUpload
-                            key={`prot-${samplingMode}-${formResetKey}`}
-                            onFilesUploaded={(files) => {
-                                if (files.length > 0) handleProteinUpload(files[0]);
-                                else {
-                                    setProteinFile(null);
-                                    setProteinToken(null);
-                                    onProteinContentChange?.(null);
-                                }
-                            }}
-                            acceptedTypes={['.pdb', '.cif']}
-                            maxFiles={1}
-                            maxSize={25 * 1024 * 1024}
-                        />
+                        {!proteinFile ? (
+                            <>
+                                <FileUpload
+                                    key={`prot-${samplingMode}-${formResetKey}`}
+                                    onFilesUploaded={(files) => {
+                                        if (files.length > 0) handleProteinUpload(files[0]);
+                                        else {
+                                            setProteinFile(null);
+                                            setProteinToken(null);
+                                            onProteinContentChange?.(null);
+                                        }
+                                    }}
+                                    acceptedTypes={['.pdb', '.cif']}
+                                    maxFiles={1}
+                                    maxSize={25 * 1024 * 1024}
+                                />
+                                {!proteinFile && <LoadFromJobPicker
+                                    key={`load-prot-${samplingMode}-${formResetKey}`}
+                                    acceptedExtensions={['.pdb', '.cif']}
+                                    onFileLoaded={handleProteinUpload}
+                                    disabled={isSubmitting}
+                                />}
+                            </>
+                        ) : (
+                            <div className="p-3 border border-blue-200 bg-blue-50/50 rounded-xl relative group">
+                                <button
+                                    onClick={() => {
+                                        setProteinFile(null);
+                                        setProteinToken(null);
+                                        onProteinContentChange?.(null);
+                                    }}
+                                    className="absolute top-2 right-2 p-1 text-blue-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                    title="Remove protein file"
+                                >
+                                    <X className="w-3.5 h-3.5" />
+                                </button>
+                                <div className="flex items-center gap-2.5">
+
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-semibold text-blue-900 truncate">
+                                            {proteinFile.name || 'Protein File'}
+                                        </p>
+                                        <p className="text-[10px] text-blue-600 font-bold uppercase tracking-tight flex items-center gap-1">
+                                            <CheckCircle2 className="w-3 h-3" aria-hidden />
+                                            Processed
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                         {isDetectingPockets && (
                             <div className="mt-2 text-xs text-blue-600 flex items-center">
                                 <Loader2 className="w-3 h-3 animate-spin mr-1" /> Detecting pockets...
@@ -695,7 +782,7 @@ export function JobSubmissionForm({
                 )}
 
                 {/* 2. Pocket Selection (for Protein-conditioned modes) */}
-                {(proteinFile || refLigandToken) && (samplingMode === 'Protein-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned') && (
+                {(proteinFile || refLigandFile) && (samplingMode === 'Protein-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned') && (
                     <div className="animate-in fade-in slide-in-from-top-4 duration-500 space-y-4">
                         <h4 className="text-sm font-semibold text-slate-700 mb-2">2. Binding Site Definition</h4>
                         <p className="text-xs text-slate-500 mb-2">Recommend deselecting protein surface to view pocket.</p>
@@ -727,9 +814,15 @@ export function JobSubmissionForm({
 
                         {pocketSelectionMethod === 'detected' && (
                             <div className="space-y-2">
+                                <p className="text-xs text-slate-500 italic mb-2">
+                                    Note: Defines the pocket as residues 8Å from alpha sphere centers.
+                                </p>
                                 {detectedPockets && detectedPockets.length > 0 ? (
                                     <div className="p-3 border border-emerald-200 bg-emerald-50/50 rounded-xl">
-                                        <p className="text-xs text-emerald-800 font-medium">✓ Pockets detected.</p>
+                                        <p className="text-xs text-emerald-800 font-medium flex items-center gap-1">
+                                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                                            Pockets detected.
+                                        </p>
                                         <div className="mt-2 space-y-1.5">
                                             {detectedPockets.map((pocket: any, idx: number) => {
                                                 const isHidden = hiddenPocketIds.includes(pocket.id);
@@ -737,11 +830,10 @@ export function JobSubmissionForm({
                                                 return (
                                                     <div
                                                         key={pocket.id}
-                                                        className={`flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-xs ${
-                                                            isSelected
-                                                                ? 'border-primary-300 bg-white text-primary-700'
-                                                                : 'border-emerald-100 bg-white/70 text-slate-600'
-                                                        } ${isHidden ? 'opacity-60' : ''}`}
+                                                        className={`flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-xs ${isSelected
+                                                            ? 'border-primary-300 bg-white text-primary-700'
+                                                            : 'border-emerald-100 bg-white/70 text-slate-600'
+                                                            } ${isHidden ? 'opacity-60' : ''}`}
                                                     >
                                                         <button
                                                             type="button"
@@ -758,11 +850,10 @@ export function JobSubmissionForm({
                                                         <button
                                                             type="button"
                                                             onClick={() => togglePocketHidden(pocket.id)}
-                                                            className={`rounded-md px-2 py-1 font-semibold ${
-                                                                isHidden
-                                                                    ? 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                                                    : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                                                            }`}
+                                                            className={`rounded-md px-2 py-1 font-semibold ${isHidden
+                                                                ? 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                                : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                                                }`}
                                                         >
                                                             {isHidden ? 'Show' : 'Hide'}
                                                         </button>
@@ -780,13 +871,15 @@ export function JobSubmissionForm({
                                                         Score: {typeof detectedPockets.find(p => p.id === selectedPocketId)?.score === 'number'
                                                             ? detectedPockets.find(p => p.id === selectedPocketId)?.score.toFixed(3)
                                                             : 'n/a'} · Volume: {typeof detectedPockets.find(p => p.id === selectedPocketId)?.volume === 'number'
-                                                            ? detectedPockets.find(p => p.id === selectedPocketId)?.volume.toFixed(1)
-                                                            : 'n/a'}
+                                                                ? detectedPockets.find(p => p.id === selectedPocketId)?.volume.toFixed(1)
+                                                                : 'n/a'}
                                                     </p>
                                                 )}
                                             </div>
                                         ) : (
-                                            <p className="text-xs text-amber-600 animate-pulse font-medium mt-1">👆 Select a pocket in the 3D viewer.</p>
+                                            <p className="text-xs text-amber-600 animate-pulse font-medium mt-1">
+                                                Select a pocket in the 3D viewer.
+                                            </p>
                                         )}
                                     </div>
                                 ) : (
@@ -802,38 +895,48 @@ export function JobSubmissionForm({
                                 <p className="text-xs text-slate-500 italic mb-2">
                                     Note: Defines the pocket as residues 8Å from reference ligand atoms.
                                 </p>
-                                {!refLigandToken ? (
-                                    <FileUpload
-                                        key={`ref-ligand-${formResetKey}`}
-                                        onFilesUploaded={(files) => {
-                                            if (files.length > 0) handleRefLigandUpload(files[0]);
-                                            else {
-                                                setRefLigandContent?.(null);
-                                                setRefLigandToken?.(null);
-                                                setRefLigandFileName?.(null);
-                                                setLigandCenter(null);
-                                                setBricsFragments([]);
-                                                setSelectedFragmentIds([]);
-                                                setBricsRawSdf(null);
-                                                setBricsExpanded(false);
-                                            }
-                                        }}
-                                        acceptedTypes={['.sdf']}
-                                        maxFiles={1}
-                                        maxSize={5 * 1024 * 1024}
-                                    />
+                                {!refLigandFile ? (
+                                    <>
+                                        <FileUpload
+                                            key={`ref-ligand-${formResetKey}`}
+                                            onFilesUploaded={(files) => {
+                                                if (files.length > 0) handleRefLigandUpload(files[0]);
+                                                else {
+                                                    setRefLigandFile(null);
+                                                    setRefLigandContent?.(null);
+                                                    setRefLigandToken?.(null);
+                                                    setRefLigandFileName?.(null);
+                                                    setLigandCenter(null);
+                                                    setBricsFragments([]);
+                                                    fixedSelection.resetSelection();
+                                                    setBricsRawSdf(null);
+                                                    setFixStructureExpanded(false);
+                                                }
+                                            }}
+                                            acceptedTypes={['.sdf']}
+                                            maxFiles={1}
+                                            maxSize={5 * 1024 * 1024}
+                                        />
+                                        {!refLigandFile && <LoadFromJobPicker
+                                            key={`load-ref-ligand-${formResetKey}`}
+                                            acceptedExtensions={['.sdf']}
+                                            onFileLoaded={handleRefLigandUpload}
+                                            disabled={isSubmitting}
+                                        />}
+                                    </>
                                 ) : (
                                     <div className="p-3 border border-blue-200 bg-blue-50/50 rounded-xl relative group">
                                         <button
                                             onClick={() => {
+                                                setRefLigandFile(null);
                                                 setRefLigandContent?.(null);
                                                 setRefLigandToken?.(null);
                                                 setRefLigandFileName?.(null);
                                                 setLigandCenter(null);
                                                 setBricsFragments([]);
-                                                setSelectedFragmentIds([]);
+                                                fixedSelection.resetSelection();
                                                 setBricsRawSdf(null);
-                                                setBricsExpanded(false);
+                                                setFixStructureExpanded(false);
                                             }}
                                             className="absolute top-2 right-2 p-1 text-blue-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
                                             title="Remove reference ligand"
@@ -841,14 +944,14 @@ export function JobSubmissionForm({
                                             <X className="w-3.5 h-3.5" />
                                         </button>
                                         <div className="flex items-center gap-2.5">
-                                            <div className="p-1.5 bg-blue-100 rounded-lg">
-                                                <span className="text-lg">🧬</span>
-                                            </div>
                                             <div className="flex-1 min-w-0">
                                                 <p className="text-sm font-semibold text-blue-900 truncate">
                                                     {refLigandFileName || 'Reference Ligand'}
                                                 </p>
-                                                <p className="text-[10px] text-blue-600 font-bold uppercase tracking-tight">✓ Processed</p>
+                                                <p className="text-[10px] text-blue-600 font-bold uppercase tracking-tight flex items-center gap-1">
+                                                    <CheckCircle2 className="w-3 h-3" aria-hidden />
+                                                    Processed
+                                                </p>
                                             </div>
                                         </div>
                                         {ligandCenter && (
@@ -863,40 +966,27 @@ export function JobSubmissionForm({
                                 )}
 
                                 {/* BRICS Fragment Selection (only for Protein-conditioned, not Protein+Pharmacophore) */}
-                                {samplingMode === 'Protein-conditioned' && refLigandToken && (bricsLoading || bricsFragments.length > 0) && (
-                                    <div className="mt-3 border border-slate-200 rounded-xl overflow-hidden">
-                                        <button
-                                            onClick={() => setBricsExpanded(!bricsExpanded)}
-                                            className="w-full flex items-center justify-between px-3 py-2 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
-                                        >
-                                            <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                                                Fix Fragments
-                                                <span className="text-[10px] font-normal text-slate-400">(optional)</span>
-                                                {selectedFragmentIds.length > 0 && (
-                                                    <span className="ml-1 px-1.5 py-0.5 bg-primary-100 text-primary-700 rounded-full text-[10px] font-bold">
-                                                        {selectedFragmentIds.length}
-                                                    </span>
-                                                )}
-                                            </span>
-                                            {bricsExpanded ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
-                                        </button>
-                                        {bricsExpanded && (
-                                            <div className="p-3 border-t border-slate-200">
-                                                {bricsLoading ? (
-                                                    <div className="flex items-center gap-2 text-xs text-slate-500 py-4 justify-center">
-                                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                                        Analyzing fragments...
-                                                    </div>
-                                                ) : bricsRawSdf ? (
-                                                    <FragmentSelector
-                                                        fragments={bricsFragments}
-                                                        selectedFragmentIds={selectedFragmentIds}
-                                                        onSelectionChange={setSelectedFragmentIds}
-                                                    />
-                                                ) : null}
-                                            </div>
-                                        )}
-                                    </div>
+                                {samplingMode === 'Protein-conditioned' && refLigandFile && (bricsLoading || bricsFragments.length > 0) && (
+                                    <FixedStructurePanel
+                                        expanded={fixStructureExpanded}
+                                        onExpandedChange={setFixStructureExpanded}
+                                        bricsLoading={bricsLoading}
+                                        bricsRawSdf={bricsRawSdf}
+                                        bricsFragments={bricsFragments}
+                                        mode={fixedSelection.mode}
+                                        onModeChange={fixedSelection.switchMode}
+                                        selectionAction={fixedSelection.selectionAction}
+                                        onSelectionActionChange={fixedSelection.setSelectionAction}
+                                        selectedFragmentIds={fixedSelection.selectedFragmentIds}
+                                        mixedFragmentIds={fixedSelection.mixedFragmentIds}
+                                        onFragmentSelectionChange={fixedSelection.setSelectedFragmentIds}
+                                        onAddFragment={fixedSelection.addFragmentAtoms}
+                                        onToggleFragment={fixedSelection.toggleFragmentAtoms}
+                                        fixedCount={fixedSelection.fixedCount}
+                                        totalAtomCount={totalAtomCount}
+                                        onClear={fixedSelection.clearSelection}
+                                        onInvert={fixedSelection.invertSelection}
+                                    />
                                 )}
                             </div>
                         )}
@@ -940,25 +1030,25 @@ export function JobSubmissionForm({
                         )}
 
                         {pocketSelectionMethod === 'manual' && (
-                        <div className="pt-2">
-                            <label className="block text-sm font-semibold text-slate-700 mb-2">
-                                Adjust Bounding Box Length
-                            </label>
-                            <div className="flex items-center gap-4">
-                                <input
-                                    type="range"
-                                    min="5.0"
-                                    max="35.0"
-                                    step="0.5"
-                                    value={bboxLength}
-                                    onChange={(e) => setBboxLength(e.target.value)}
-                                    className="flex-1 accent-primary-600"
-                                />
-                                <div className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-center text-sm font-mono font-bold text-slate-700">
-                                    {parseFloat(bboxLength).toFixed(1)}
+                            <div className="pt-2">
+                                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                                    Adjust Bounding Box Length
+                                </label>
+                                <div className="flex items-center gap-4">
+                                    <input
+                                        type="range"
+                                        min="5.0"
+                                        max="35.0"
+                                        step="0.5"
+                                        value={bboxLength}
+                                        onChange={(e) => setBboxLength(e.target.value)}
+                                        className="flex-1 accent-primary-600"
+                                    />
+                                    <div className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-center text-sm font-mono font-bold text-slate-700">
+                                        {parseFloat(bboxLength).toFixed(1)}
+                                    </div>
                                 </div>
                             </div>
-                        </div>
                         )}
                     </div>
                 )}
@@ -970,22 +1060,59 @@ export function JobSubmissionForm({
                             {samplingMode === 'Protein+Pharmacophore-conditioned' ? '3.' : '1.'} Upload Pharmacophore
                         </h4>
                         <p className="text-xs text-slate-500 mb-2">Upload XYZ, JSON, or SDF (to extract features).</p>
-                        <FileUpload
-                            key={`pharm-${samplingMode}-${formResetKey}`}
-                            onFilesUploaded={(files) => {
-                                if (files.length > 0) handlePharmUpload(files[0]);
-                                else {
-                                    setPharmacophoreFile(null);
-                                    setPharmacophoreToken(null);
-                                    onPharmacophoresChange?.([]);
-                                    onLigandContentChange?.(null);
-                                    setLigandContent(null);
-                                }
-                            }}
-                            acceptedTypes={['.xyz', '.json', '.sdf']}
-                            maxFiles={1}
-                            maxSize={5 * 1024 * 1024}
-                        />
+                        {!pharmacophoreFile ? (
+                            <>
+                                <FileUpload
+                                    key={`pharm-${samplingMode}-${formResetKey}`}
+                                    onFilesUploaded={(files) => {
+                                        if (files.length > 0) handlePharmUpload(files[0]);
+                                        else {
+                                            setPharmacophoreFile(null);
+                                            setPharmacophoreToken(null);
+                                            onPharmacophoresChange?.([]);
+                                            onLigandContentChange?.(null);
+                                            setLigandContent(null);
+                                        }
+                                    }}
+                                    acceptedTypes={['.xyz', '.json', '.sdf']}
+                                    maxFiles={1}
+                                    maxSize={5 * 1024 * 1024}
+                                />
+                                <LoadFromJobPicker
+                                    key={`load-pharm-${samplingMode}-${formResetKey}`}
+                                    acceptedExtensions={['.xyz', '.json', '.sdf']}
+                                    onFileLoaded={handlePharmUpload}
+                                    disabled={isSubmitting}
+                                />
+                            </>
+                        ) : (
+                            <div className="p-3 border border-blue-200 bg-blue-50/50 rounded-xl relative group">
+                                <button
+                                    onClick={() => {
+                                        setPharmacophoreFile(null);
+                                        setPharmacophoreToken(null);
+                                        onPharmacophoresChange?.([]);
+                                        onLigandContentChange?.(null);
+                                        setLigandContent(null);
+                                    }}
+                                    className="absolute top-2 right-2 p-1 text-blue-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                    title="Remove pharmacophore file"
+                                >
+                                    <X className="w-3.5 h-3.5" />
+                                </button>
+                                <div className="flex items-center gap-2.5">
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-semibold text-blue-900 truncate">
+                                            {pharmacophoreFile.name || 'Pharmacophore File'}
+                                        </p>
+                                        <p className="text-[10px] text-blue-600 font-bold uppercase tracking-tight flex items-center gap-1">
+                                            <CheckCircle2 className="w-3 h-3" aria-hidden />
+                                            Processed
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -1001,22 +1128,20 @@ export function JobSubmissionForm({
                         <h3 className="text-base font-semibold text-slate-900 mb-3">
                             Pharmacophore Selection
                         </h3>
-                        <div className="mb-3 text-sm text-slate-600 italic">
-                            💡 Click spheres in the 3D viewer to select/deselect features
-                        </div>
+                        <PharmacophoreSelector
+                            pharmacophores={pharmacophores}
+                            selectedIndices={selectedPharmacophoreIndices}
+                            onSelectionChange={(indices) => onPharmacophoreSelectionChange?.(indices)}
+                        />
                         {selectedPharmacophoreIndices.length > 0 ? (
-                            <div className="mt-3 p-3 bg-emerald-50/70 rounded-xl text-sm text-emerald-700 shadow-sm border border-emerald-100 flex items-center justify-between">
-                                <span>✓ {selectedPharmacophoreIndices.length} of {pharmacophores.length} features selected</span>
-                                <button
-                                    onClick={() => onPharmacophoreSelectionChange?.([])}
-                                    className="text-emerald-600 hover:text-emerald-700 text-xs font-semibold"
-                                >
-                                    Clear All
-                                </button>
+                            <div className="mt-3 p-3 bg-emerald-50/70 rounded-xl text-sm text-emerald-700 shadow-sm border border-emerald-100 flex items-center gap-2">
+                                <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden />
+                                {selectedPharmacophoreIndices.length} of {pharmacophores.length} features selected
                             </div>
                         ) : (
-                            <div className="mt-3 p-3 bg-amber-50/70 rounded-xl text-sm text-amber-700 shadow-sm border border-amber-100">
-                                ⚠️ No features selected. Use the 3D viewer.
+                            <div className="mt-3 p-3 bg-amber-50/70 rounded-xl text-sm text-amber-700 shadow-sm border border-amber-100 flex items-center gap-2">
+                                <AlertCircle className="w-4 h-4 shrink-0" aria-hidden />
+                                No features selected. Select at least one feature.
                             </div>
                         )}
                     </div>
@@ -1060,7 +1185,7 @@ export function JobSubmissionForm({
                 </div>
                 <p className="mt-2 text-xs text-slate-500">
                     {samplingMode === 'Unconditional'
-                        ? 'If you leave mean and standard deviation empty, the model will use dataset distribution for ligand sizes.'
+                        ? 'If left empty, the model will use the dataset distribution.'
                         : autoAtomCount
                             ? `Auto-filled using the ${autoAtomCount}-atom reference ligand. Std uses ${Math.round(
                                 ATOM_STD_MARGIN * 100
@@ -1093,6 +1218,12 @@ export function JobSubmissionForm({
                 </div>
             </div>
 
+            <MetricsOptionsForm
+                samplingMode={samplingMode}
+                options={metricsOptions}
+                onChange={setMetricsOptions}
+            />
+
             {
                 error && (
                     <div className="p-4 bg-red-50/70 rounded-xl text-sm text-red-700 shadow-sm">
@@ -1101,22 +1232,33 @@ export function JobSubmissionForm({
                 )
             }
 
-            <button
-                onClick={handleSubmit}
-                disabled={isSubmitting}
-                className="w-full px-5 py-3.5 bg-primary-600 text-white rounded-xl font-semibold hover:bg-primary-700 disabled:bg-slate-400 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md flex items-center justify-center gap-2"
-            >
-                {isSubmitting ? (
-                    <>
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        Submitting...
-                    </>
-                ) : (
-                    <>
-                        🚀 Run Sampling
-                    </>
-                )}
-            </button>
+            <div className="flex gap-2">
+                <button
+                    type="button"
+                    onClick={resetForm}
+                    disabled={isSubmitting}
+                    className="px-4 py-3.5 border border-slate-200 text-slate-700 rounded-xl font-semibold hover:bg-slate-50 disabled:opacity-50 transition-all"
+                >
+                    Clear form
+                </button>
+                <button
+                    onClick={handleSubmit}
+                    disabled={isSubmitting}
+                    className="flex-1 px-5 py-3.5 bg-primary-600 text-white rounded-xl font-semibold hover:bg-primary-700 disabled:bg-slate-400 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md flex items-center justify-center gap-2"
+                >
+                    {isSubmitting ? (
+                        <>
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                            Submitting...
+                        </>
+                    ) : (
+                        <>
+                            <Play className="w-5 h-5" aria-hidden />
+                            Run Sampling
+                        </>
+                    )}
+                </button>
+            </div>
         </div >
     );
 }

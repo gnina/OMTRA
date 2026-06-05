@@ -5,7 +5,7 @@ services:
     image: redis:7-alpine
     container_name: omtra_redis
     ports:
-      - "6379:6379"
+      - "${REDIS_PUBLISH_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly no --save ""
@@ -36,7 +36,6 @@ services:
       - ./shared:/app/shared
       - ../omtra/trained_models:/srv/app/checkpoints
       - job_storage:/srv/app/jobs
-      - model_cache:/srv/app/models
     depends_on:
       - redis
     restart: unless-stopped
@@ -60,11 +59,11 @@ services:
       - ./shared:/app/shared
       - ../cli.py:/app/cli.py
       - ../routines:/app/routines
+      - ../omtra:/usr/local/lib/python3.11/dist-packages/omtra
       - ../omtra/trained_models:/srv/app/checkpoints
       - ../configs:/usr/local/lib/python3.11/dist-packages/configs
       - ../omtra_pipelines:/usr/local/lib/python3.11/dist-packages/omtra_pipelines
       - job_storage:/srv/app/jobs
-      - model_cache:/srv/app/models
     depends_on:
       - redis
       - api
@@ -92,7 +91,6 @@ services:
 volumes:
   redis_data:
   job_storage:
-  model_cache:
 
 networks:
   default:

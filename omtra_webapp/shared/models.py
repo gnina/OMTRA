@@ -14,12 +14,27 @@ class JobStatus(str, Enum):
     CANCELED = "CANCELED"
 
 
+class MetricsOptions(BaseModel):
+    """Which post-run metrics to compute (all default True for backward compatibility)."""
+    posebusters: bool = True
+    posecheck: bool = True
+    strain: bool = True
+    vina: bool = True
+    poseview: bool = True
+
+
 class SamplingParams(BaseModel):
     """Parameters for molecule sampling"""
     sampling_mode: str = Field(default="Unconditional", description="Sampling mode: Unconditional, Pharmacophore-conditioned, Protein-conditioned, or Protein+Pharmacophore-conditioned")
     seed: Optional[int] = Field(default=None, description="Random seed for reproducibility")
     n_samples: int = Field(default=10, ge=1, le=100, description="Number of samples to generate")
     steps: int = Field(default=100, ge=10, le=1000, description="Number of sampling steps")
+    batch_size: int = Field(
+        default=500,
+        ge=1,
+        le=500,
+        description="Maximum conditioning systems per GPU batch during sampling",
+    )
     device: Optional[str] = Field(default="cuda", description="Device to run on")
     n_lig_atoms_mean: Optional[float] = Field(default=None, ge=4, description="Mean number of atoms for ligand samples (if provided, uses normal distribution instead of dataset distribution)")
     n_lig_atoms_std: Optional[float] = Field(default=None, ge=0.1, description="Standard deviation for number of atoms (required if n_lig_atoms_mean is provided)")
@@ -29,7 +44,15 @@ class SamplingParams(BaseModel):
     )
     fixed_brics_fragments: Optional[List[int]] = Field(
         default=None,
-        description="BRICS fragment IDs to hold fixed during partial-modality sampling"
+        description="BRICS fragment IDs to hold fixed during partial-modality sampling (legacy)"
+    )
+    fixed_atom_indices: Optional[List[int]] = Field(
+        default=None,
+        description="0-based atom indices in reference ligand SDF to hold fixed during partial-modality sampling"
+    )
+    metrics_options: Optional[MetricsOptions] = Field(
+        default=None,
+        description="Optional flags for which evaluation metrics to compute after sampling",
     )
     
     @validator('sampling_mode')
@@ -134,6 +157,12 @@ class DockingParams(BaseModel):
     seed: Optional[int] = Field(default=None, description="Random seed for reproducibility")
     n_samples: int = Field(default=10, ge=1, le=100, description="Number of samples to generate")
     steps: int = Field(default=100, ge=10, le=1000, description="Number of sampling steps")
+    batch_size: int = Field(
+        default=500,
+        ge=1,
+        le=500,
+        description="Maximum conditioning systems per GPU batch during sampling",
+    )
     device: Optional[str] = Field(default="cuda", description="Device to run on")
     pocket_selection: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -141,7 +170,15 @@ class DockingParams(BaseModel):
     )
     fixed_brics_fragments: Optional[List[int]] = Field(
         default=None,
-        description="BRICS fragment IDs to hold fixed during partial-modality sampling"
+        description="BRICS fragment IDs to hold fixed during partial-modality sampling (legacy)"
+    )
+    fixed_atom_indices: Optional[List[int]] = Field(
+        default=None,
+        description="0-based atom indices in docking ligand SDF to hold fixed during partial-modality sampling"
+    )
+    metrics_options: Optional[MetricsOptions] = Field(
+        default=None,
+        description="Optional flags for which evaluation metrics to compute after docking",
     )
     
     @validator('docking_mode')

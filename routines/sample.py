@@ -86,6 +86,12 @@ def parse_args():
         help="Number of integration steps to take when sampling"
     )
     p.add_argument(
+        "--batch_size",
+        type=int,
+        default=500,
+        help="Maximum number of conditioning systems per GPU batch when sampling",
+    )
+    p.add_argument(
         "--visualize",
         action="store_true",
         help="If set, visualize the sampling process"
@@ -418,7 +424,9 @@ def main(args):
             for group in ["ligand_identity", "ligand_identity_condensed"]
         )
         reference_ligand_present = (
-            task_requires_ligand and 'x_1_true' in g_list[0].nodes['lig'].data
+            task_requires_ligand 
+            and g_list[0].num_nodes('lig') > 0
+            and 'x_1_true' in g_list[0].nodes['lig'].data
         )
         if reference_ligand_present:
             coms = [g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list]
@@ -431,9 +439,10 @@ def main(args):
             ):
                 coms = [g.nodes['prot_atom'].data['x_1_true'].mean(dim=0) for g in g_list]
 
-    sampled_systems = model.sample(
+    sampled_systems = model.sample_in_batches(
         g_list=g_list,
         n_replicates=n_replicates,
+        max_batch_size=getattr(args, "batch_size", 500),
         task_name=task_name,
         unconditional_n_atoms_dist=args.dataset,
         device=device,

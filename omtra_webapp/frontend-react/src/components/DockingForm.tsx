@@ -1,13 +1,23 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { apiClient } from '@/lib/api-client';
-import type { DockingMode, DockingParams, PocketInfo, BricsFragment } from '@/types';
+import {
+  apiClient,
+  encodeBase64Unicode
+} from '@/lib/api-client';
+import type { DockingMode, DockingParams, MetricsOptions, PocketInfo, BricsFragment } from '@/types';
+import { DEFAULT_METRICS_OPTIONS } from '@/types';
 import { FileUpload } from './FileUpload';
-import { FragmentSelector } from './FragmentSelector';
-import { AlertCircle, CheckCircle2, Loader2, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { FixedStructurePanel } from './FixedStructurePanel';
+import { MetricsOptionsForm } from './MetricsOptionsForm';
+import { LoadFromJobPicker } from './LoadFromJobPicker';
+import { PharmacophoreSelector } from './PharmacophoreSelector';
+import { useFixedAtomSelection } from '@/hooks/useFixedAtomSelection';
+import { AlertCircle, CheckCircle2, Loader2, Play, X, ChevronDown, ChevronRight } from 'lucide-react';
 
 interface DockingFormProps {
+  initialDockingMode?: DockingMode;
+  onDockingModeChange?: (mode: DockingMode) => void;
   onJobSubmitted: (jobId: string) => void;
   onProteinContentChange?: (content: string | null) => void;
   onProteinFormatChange?: (format: 'pdb' | 'cif' | undefined) => void;
@@ -38,13 +48,17 @@ interface DockingFormProps {
   setRefLigandFileName?: (name: string | null) => void;
   bricsFragments: BricsFragment[];
   setBricsFragments: (frags: BricsFragment[]) => void;
-  selectedFragmentIds: number[];
-  setSelectedFragmentIds: (ids: number[]) => void;
   bricsRawSdf: string | null;
   setBricsRawSdf: (sdf: string | null) => void;
+  fixStructureExpanded: boolean;
+  setFixStructureExpanded: (v: boolean) => void;
+  fixedSelection: ReturnType<typeof useFixedAtomSelection>;
+  totalAtomCount: number;
 }
 
 export function DockingForm({
+  initialDockingMode = 'Rigid Docking',
+  onDockingModeChange,
   onJobSubmitted,
   onProteinContentChange,
   onProteinFormatChange,
@@ -75,13 +89,21 @@ export function DockingForm({
   setRefLigandFileName,
   bricsFragments,
   setBricsFragments,
-  selectedFragmentIds,
-  setSelectedFragmentIds,
   bricsRawSdf,
   setBricsRawSdf,
+  fixStructureExpanded,
+  setFixStructureExpanded,
+  fixedSelection,
+  totalAtomCount,
 }: DockingFormProps) {
   const [apiConnected, setApiConnected] = useState<boolean | null>(null);
-  const [dockingMode, setDockingMode] = useState<DockingMode>('Rigid Docking');
+  const [dockingMode, setDockingModeState] = useState<DockingMode>(initialDockingMode);
+
+  const setDockingMode = useCallback((mode: DockingMode) => {
+      setDockingModeState(mode);
+      onDockingModeChange?.(mode);
+  }, [onDockingModeChange]);
+
   const prevDockingModeRef = useRef<DockingMode>(dockingMode);
   const [seedInput, setSeedInput] = useState('42');
   const [nSamplesInput, setNSamplesInput] = useState('10');
@@ -102,7 +124,6 @@ export function DockingForm({
 
   // BRICS fragment selection state (fragments/selectedIds/rawSdf lifted to parent)
   const [bricsLoading, setBricsLoading] = useState(false);
-  const [bricsExpanded, setBricsExpanded] = useState(false);
 
   const togglePocketHidden = useCallback((pocketId: string) => {
     const isHidden = hiddenPocketIds.includes(pocketId);
@@ -120,6 +141,8 @@ export function DockingForm({
   const [isDetectingPockets, setIsDetectingPockets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formResetKey, setFormResetKey] = useState(0);
+  const [metricsOptions, setMetricsOptions] = useState<MetricsOptions>({ ...DEFAULT_METRICS_OPTIONS });
+  const [refLigandFile, setRefLigandFile] = useState<File | null>(null);
 
   const resetForm = useCallback(() => {
     setSeedInput('42');
@@ -140,9 +163,9 @@ export function DockingForm({
 
     // Clear BRICS fragment state
     setBricsFragments([]);
-    setSelectedFragmentIds([]);
+    fixedSelection.resetSelection();
     setBricsRawSdf(null);
-    setBricsExpanded(false);
+    setFixStructureExpanded(false);
 
     // Notify parent to clear visual state
     onProteinContentChange?.(null);
@@ -160,6 +183,8 @@ export function DockingForm({
     setRefLigandFileName?.(null);
     setRefLigandContent?.(null);
     setRefLigandToken?.(null);
+    setRefLigandFile(null);
+    setMetricsOptions({ ...DEFAULT_METRICS_OPTIONS });
   }, [
     onProteinContentChange,
     onProteinFormatChange,
@@ -176,8 +201,8 @@ export function DockingForm({
     setBboxLength,
     setLigandCenter,
     setBricsFragments,
-    setSelectedFragmentIds,
     setBricsRawSdf,
+    fixedSelection,
   ]);
 
   useEffect(() => {
@@ -192,6 +217,7 @@ export function DockingForm({
   // Handle Ref Ligand Upload for Step 2
   const handleRefLigandUpload = async (file: File) => {
     setError(null);
+    setRefLigandFile(file);
     try {
       // 1. Upload to API
       const token = await uploadFileToApi(file);
@@ -199,7 +225,7 @@ export function DockingForm({
 
       // 2. Read content for Viewer and calculate center
       const content = await file.text();
-      const base64Content = btoa(content);
+      const base64Content = encodeBase64Unicode(content);
       setRefLigandContent?.(base64Content);
       setRefLigandFileName?.(file.name);
 
@@ -264,12 +290,12 @@ export function DockingForm({
     setLigandToken(null);
     setError(null);
     setBricsFragments([]);
-    setSelectedFragmentIds([]);
+    fixedSelection.resetSelection();
     setBricsRawSdf(null);
 
     try {
       const content = await file.text();
-      const ligandB64 = btoa(content);
+      const ligandB64 = encodeBase64Unicode(content);
       onLigandContentChange?.(ligandB64);
       setBricsRawSdf(content);
 
@@ -281,7 +307,7 @@ export function DockingForm({
       try {
         const result = await apiClient.extractBricsFragments(file);
         setBricsFragments(result.fragments);
-        if (result.num_fragments > 1) setBricsExpanded(true);
+        if (result.num_fragments > 1) setFixStructureExpanded(true);
       } catch (e) {
         console.error('BRICS extraction failed:', e);
       } finally {
@@ -315,7 +341,7 @@ export function DockingForm({
         if (filename.endsWith('.sdf')) {
           try {
             const content = await file.text();
-            onLigandContentChange?.(btoa(content));
+            onLigandContentChange?.(encodeBase64Unicode(content));
           } catch (e) {
             console.error("Failed to read pharmacophore SDF for viewer:", e);
           }
@@ -359,7 +385,7 @@ export function DockingForm({
     try {
       // 1. Read content for Viewer
       const content = await file.text();
-      const proteinB64 = btoa(content);
+      const proteinB64 = encodeBase64Unicode(content);
       onProteinContentChange?.(proteinB64);
       const format = filename.endsWith('.pdb') ? 'pdb' : 'cif';
       onProteinFormatChange?.(format);
@@ -391,6 +417,12 @@ export function DockingForm({
 
   const handleSubmit = async () => {
     setError(null);
+
+    const capturedFixedIndices =
+      dockingMode === 'Rigid Docking' && fixedSelection.fixedCount > 0
+        ? fixedSelection.getFixedAtomIndicesForSubmit()
+        : undefined;
+
     setIsSubmitting(true);
 
     try {
@@ -406,26 +438,16 @@ export function DockingForm({
         return;
       }
 
-      // Ensure protein is uploaded (re-upload if needed)
-      let finalProteinToken = proteinToken;
-      if (!finalProteinToken && proteinFile) {
-        try {
-          finalProteinToken = await uploadFileToApi(proteinFile);
-          setProteinToken(finalProteinToken);
-        } catch (err) {
-          throw new Error("Failed to upload protein file");
-        }
-      }
+      const finalProteinToken = await uploadFileToApi(proteinFile);
+      setProteinToken(finalProteinToken);
 
-      // Ensure ligand is uploaded (re-upload if needed)
-      let finalLigandToken = ligandToken;
-      if (!finalLigandToken && ligandFile) {
-        try {
-          finalLigandToken = await uploadFileToApi(ligandFile);
-          setLigandToken(finalLigandToken);
-        } catch (err) {
-          throw new Error("Failed to upload ligand file");
-        }
+      const finalLigandToken = await uploadFileToApi(ligandFile);
+      setLigandToken(finalLigandToken);
+
+      let finalRefLigandToken: string | null = null;
+      if (refLigandFile) {
+        finalRefLigandToken = await uploadFileToApi(refLigandFile);
+        setRefLigandToken?.(finalRefLigandToken);
       }
 
       // Ensure pharmacophore is uploaded or generated
@@ -524,13 +546,17 @@ export function DockingForm({
           bbox_length: parseFloat(bboxLength),
         };
       } else if (pocketSelectionMethod === 'ligand') {
-        if (!refLigandToken) throw new Error("Reference ligand file is required for this pocket definition. Please upload one in Step 2.");
+        if (!refLigandFile || !finalRefLigandToken) {
+          throw new Error("Reference ligand file is required for this pocket definition. Please upload one in Step 2.");
+        }
 
         pocketSelection = {
           type: 'file' as const,
-          value: refLigandToken,
+          value: finalRefLigandToken,
         };
       }
+
+      const fixedAtomIndicesForJob = capturedFixedIndices?.length ? capturedFixedIndices : undefined;
 
       const params: DockingParams = {
         docking_mode: dockingMode,
@@ -538,12 +564,13 @@ export function DockingForm({
         n_samples: parsedSamples,
         steps: parsedSteps,
         pocket_selection: pocketSelection,
-        ...(dockingMode === 'Rigid Docking' && selectedFragmentIds.length > 0 ? { fixed_brics_fragments: selectedFragmentIds } : {}),
+        ...(fixedAtomIndicesForJob ? { fixed_atom_indices: fixedAtomIndicesForJob } : {}),
+        metrics_options: metricsOptions,
       };
 
       const uploads = [finalProteinToken, finalLigandToken];
       if (finalPharmToken) uploads.push(finalPharmToken);
-      if (refLigandToken && pocketSelectionMethod === 'ligand') uploads.push(refLigandToken);
+      if (finalRefLigandToken && pocketSelectionMethod === 'ligand') uploads.push(finalRefLigandToken);
 
       const jobData = {
         params,
@@ -554,13 +581,9 @@ export function DockingForm({
       const response = await apiClient.submitDockingJob(jobData);
 
       // Show success notification
-      alert(`✅ Job submitted successfully!\n\nJob ID: ${response.job_id}\n\nYour job is now running. Switch to the "Jobs" tab to view progress.`);
+      alert(`Job submitted successfully.\n\nJob ID: ${response.job_id}\n\nYour job is now running. Switch to the "Jobs" tab to view progress.`);
 
       onJobSubmitted(response.job_id);
-
-      // Upload tokens are single-use; clear the whole form so a second
-      // submission cannot reuse consumed tokens.
-      resetForm();
 
     } catch (err: any) {
       setError(`Job submission failed: ${err.message}`);
@@ -679,28 +702,62 @@ export function DockingForm({
         <div>
           <h3 className="text-base font-semibold text-slate-900 mb-2">1. Upload Protein</h3>
           <p className="text-xs text-slate-500 mb-3">Upload a PDB or CIF file to define the receptor.</p>
-          <FileUpload
-            key={`protein-${dockingMode}-${formResetKey}`}
-            onFilesUploaded={async (files) => {
-              if (files.length > 0) handleProteinUpload(files[0]);
-              else {
-                onProteinContentChange?.(null);
-                onProteinFormatChange?.(undefined);
-                setProteinFile(null);
-                setProteinToken(null);
-                // Clear pockets and bounding boxes when protein is removed
-                onPocketsDetected?.([]);
-                onPocketSelect?.(null);
-                setPocketSelectionMethod('ligand');
-                setManualCenter({ x: '0', y: '0', z: '0' });
-                setBboxLength('15.0');
-                setLigandCenter(null);
-              }
-            }}
-            acceptedTypes={['.pdb', '.cif']}
-            maxFiles={1}
-            maxSize={25 * 1024 * 1024}
-          />
+          {!proteinFile ? (
+            <>
+              <FileUpload
+                key={`protein-${dockingMode}-${formResetKey}`}
+                onFilesUploaded={async (files) => {
+                  if (files.length > 0) handleProteinUpload(files[0]);
+                  else {
+                    onProteinContentChange?.(null);
+                    onProteinFormatChange?.(undefined);
+                    setProteinFile(null);
+                    setProteinToken(null);
+                    onPocketsDetected?.([]);
+                    onPocketSelect?.(null);
+                    setPocketSelectionMethod('ligand');
+                    setManualCenter({ x: '0', y: '0', z: '0' });
+                    setBboxLength('15.0');
+                    setLigandCenter(null);
+                  }
+                }}
+                acceptedTypes={['.pdb', '.cif']}
+                maxFiles={1}
+                maxSize={25 * 1024 * 1024}
+              />
+              <LoadFromJobPicker
+                key={`load-prot-${dockingMode}-${formResetKey}`}
+                acceptedExtensions={['.pdb', '.cif']}
+                onFileLoaded={handleProteinUpload}
+                disabled={isSubmitting}
+              />
+            </>
+          ) : (
+          <div className="p-3 border border-blue-200 bg-blue-50/50 rounded-xl relative group">
+  <button
+    onClick={() => {
+      setProteinFile(null);
+      setProteinToken(null);
+      onProteinContentChange?.(null);
+    }}
+    className="absolute top-2 right-2 p-1 text-blue-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+    title="Remove protein file"
+  >
+    <X className="w-3.5 h-3.5" />
+  </button>
+  <div className="flex items-center gap-2.5">
+    <div className="flex-1 min-w-0">
+      <p className="text-sm font-semibold text-blue-900 truncate">
+        {proteinFile.name || 'Protein File'}
+      </p>
+      <p className="text-[10px] text-blue-600 font-bold uppercase tracking-tight flex items-center gap-1">
+        <CheckCircle2 className="w-3 h-3" aria-hidden />
+        Processed
+      </p>
+    </div>
+  </div>
+</div>
+          )}
           {isDetectingPockets && (
             <div className="mt-3 p-3 bg-blue-50/70 rounded-xl text-sm text-blue-700 shadow-sm">
               <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
@@ -710,7 +767,7 @@ export function DockingForm({
         </div>
 
         {/* Step 2: Pocket Selection */}
-        {(proteinFile || refLigandToken) && (
+        {(proteinFile || refLigandFile) && (
           <div className="animate-in fade-in slide-in-from-top-4 duration-500 space-y-4">
             <h3 className="text-base font-semibold text-slate-900 mb-2">2. Pocket Selection</h3>
             <div className="flex flex-col gap-3 p-1 bg-slate-100 rounded-xl mb-4">
@@ -741,10 +798,16 @@ export function DockingForm({
 
             {pocketSelectionMethod === 'detected' && (
               <div className="space-y-3">
+                <p className="text-xs text-slate-500 italic">
+                  Note: Defines the pocket as residues 8Å from alpha sphere centers.
+                </p>
                 {detectedPockets.length > 0 ? (
                   <div className="p-4 border border-emerald-200 bg-emerald-50/50 rounded-xl">
                     <p className="text-sm text-emerald-800 font-medium mb-1">
-                      ✓ {detectedPockets.length} pocket(s) detected.
+                      <span className="flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                        {detectedPockets.length} pocket(s) detected.
+                      </span>
                     </p>
                     <div className="mt-3 space-y-2">
                       {detectedPockets.map((pocket, idx) => {
@@ -797,7 +860,7 @@ export function DockingForm({
                       </p>
                     ) : (
                       <p className="text-sm text-amber-600 animate-pulse font-medium">
-                        👆 Select a pocket in the 3D viewer.
+                        Select a pocket in the 3D viewer.
                       </p>
                     )}
                   </div>
@@ -814,30 +877,43 @@ export function DockingForm({
                 <p className="text-xs text-slate-500 italic mb-2">
                   Note: Defines the pocket as residues 8Å from reference ligand atoms.
                 </p>
-                {!refLigandToken ? (
+                {!refLigandFile ? (
+                  <>
                   <FileUpload
                     key={`ref-ligand-${dockingMode}-${formResetKey}`}
                     onFilesUploaded={(files) => {
                       if (files.length > 0) handleRefLigandUpload(files[0]);
                       else {
+                        setRefLigandFile(null);
                         setRefLigandContent?.(null);
                         setRefLigandToken?.(null);
                         setRefLigandFileName?.(null);
                         setLigandCenter(null);
+                        onPocketSelect?.(null);
+                        onPocketsDetected?.([]);
                       }
                     }}
                     acceptedTypes={['.sdf']}
                     maxFiles={1}
                     maxSize={5 * 1024 * 1024}
                   />
+                  <LoadFromJobPicker
+                    acceptedExtensions={['.sdf']}
+                    onFileLoaded={handleRefLigandUpload}
+                    disabled={isSubmitting}
+                  />
+                  </>
                 ) : (
-                  <div className="p-4 border border-blue-200 bg-blue-50/50 rounded-xl relative group">
+                  <div className="p-3 border border-blue-200 bg-blue-50/50 rounded-xl relative group">
                     <button
                       onClick={() => {
+                        setRefLigandFile(null);
                         setRefLigandContent?.(null);
                         setRefLigandToken?.(null);
                         setRefLigandFileName?.(null);
                         setLigandCenter(null);
+                        onPocketSelect?.(null);
+                        onPocketsDetected?.([]);
                       }}
                       className="absolute top-2 right-2 p-1.5 text-blue-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                       title="Remove reference ligand"
@@ -845,16 +921,16 @@ export function DockingForm({
                       <X className="w-4 h-4" />
                     </button>
                     <div className="flex items-center gap-3">
-                      <div className="p-2 bg-blue-100 rounded-lg">
-                        <span className="text-xl">🧬</span>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-blue-900 truncate">
-                          {refLigandFileName || 'Reference Ligand'}
-                        </p>
-                        <p className="text-xs text-blue-600 font-medium">✓ Uploaded & Processed</p>
-                      </div>
-                    </div>
+  <div className="flex-1 min-w-0">
+    <p className="text-sm font-semibold text-blue-900 truncate">
+      {refLigandFileName || 'Reference Ligand'}
+    </p>
+    <p className="text-[10px] text-blue-600 font-bold uppercase tracking-tight flex items-center gap-1">
+        <CheckCircle2 className="w-3 h-3" aria-hidden />
+        Processed
+      </p>
+  </div>
+</div>
                     {ligandCenter && (
                       <div className="mt-3 pt-3 border-t border-blue-100/50">
                         <p className="text-[10px] font-bold text-blue-400 uppercase tracking-tighter mb-1">Center</p>
@@ -935,44 +1011,64 @@ export function DockingForm({
           <div className="animate-in fade-in slide-in-from-top-4 duration-500 delay-150">
             <h3 className="text-base font-semibold text-slate-900 mb-2">3. Upload Pharmacophore</h3>
             <p className="text-xs text-slate-500 mb-3">Upload a pharmacophore file (.xyz, .json, .sdf) to guide docking.</p>
-            <FileUpload
-              key={`pharm-${dockingMode}-${formResetKey}`}
-              onFilesUploaded={(files) => {
-                if (files.length > 0) handlePharmUpload(files[0]);
-                else {
-                  setPharmacophoreFile(null);
-                  onPharmacophoresChange?.([]);
-                  onLigandContentChange?.(null);
-                }
-              }}
-              acceptedTypes={['.xyz', '.json', '.sdf']}
-              maxFiles={1}
-              maxSize={5 * 1024 * 1024}
-            />
-            {/* Pharmacophore Selection Indicator */}
+            {!pharmacophoreFile ? (
+              <>
+                <FileUpload
+                  key={`pharm-${dockingMode}-${formResetKey}`}
+                  onFilesUploaded={(files) => {
+                    if (files.length > 0) handlePharmUpload(files[0]);
+                    else {
+                      setPharmacophoreFile(null);
+                      setPharmacophoreToken(null);
+                      onPharmacophoresChange?.([]);
+                      onLigandContentChange?.(null);
+                    }
+                  }}
+                  acceptedTypes={['.xyz', '.json', '.sdf']}
+                  maxFiles={1}
+                  maxSize={5 * 1024 * 1024}
+                />
+                <LoadFromJobPicker
+                  acceptedExtensions={['.xyz', '.json', '.sdf']}
+                  onFileLoaded={handlePharmUpload}
+                  disabled={isSubmitting}
+                />
+              </>
+            ) : (
+              <div className="p-3 border border-blue-200 bg-blue-50/50 rounded-xl relative group">
+                <button
+                  onClick={() => {
+                    setPharmacophoreFile(null);
+                    setPharmacophoreToken(null);
+                    onPharmacophoresChange?.([]);
+                    onLigandContentChange?.(null);
+                  }}
+                  className="absolute top-2 right-2 p-1 text-blue-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                  title="Remove pharmacophore file"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+                <div className="flex items-center gap-2.5">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-blue-900 truncate">
+                      {pharmacophoreFile.name || 'Pharmacophore File'}
+                    </p>
+                    <p className="text-[10px] text-blue-600 font-bold uppercase tracking-tight flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" aria-hidden />
+                      Processed
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
             {pharmacophores.length > 0 && (
               <div className="mt-4 space-y-2">
-                <h4 className="text-sm font-semibold text-slate-800">
-                  Pharmacophore Selection
-                </h4>
-                <div className="mb-3 text-sm text-slate-600 italic">
-                  💡 Click spheres in the 3D viewer to select/deselect features
-                </div>
-                {selectedPharmacophoreIndices.length > 0 ? (
-                  <div className="mt-3 p-3 bg-emerald-50/70 rounded-xl text-sm text-emerald-700 shadow-sm border border-emerald-100 flex items-center justify-between">
-                    <span>✓ {selectedPharmacophoreIndices.length} of {pharmacophores.length} features selected</span>
-                    <button
-                      onClick={() => onPharmacophoreSelectionChange?.([])}
-                      className="text-emerald-600 hover:text-emerald-700 text-xs font-semibold"
-                    >
-                      Clear All
-                    </button>
-                  </div>
-                ) : (
-                  <div className="p-3 bg-amber-50 rounded-xl text-sm text-amber-700 animate-pulse font-medium border border-amber-100">
-                    👆 Select pharmacophore features in the 3D viewer
-                  </div>
-                )}
+                <h4 className="text-sm font-semibold text-slate-800">Pharmacophore Selection</h4>
+                <PharmacophoreSelector
+                  pharmacophores={pharmacophores}
+                  selectedIndices={selectedPharmacophoreIndices}
+                  onSelectionChange={(indices) => onPharmacophoreSelectionChange?.(indices)}
+                />
               </div>
             )}
           </div>
@@ -985,60 +1081,84 @@ export function DockingForm({
               {dockingMode === 'Rigid Docking + Pharmacophore' ? '4.' : '3.'} Upload Ligand
             </h3>
             <p className="text-xs text-slate-500 mb-3">Upload the ligand SDF file you want to dock.</p>
-            <FileUpload
-              key={`ligand-${dockingMode}-${formResetKey}`}
-              onFilesUploaded={async (files) => {
-                if (files.length > 0) handleLigandUpload(files[0]);
-                else {
-                  setLigandFile(null);
-                  setLigandToken(null);
-                  onLigandContentChange?.(null);
-                  setBricsFragments([]);
-                  setSelectedFragmentIds([]);
-                  setBricsRawSdf(null);
-                  setBricsExpanded(false);
-                }
-              }}
-              acceptedTypes={['.sdf']}
-              maxFiles={1}
-              maxSize={10 * 1024 * 1024}
-            />
-
-            {/* BRICS Fragment Selection */}
-            {dockingMode === 'Rigid Docking' && ligandToken && (bricsLoading || bricsFragments.length > 0) && (
-              <div className="mt-3 border border-slate-200 rounded-xl overflow-hidden">
+            {!ligandFile ? (
+              <>
+                <FileUpload
+                  key={`ligand-${dockingMode}-${formResetKey}`}
+                  onFilesUploaded={async (files) => {
+                    if (files.length > 0) handleLigandUpload(files[0]);
+                    else {
+                      setLigandFile(null);
+                      setLigandToken(null);
+                      onLigandContentChange?.(null);
+                      setBricsFragments([]);
+                      fixedSelection.resetSelection();
+                      setBricsRawSdf(null);
+                      setFixStructureExpanded(false);
+                    }
+                  }}
+                  acceptedTypes={['.sdf']}
+                  maxFiles={1}
+                  maxSize={10 * 1024 * 1024}
+                />
+                <LoadFromJobPicker
+                  acceptedExtensions={['.sdf']}
+                  onFileLoaded={handleLigandUpload}
+                  disabled={isSubmitting}
+                />
+              </>
+            ) : (
+              <div className="p-3 border border-blue-200 bg-blue-50/50 rounded-xl relative group">
                 <button
-                  onClick={() => setBricsExpanded(!bricsExpanded)}
-                  className="w-full flex items-center justify-between px-3 py-2 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
+                  onClick={() => {
+                    setLigandFile(null);
+                    setLigandToken(null);
+                    onLigandContentChange?.(null);
+                    setBricsFragments([]);
+                    fixedSelection.resetSelection();
+                    setBricsRawSdf(null);
+                    setFixStructureExpanded(false);
+                  }}
+                  className="absolute top-2 right-2 p-1 text-blue-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                  title="Remove ligand file"
                 >
-                  <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                    Fix Fragments
-                    <span className="text-[10px] font-normal text-slate-400">(optional)</span>
-                    {selectedFragmentIds.length > 0 && (
-                      <span className="ml-1 px-1.5 py-0.5 bg-primary-100 text-primary-700 rounded-full text-[10px] font-bold">
-                        {selectedFragmentIds.length}
-                      </span>
-                    )}
-                  </span>
-                  {bricsExpanded ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
+                  <X className="w-3.5 h-3.5" />
                 </button>
-                {bricsExpanded && (
-                  <div className="p-3 border-t border-slate-200">
-                    {bricsLoading ? (
-                      <div className="flex items-center gap-2 text-xs text-slate-500 py-4 justify-center">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Analyzing fragments...
-                      </div>
-                    ) : bricsRawSdf ? (
-                      <FragmentSelector
-                        fragments={bricsFragments}
-                        selectedFragmentIds={selectedFragmentIds}
-                        onSelectionChange={setSelectedFragmentIds}
-                      />
-                    ) : null}
+                <div className="flex items-center gap-2.5">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-blue-900 truncate">
+                      {ligandFile.name || 'Ligand File'}
+                    </p>
+                    <p className="text-[10px] text-blue-600 font-bold uppercase tracking-tight flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" aria-hidden />
+                      Processed
+                    </p>
                   </div>
-                )}
+                </div>
               </div>
+            )}
+
+            {dockingMode === 'Rigid Docking' && ligandFile && (bricsLoading || bricsFragments.length > 0) && (
+              <FixedStructurePanel
+                expanded={fixStructureExpanded}
+                onExpandedChange={setFixStructureExpanded}
+                bricsLoading={bricsLoading}
+                bricsRawSdf={bricsRawSdf}
+                bricsFragments={bricsFragments}
+                mode={fixedSelection.mode}
+                onModeChange={fixedSelection.switchMode}
+                selectionAction={fixedSelection.selectionAction}
+                onSelectionActionChange={fixedSelection.setSelectionAction}
+                selectedFragmentIds={fixedSelection.selectedFragmentIds}
+                mixedFragmentIds={fixedSelection.mixedFragmentIds}
+                onFragmentSelectionChange={fixedSelection.setSelectedFragmentIds}
+                onAddFragment={fixedSelection.addFragmentAtoms}
+                onToggleFragment={fixedSelection.toggleFragmentAtoms}
+                fixedCount={fixedSelection.fixedCount}
+                totalAtomCount={totalAtomCount}
+                onClear={fixedSelection.clearSelection}
+                onInvert={fixedSelection.invertSelection}
+              />
             )}
           </div>
         )}
@@ -1068,6 +1188,12 @@ export function DockingForm({
         </div>
       </div>
 
+      <MetricsOptionsForm
+        samplingMode={dockingMode}
+        options={metricsOptions}
+        onChange={setMetricsOptions}
+      />
+
       {
         error && (
           <div className="p-4 bg-red-50/70 rounded-xl text-sm text-red-700 shadow-sm">
@@ -1076,10 +1202,19 @@ export function DockingForm({
         )
       }
 
+      <div className="flex gap-2">
+      <button
+        type="button"
+        onClick={resetForm}
+        disabled={isSubmitting}
+        className="px-4 py-3.5 border border-slate-200 text-slate-700 rounded-xl font-semibold hover:bg-slate-50 disabled:opacity-50 transition-all"
+      >
+        Clear form
+      </button>
       <button
         onClick={handleSubmit}
         disabled={isSubmitting}
-        className="w-full px-5 py-3.5 bg-primary-600 text-white rounded-xl font-semibold hover:bg-primary-700 disabled:bg-slate-400 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md flex items-center justify-center gap-2"
+        className="flex-1 px-5 py-3.5 bg-primary-600 text-white rounded-xl font-semibold hover:bg-primary-700 disabled:bg-slate-400 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow-md flex items-center justify-center gap-2"
       >
         {isSubmitting ? (
           <>
@@ -1088,10 +1223,12 @@ export function DockingForm({
           </>
         ) : (
           <>
-            🚀 Run Docking
+            <Play className="w-5 h-5" aria-hidden />
+            Run Docking
           </>
         )}
       </button>
+      </div>
     </div >
   );
 }

@@ -1207,6 +1207,8 @@ class OMTRA(pl.LightningModule):
         noise_scaler: float = 1.0,
         eps: float = 0.01,
         n_lig_atom_margin: Union[float, None] = None,
+        n_lig_atoms_mean: Union[float, None] = None,
+        n_lig_atoms_std: Union[float, None] = None,
         fixed_coord_max_std: Optional[float] = None,
         fixed_coord_std: Optional[float] = None,
         fixed_token_max_prob: Optional[float] = None,
@@ -1219,11 +1221,36 @@ class OMTRA(pl.LightningModule):
 
         chunk_size = min(n_samples, max_batch_size) # handle case where max_batch_size < # samples
 
+        sample_kwargs = dict(
+            task_name=task_name,
+            unconditional_n_atoms_dist=unconditional_n_atoms_dist,
+            device=device,
+            n_timesteps=n_timesteps,
+            visualize=visualize,
+            extract_latents_for_confidence=extract_latents_for_confidence,
+            time_spacing=time_spacing,
+            stochastic_sampling=stochastic_sampling,
+            noise_scaler=noise_scaler,
+            eps=eps,
+            n_lig_atom_margin=n_lig_atom_margin,
+            n_lig_atoms_mean=n_lig_atoms_mean,
+            n_lig_atoms_std=n_lig_atoms_std,
+            fixed_coord_max_std=fixed_coord_max_std,
+            fixed_coord_std=fixed_coord_std,
+            fixed_token_max_prob=fixed_token_max_prob,
+            fixed_token_prob=fixed_token_prob,
+        )
+
         for start_idx in range(0, n_samples, chunk_size):
             end_idx = min(start_idx + chunk_size, n_samples)
-            g_chunk = g_list[start_idx:end_idx]
-            coms_chunk = coms[start_idx:end_idx]
-            n_chunk = len(g_chunk)
+            if g_list is not None:
+                g_chunk = g_list[start_idx:end_idx]
+                coms_chunk = coms[start_idx:end_idx] if coms is not None else None
+                n_chunk = len(g_chunk)
+            else:
+                g_chunk = None
+                coms_chunk = coms
+                n_chunk = 1
 
             # Determine reps per batch for this chunk
             reps_per_batch = max(1, max_batch_size // n_chunk)
@@ -1231,25 +1258,12 @@ class OMTRA(pl.LightningModule):
             last_batch_reps = n_replicates % reps_per_batch
 
             for i in range(n_full_batches):
-                batch_results = self.sample(g_list=g_chunk,
-                                            n_replicates=reps_per_batch,
-                                            task_name=task_name,
-                                            unconditional_n_atoms_dist=unconditional_n_atoms_dist,
-                                            device=device,
-                                            n_timesteps=n_timesteps,
-                                            visualize=visualize,
-                                            coms=coms_chunk,
-                                            extract_latents_for_confidence=extract_latents_for_confidence,
-                                            time_spacing=time_spacing,
-                                            stochastic_sampling=stochastic_sampling,
-                                            noise_scaler=noise_scaler,
-                                            eps=eps,
-                                            n_lig_atom_margin=n_lig_atom_margin,
-                                            fixed_coord_max_std=fixed_coord_max_std,
-                                            fixed_coord_std=fixed_coord_std,
-                                            fixed_token_max_prob=fixed_token_max_prob,
-                                            fixed_token_prob=fixed_token_prob
-                                            )
+                batch_results = self.sample(
+                    g_list=g_chunk,
+                    n_replicates=reps_per_batch,
+                    coms=coms_chunk,
+                    **sample_kwargs,
+                )
                 # re-order samples
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):
                     start = i * reps_per_batch  # starting index in the chunk results
@@ -1260,25 +1274,12 @@ class OMTRA(pl.LightningModule):
                 
             # last batch
             if last_batch_reps > 0:
-                batch_results = self.sample(g_list=g_chunk,
-                                            n_replicates=last_batch_reps,
-                                            task_name=task_name,
-                                            unconditional_n_atoms_dist=unconditional_n_atoms_dist,
-                                            device=device,
-                                            n_timesteps=n_timesteps,
-                                            visualize=visualize,
-                                            coms=coms_chunk,
-                                            extract_latents_for_confidence=extract_latents_for_confidence,
-                                            time_spacing=time_spacing,
-                                            stochastic_sampling=stochastic_sampling,
-                                            noise_scaler=noise_scaler,
-                                            eps=eps,
-                                            n_lig_atom_margin=n_lig_atom_margin,
-                                            fixed_coord_max_std=fixed_coord_max_std,
-                                            fixed_coord_std=fixed_coord_std,
-                                            fixed_token_max_prob=fixed_token_max_prob,
-                                            fixed_token_prob=fixed_token_prob
-                                            )
+                batch_results = self.sample(
+                    g_list=g_chunk,
+                    n_replicates=last_batch_reps,
+                    coms=coms_chunk,
+                    **sample_kwargs,
+                )
 
                 for i, sys_idx in enumerate(range(start_idx, end_idx)):
                     start = i * last_batch_reps

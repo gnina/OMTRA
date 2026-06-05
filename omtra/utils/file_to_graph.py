@@ -1,13 +1,14 @@
 import numpy as np
 import torch
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from rdkit import Chem
 
 from omtra.tasks.tasks import Task
 from omtra.constants import (
     lig_atom_type_map,
+    npnde_atom_type_map,
     charge_map,
     ph_idx_to_type,
     ph_idx_to_elem,
@@ -16,14 +17,17 @@ from omtra.constants import (
     protein_atom_map,
 )
 from omtra.data.graph import build_complex_graph
-from omtra.data.xace_ligand import MoleculeTensorizer
+from omtra.data.xace_ligand import MoleculeTensorizer, add_k_hop_edges
 from omtra.data.plinder import StructureData, LigandData, BackboneData
 from omtra.data.condensed_atom_typing import CondensedAtomTyper
 from omtra.utils.embedding import residue_sinusoidal_encoding
 
 
 # loaders
-def load_protein_biotite(protein_file: Path) -> StructureData:
+def load_protein_biotite(
+    protein_file: Path,
+    return_npnde_mols: bool = False,
+):
     try:
         from biotite.structure.io import pdb
         from biotite.structure.io.pdbx import CIFFile, get_structure
@@ -45,9 +49,17 @@ def load_protein_biotite(protein_file: Path) -> StructureData:
     st = st[st.element != "H"]
     st = st[st.element != "D"]
 
-    coords = st.coord
-    if coords.size == 0:
+    if st.array_length() == 0:
         raise ValueError("Protein structure has no atoms")
+
+    npnde_mols: Dict[str, Chem.Mol] = {}
+    if return_npnde_mols:
+        st.bonds = struc.connect_via_residue_names(st)
+        st, npnde_mols = _split_protein_and_npndes(st)
+        if st.array_length() == 0:
+            raise ValueError("Protein structure has no amino-acid atoms after npnde extraction")
+
+    coords = st.coord
     backbone_mask = struc.filter_peptide_backbone(st)
     backbone = BackboneData(
         coords=coords[backbone_mask],
@@ -56,7 +68,7 @@ def load_protein_biotite(protein_file: Path) -> StructureData:
         chain_ids=st.chain_id[backbone_mask],
     )
 
-    return StructureData(
+    structure_data = StructureData(
         coords=coords,
         atom_names=st.atom_name,
         elements=st.element,
@@ -67,6 +79,58 @@ def load_protein_biotite(protein_file: Path) -> StructureData:
         backbone=backbone,
         cif=None,
     )
+
+    if return_npnde_mols:
+        return structure_data, npnde_mols
+    return structure_data
+
+
+def _is_protein(mol_array) -> bool:
+    """Return True if every atom in ``mol_array`` is an amino-acid atom."""
+    import biotite.structure as struc
+
+    mask = struc.filter_amino_acids(mol_array)
+    return int(sum(mask)) == len(mol_array)
+
+
+def _split_protein_and_npndes(atom_array) -> Tuple["object", Dict[str, Chem.Mol]]:
+    """Split a biotite AtomArray into amino-acid atoms and non-polymer molecules.
+    """
+    from biotite.structure import molecule_iter
+
+    if atom_array.array_length() == 0:
+        return atom_array, {}
+
+    try:
+        from biotite.interface.rdkit import to_mol
+    except ImportError:
+        aa_mask = _aa_mask(atom_array)
+        return atom_array[aa_mask], {}
+
+    protein_mask = np.zeros(len(atom_array), dtype=bool)
+    npnde_mols: Dict[str, Chem.Mol] = {}
+    npnde_count = 0
+    current_idx = 0
+
+    for molecule in molecule_iter(atom_array):
+        molecule_len = len(molecule)
+        if _is_protein(molecule):
+            protein_mask[current_idx:current_idx + molecule_len] = True
+        else:
+            npnde_count += 1
+            npnde_mol = to_mol(molecule)
+            if npnde_mol is not None:
+                npnde_mols[f"npnde_{npnde_count}"] = npnde_mol
+        current_idx += molecule_len
+
+    cleaned = atom_array[protein_mask]
+    return cleaned, npnde_mols
+
+
+def _aa_mask(atom_array):
+    import biotite.structure as struc
+
+    return struc.filter_amino_acids(atom_array)
 
 
 def _build_edge_mask(fixed_atom_mask: np.ndarray, xace_edge_idxs: torch.Tensor) -> np.ndarray:
@@ -122,10 +186,31 @@ def _fixed_masks_from_brics_precomputed(
     return fixed_atom_mask, fixed_edge_mask
 
 
+def _fixed_masks_from_atom_indices(
+    n_atoms: int,
+    xace_edge_idxs: torch.Tensor,
+    fixed_atom_indices: Sequence[int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build atom/edge fixed masks from atom indices."""
+    fixed_atom_mask = np.zeros(n_atoms, dtype=np.int64)
+    if fixed_atom_indices:
+        idx_arr = np.asarray(list(fixed_atom_indices), dtype=np.int64)
+        if np.any(idx_arr < 0) or np.any(idx_arr >= n_atoms):
+            bad = idx_arr[(idx_arr < 0) | (idx_arr >= n_atoms)]
+            raise ValueError(
+                f"fixed atom index(ices) {bad.tolist()} out of range for ligand with "
+                f"{n_atoms} atoms (valid: 0..{n_atoms - 1})"
+            )
+        fixed_atom_mask[idx_arr] = 1
+    fixed_edge_mask = _build_edge_mask(fixed_atom_mask, xace_edge_idxs)
+    return fixed_atom_mask, fixed_edge_mask
+
+
 def load_ligand_rdkit(
     ligand_file: Path,
     compute_condensed: bool = False,
     fixed_brics_fragments: Optional[Sequence[int]] = None,
+    fixed_atom_indices: Optional[Sequence[int]] = None,
 ) -> LigandData:
     supplier = Chem.SDMolSupplier(str(ligand_file))
     mol = next(supplier)
@@ -149,7 +234,6 @@ def load_ligand_rdkit(
         raise ValueError(f"Ligand featurization failed: {failures}")
     xace = valid_mols[0]
     xace.to_torch()
-    xace = xace.sparse_to_dense()
 
     atom_cond_a = None
     if compute_condensed:
@@ -172,15 +256,26 @@ def load_ligand_rdkit(
 
     fixed_atom_mask = None
     fixed_edge_mask = None
-    if fixed_brics_fragments is not None:
-        fixed_atom_mask, fixed_edge_mask = _fixed_masks_from_brics_precomputed(
-            pre_kekulize_brics_frags, xace.edge_idxs, fixed_brics_fragments
-        )
+    if fixed_atom_indices is not None or fixed_brics_fragments is not None:
+        n_atoms = xace.x.shape[0]
+        combined_atom_mask = np.zeros(n_atoms, dtype=np.int64)
+        if fixed_atom_indices is not None:
+            atom_mask, _ = _fixed_masks_from_atom_indices(
+                n_atoms, xace.edge_idxs, fixed_atom_indices
+            )
+            combined_atom_mask |= atom_mask
+        if fixed_brics_fragments is not None:
+            brics_atom_mask, _ = _fixed_masks_from_brics_precomputed(
+                pre_kekulize_brics_frags, xace.edge_idxs, fixed_brics_fragments
+            )
+            combined_atom_mask |= brics_atom_mask
+        fixed_atom_mask = combined_atom_mask
+        fixed_edge_mask = _build_edge_mask(fixed_atom_mask, xace.edge_idxs)
 
     return LigandData(
         coords=xace.x,
         bond_types=xace.e,
-        bond_indices=xace.edge_idxs.T,
+        bond_indices=np.asarray(xace.edge_idxs.cpu().numpy()),
         is_covalent=False,
         ccd="LIG",
         sdf=str(ligand_file),
@@ -423,6 +518,159 @@ def _create_pocket_from_indices(
         cif=None,
     )
 
+def featurize_npnde_mols(
+    npnde_mols: Dict[str, Chem.Mol],
+) -> Dict[str, LigandData]:
+    if not npnde_mols:
+        return {}
+
+    keys = list(npnde_mols.keys())
+    mols = list(npnde_mols.values())
+
+    tensorizer = MoleculeTensorizer(atom_map=npnde_atom_type_map, n_cpus=1)
+    xace_mols, failed_idxs, _failure_counts, _tcv_counts = tensorizer.featurize_molecules(mols)
+
+    kept_keys = [key for i, key in enumerate(keys) if i not in failed_idxs]
+
+    npnde_data: Dict[str, LigandData] = {}
+    for i, key in enumerate(kept_keys):
+        xace = xace_mols[i]
+        npnde_data[key] = LigandData(
+            sdf=None,
+            ccd=None,
+            coords=np.asarray(xace.x, dtype=np.float32),
+            atom_types=np.asarray(xace.a, dtype=np.int64),
+            atom_charges=np.asarray(xace.c, dtype=np.int64),
+            bond_types=np.asarray(xace.e, dtype=np.int64),
+            bond_indices=np.asarray(xace.edge_idxs, dtype=np.int64),
+            is_covalent=False,
+            linkages=None,
+        )
+    return npnde_data
+
+
+def _encode_charges(charges: torch.Tensor, charge_map_tensor: torch.Tensor) -> torch.Tensor:
+    return torch.searchsorted(charge_map_tensor, charges)
+
+
+def build_npnde_graph_data(
+    npndes: Dict[str, LigandData],
+    charge_map_tensor: torch.Tensor,
+    graph_config,
+) -> Tuple[Dict[str, Dict[str, torch.Tensor]], Dict[str, torch.Tensor], Dict[str, Dict[str, torch.Tensor]]]:
+
+    node_data: Dict[str, Dict[str, torch.Tensor]] = {}
+    edge_data: Dict[str, Dict[str, torch.Tensor]] = {}
+    edge_idxs: Dict[str, torch.Tensor] = {}
+
+    node_data["npnde"] = {
+        "x_1_true": torch.zeros((0, 3), dtype=torch.float32),
+        "a_1_true": torch.zeros((0,), dtype=torch.long),
+        "c_1_true": torch.zeros((0,), dtype=torch.long),
+    }
+    edge_data["npnde_to_npnde"] = {"e_1_true": torch.zeros((0,), dtype=torch.long)}
+    edge_idxs["npnde_to_npnde"] = torch.zeros((2, 0), dtype=torch.long)
+
+    if not npndes:
+        return node_data, edge_idxs, edge_data
+
+    all_coords: List[torch.Tensor] = []
+    all_atom_types: List[torch.Tensor] = []
+    all_atom_charges: List[torch.Tensor] = []
+    all_bond_types: List[torch.Tensor] = []
+    all_bond_indices: List[torch.Tensor] = []
+
+    node_offset = 0
+    for _, ligand_data in npndes.items():
+        coords = torch.from_numpy(np.asarray(ligand_data.coords, dtype=np.float32)).float()
+        atom_types = torch.from_numpy(np.asarray(ligand_data.atom_types, dtype=np.int64)).long()
+        atom_charges = torch.from_numpy(np.asarray(ligand_data.atom_charges, dtype=np.int64)).long()
+
+        all_coords.append(coords)
+        all_atom_types.append(atom_types)
+        all_atom_charges.append(atom_charges)
+
+        has_bonds = (
+            ligand_data.bond_types is not None
+            and ligand_data.bond_indices is not None
+            and np.asarray(ligand_data.bond_types).shape[0] > 0
+        )
+        if has_bonds:
+            bond_types = torch.from_numpy(np.asarray(ligand_data.bond_types, dtype=np.int64)).long()
+            bond_indices = torch.from_numpy(np.asarray(ligand_data.bond_indices, dtype=np.int64)).long()
+            adjusted = bond_indices.clone()
+            adjusted[:, 0] += node_offset
+            adjusted[:, 1] += node_offset
+            all_bond_types.append(bond_types)
+            all_bond_indices.append(adjusted)
+
+        node_offset += coords.shape[0]
+
+    combined_coords = torch.cat(all_coords, dim=0) if all_coords else torch.zeros((0, 3), dtype=torch.float32)
+    combined_atom_types = torch.cat(all_atom_types, dim=0) if all_atom_types else torch.zeros((0,), dtype=torch.long)
+    combined_atom_charges = torch.cat(all_atom_charges, dim=0) if all_atom_charges else torch.zeros((0,), dtype=torch.long)
+
+    if all_bond_types and all_bond_indices:
+        combined_bond_types = torch.cat(all_bond_types, dim=0)
+        combined_bond_indices = torch.cat(all_bond_indices, dim=0)
+        k = graph_config["edges"]["npnde_to_npnde"]["params"]["k"]
+        npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = add_k_hop_edges(
+            combined_coords,
+            combined_atom_types,
+            combined_atom_charges,
+            combined_bond_types,
+            combined_bond_indices,
+            k=k,
+        )
+        npnde_c = _encode_charges(npnde_c, charge_map_tensor)
+        node_data["npnde"] = {
+            "x_1_true": npnde_x,
+            "a_1_true": npnde_a,
+            "c_1_true": npnde_c,
+        }
+        edge_data["npnde_to_npnde"] = {"e_1_true": npnde_e}
+        edge_idxs["npnde_to_npnde"] = npnde_edge_idxs
+    else:
+        combined_atom_charges = _encode_charges(combined_atom_charges, charge_map_tensor)
+        node_data["npnde"] = {
+            "x_1_true": combined_coords,
+            "a_1_true": combined_atom_types,
+            "c_1_true": combined_atom_charges,
+        }
+
+    return node_data, edge_idxs, edge_data
+
+
+def _filter_npndes_by_pocket(
+    npnde_mols: Dict[str, Chem.Mol],
+    reference_coords: np.ndarray,
+    cutoff: float,
+) -> Dict[str, Chem.Mol]:
+    """Keep only cofactor mols with any atom within ``cutoff`` of ``reference_coords``."""
+    if not npnde_mols or reference_coords is None or len(reference_coords) == 0:
+        return {}
+
+    ref = np.asarray(reference_coords, dtype=np.float32)
+    if ref.ndim == 1:
+        ref = ref[None, :]
+
+    kept: Dict[str, Chem.Mol] = {}
+    cutoff_sq = float(cutoff) ** 2
+    for key, mol in npnde_mols.items():
+        try:
+            conf = mol.GetConformer()
+        except ValueError:
+            continue
+        positions = np.asarray(conf.GetPositions(), dtype=np.float32)
+        if positions.size == 0:
+            continue
+        diffs = positions[:, None, :] - ref[None, :, :]
+        d2 = np.einsum("ijk,ijk->ij", diffs, diffs)
+        if np.any(d2 <= cutoff_sq):
+            kept[key] = mol
+    return kept
+
+
 def _residue_spec_mask(atom_array, residue_specs):
     masks = []
     for spec in residue_specs:
@@ -447,15 +695,20 @@ def create_conditional_graphs_from_files(
     pocket_cutoff: Optional[float] = 8.0,
     use_pocket: bool = True,
     fixed_brics_fragments: Optional[Sequence[int]] = None,
+    fixed_atom_indices: Optional[Sequence[int]] = None,
 ):
-    receptor = load_protein_biotite(protein_file) if protein_file is not None else None
-    
+    receptor = None
+    npnde_mols: Dict[str, Chem.Mol] = {}
+    if protein_file is not None:
+        receptor, npnde_mols = load_protein_biotite(protein_file, return_npnde_mols=True)
+
     needs_condensed = 'ligand_identity_condensed' in task.groups_present
     ligand = (
         load_ligand_rdkit(
             ligand_file,
             compute_condensed=needs_condensed,
             fixed_brics_fragments=fixed_brics_fragments,
+            fixed_atom_indices=fixed_atom_indices,
         )
         if ligand_file is not None
         else None
@@ -481,6 +734,8 @@ def create_conditional_graphs_from_files(
     else:
         pharm_coords, pharm_types = (None, None)
     
+    npnde_reference_coords: Optional[np.ndarray] = None
+
     if use_pocket and receptor is not None and pocket_cutoff is not None:
         if pocket_definition is not None:
             pocket_type = pocket_definition.get('type')
@@ -494,6 +749,7 @@ def create_conditional_graphs_from_files(
                     pocket = extract_pocket(receptor, reference_coords, pocket_cutoff=pocket_cutoff)
                     if pocket is not None:
                         receptor = pocket
+                    npnde_reference_coords = np.asarray(reference_coords, dtype=np.float32)
 
             elif pocket_type == 'coords':
                 # for Pocketeer alpha sphere centers.
@@ -505,6 +761,7 @@ def create_conditional_graphs_from_files(
                 pocket = extract_pocket(receptor, reference_coords, pocket_cutoff=pocket_cutoff)
                 if pocket is not None:
                     receptor = pocket
+                npnde_reference_coords = np.asarray(reference_coords, dtype=np.float32)
                         
             elif pocket_type == 'center':
                 # Create pocket from bounding box around center point
@@ -521,6 +778,7 @@ def create_conditional_graphs_from_files(
                     selector=residue_selector,
                     error_context=f"bounding box (size {bbox_length}Å) around center {center_point}",
                 )
+                npnde_reference_coords = center_point[None, :]
                 
             elif pocket_type == 'residues':
                 # Create pocket from specified residues
@@ -530,12 +788,24 @@ def create_conditional_graphs_from_files(
                     selector=lambda aa: _residue_spec_mask(aa, residue_specs),
                     error_context=f"specified residues: {residue_specs}",
                 )
+                npnde_reference_coords = receptor.coords if receptor is not None else None
         else:
             # fall back to protein center of mass
             reference_coords = np.mean(receptor.coords, axis=0, keepdims=True)
             pocket = extract_pocket(receptor, reference_coords, pocket_cutoff=pocket_cutoff)
             if pocket is not None:
                 receptor = pocket
+            npnde_reference_coords = np.asarray(reference_coords, dtype=np.float32)
+
+
+    if npnde_mols:
+        if npnde_reference_coords is not None and pocket_cutoff is not None:
+            npnde_mols = _filter_npndes_by_pocket(
+                npnde_mols,
+                npnde_reference_coords,
+                cutoff=float(pocket_cutoff),
+            )
+    npnde_data = featurize_npnde_mols(npnde_mols) if npnde_mols else {}
 
     charge_map_tensor = torch.tensor(charge_map)
     from omegaconf import OmegaConf
@@ -579,8 +849,8 @@ def create_conditional_graphs_from_files(
             if len(task.partial_modalities_fixed) > 0:
                 if lig_xace.fixed_atom_mask is None or lig_xace.fixed_edge_mask is None:
                     raise ValueError(
-                        "This task uses partial ligand conditioning; provide fixed BRICS fragments "
-                        "via --fixed-brics-fragments when using --ligand_file."
+                        "This task uses partial ligand conditioning; provide fixed atoms via "
+                        "--fixed-atoms and/or fixed BRICS fragments via --fixed-brics-fragments along with --ligand_file."
                     )
                 node_data['lig']['atom_mask_1_true'] = lig_xace.fixed_atom_mask.long()
                 edge_data['lig_to_lig']['edge_mask_1_true'] = lig_xace.fixed_edge_mask.long()
@@ -669,7 +939,17 @@ def create_conditional_graphs_from_files(
                 'x_1_true': torch.from_numpy(pharm_coords).float(),
                 'a_1_true': torch.from_numpy(pharm_types).long(),
             }
-        
+
+        # npnde nodes
+        if npnde_data:
+            npnde_node_data, npnde_edge_idxs, npnde_edge_data = build_npnde_graph_data(
+                npnde_data, charge_map_tensor, graph_config
+            )
+            node_data.update(npnde_node_data)
+            edge_idxs.update(npnde_edge_idxs)
+            for etype, feats in npnde_edge_data.items():
+                edge_data[etype] = feats
+
         g = build_complex_graph(
             node_data=node_data,
             edge_idxs=edge_idxs,

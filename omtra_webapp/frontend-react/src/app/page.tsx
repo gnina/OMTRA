@@ -1,12 +1,14 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useFixedAtomSelection } from '@/hooks/useFixedAtomSelection';
 import { JobSubmissionForm } from '@/components/JobSubmissionForm';
 import { DockingForm } from '@/components/DockingForm';
 import { JobList } from '@/components/JobList';
 import { JobViewer } from '@/components/JobViewer';
 import { HelpTab } from '@/components/HelpTab';
 import { CentralSelectionViewer } from '@/components/CentralSelectionViewer';
+import { AlertTriangle } from 'lucide-react';
 
 import type { PocketInfo, BricsFragment } from '@/types';
 
@@ -14,6 +16,8 @@ export default function HomePage() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'submit' | 'jobs' | 'help'>('submit');
   const [workflowMode, setWorkflowMode] = useState<'denovo' | 'docking'>('denovo');
+  const [denovoTask, setDenovoTask] = useState<any>('Unconditional');
+  const [dockingTask, setDockingTask] = useState<any>('Rigid Docking');
 
   // Resizable sidebar state
   const [sidebarWidth, setSidebarWidth] = useState(33.33); // percentage
@@ -46,8 +50,18 @@ export default function HomePage() {
 
   // BRICS fragment state (lifted from forms)
   const [bricsFragments, setBricsFragments] = useState<BricsFragment[]>([]);
-  const [selectedFragmentIds, setSelectedFragmentIds] = useState<number[]>([]);
   const [bricsRawSdf, setBricsRawSdf] = useState<string | null>(null);
+  const [fixStructureExpanded, setFixStructureExpanded] = useState(false);
+
+  const totalAtomCount = useMemo(() => {
+    const indices = new Set<number>();
+    for (const frag of bricsFragments) {
+      for (const i of frag.atom_indices) indices.add(i);
+    }
+    return indices.size;
+  }, [bricsFragments]);
+
+  const fixedSelection = useFixedAtomSelection(bricsFragments, totalAtomCount);
 
   // UI State
 
@@ -143,8 +157,10 @@ export default function HomePage() {
               </button>
               <button
                 onClick={() => {
+                  if (activeTab === 'jobs') {
+                    setSelectedJobId(null);
+                  }
                   setActiveTab('jobs');
-                  setSelectedJobId(null);
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 className={`text-sm font-medium transition-colors ${activeTab === 'jobs'
@@ -176,7 +192,7 @@ export default function HomePage() {
         <div className="mx-auto max-w-[95%] xl:max-w-[1400px] px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-start gap-3">
             <div className="flex-shrink-0 mt-0.5">
-              <span className="text-amber-600 text-lg">⚠️</span>
+              <AlertTriangle className="w-5 h-5 text-amber-600" aria-hidden />
             </div>
             <div className="flex-1 text-sm text-amber-900">
               <p className="font-medium mb-1">Disclaimer</p>
@@ -235,8 +251,9 @@ export default function HomePage() {
                             setRefLigandContent(null);
                             setRefLigandToken(null);
                             setBricsFragments([]);
-                            setSelectedFragmentIds([]);
+                            fixedSelection.resetSelection();
                             setBricsRawSdf(null);
+                            setFixStructureExpanded(false);
                           }
                         }}
                         className={`px-4 py-2.5 rounded-xl font-medium text-sm transition-all ${workflowMode === 'denovo'
@@ -266,8 +283,9 @@ export default function HomePage() {
                             setRefLigandContent(null);
                             setRefLigandToken(null);
                             setBricsFragments([]);
-                            setSelectedFragmentIds([]);
+                            fixedSelection.resetSelection();
                             setBricsRawSdf(null);
+                            setFixStructureExpanded(false);
                           }
                         }}
                         className={`px-4 py-2.5 rounded-xl font-medium text-sm transition-all ${workflowMode === 'docking'
@@ -283,6 +301,8 @@ export default function HomePage() {
                   {/* Forms - Persisted via simple conditional or CSS? Using conditional for mode switch is standard, but if user wants sidebar consistency across modes, CSS is better. Given the shared protein state but distinct form inputs, unmounting removes inputs. User specifically complained about switching TABS (Submit vs Jobs). Switching MODES usually implies a reset. I will stick to persisting TABS only for now, unless directed otherwise. */}
                   {workflowMode === 'denovo' ? (
                     <JobSubmissionForm
+                      initialSamplingMode={denovoTask}
+                      onSamplingModeChange={setDenovoTask}
                       onJobSubmitted={setSelectedJobId}
                       onProteinContentChange={setProteinContent}
                       onProteinFormatChange={setProteinFormat}
@@ -315,13 +335,17 @@ export default function HomePage() {
                       onPharmacophoreToleranceChange={setPharmacophoreTolerance}
                       bricsFragments={bricsFragments}
                       setBricsFragments={setBricsFragments}
-                      selectedFragmentIds={selectedFragmentIds}
-                      setSelectedFragmentIds={setSelectedFragmentIds}
                       bricsRawSdf={bricsRawSdf}
                       setBricsRawSdf={setBricsRawSdf}
+                      fixStructureExpanded={fixStructureExpanded}
+                      setFixStructureExpanded={setFixStructureExpanded}
+                      fixedSelection={fixedSelection}
+                      totalAtomCount={totalAtomCount}
                     />
                   ) : (
                     <DockingForm
+                      initialDockingMode={dockingTask}
+                      onDockingModeChange={setDockingTask}
                       onJobSubmitted={setSelectedJobId}
                       onProteinContentChange={setProteinContent}
                       onProteinFormatChange={setProteinFormat}
@@ -352,10 +376,12 @@ export default function HomePage() {
                       setRefLigandFileName={setRefLigandFileName}
                       bricsFragments={bricsFragments}
                       setBricsFragments={setBricsFragments}
-                      selectedFragmentIds={selectedFragmentIds}
-                      setSelectedFragmentIds={setSelectedFragmentIds}
                       bricsRawSdf={bricsRawSdf}
                       setBricsRawSdf={setBricsRawSdf}
+                      fixStructureExpanded={fixStructureExpanded}
+                      setFixStructureExpanded={setFixStructureExpanded}
+                      fixedSelection={fixedSelection}
+                      totalAtomCount={totalAtomCount}
                     />
                   )}
                 </div>
@@ -376,6 +402,7 @@ export default function HomePage() {
             <div className="flex-1 bg-slate-50 p-6 overflow-hidden">
               <div className="h-full bg-white rounded-2xl shadow-[0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1)] p-6">
                 <CentralSelectionViewer
+                  visible={activeTab === 'submit'}
                   proteinContent={proteinContent || undefined}
                   proteinFormat={proteinFormat}
                   ligandContent={ligandContent || undefined}
@@ -401,9 +428,17 @@ export default function HomePage() {
                   refLigandContent={refLigandContent || undefined}
                   pharmacophoreTolerance={parseFloat(pharmacophoreTolerance)}
                   bricsFragments={bricsFragments}
-                  selectedFragmentIds={selectedFragmentIds}
-                  onFragmentSelectionChange={setSelectedFragmentIds}
+                  selectedFragmentIds={fixedSelection.selectedFragmentIds}
+                  onFragmentSelectionChange={fixedSelection.setSelectedFragmentIds}
                   bricsRawSdf={bricsRawSdf || undefined}
+                  fixStructureActive={!!bricsRawSdf && bricsFragments.length > 1 && ((workflowMode === 'denovo' && denovoTask === 'Protein-conditioned') || (workflowMode === 'docking' && dockingTask === 'Rigid Docking'))}
+                  fixStructureMode={fixedSelection.mode}
+                  selectionAction={fixedSelection.selectionAction}
+                  selectedAtomIndices={fixedSelection.fixedAtomIndicesForSubmit}
+                  onAtomClick={(idx) => fixedSelection.applyActionToAtoms([idx])}
+                  onAtomsInBox={(indices) => fixedSelection.applyActionToAtoms(indices)}
+                  onFragmentsInBox={(ids) => fixedSelection.toggleFragmentIdsInBox(ids)}
+                  onToggleFragmentByAtom={fixedSelection.toggleFragmentByAtom}
                 />
               </div>
             </div>
@@ -411,34 +446,30 @@ export default function HomePage() {
         </div>
 
         {/* Jobs Tab */}
-        {
-          activeTab === 'jobs' && (
-            <section className="py-8">
-              <div className="mx-auto max-w-[95%] xl:max-w-[1400px] px-4 sm:px-6 lg:px-8">
-                <div className="bg-white rounded-2xl shadow-[0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1)] p-6">
-                  {selectedJobId ? (
-                    <JobViewer jobId={selectedJobId} onBack={() => setSelectedJobId(null)} />
-                  ) : (
-                    <JobList onJobSelect={setSelectedJobId} />
-                  )}
-                </div>
+        <div className={activeTab === 'jobs' ? 'block' : 'hidden'}>
+          <section className="py-8">
+            <div className="mx-auto max-w-[95%] xl:max-w-[1400px] px-4 sm:px-6 lg:px-8">
+              <div className="bg-white rounded-2xl shadow-[0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1)] p-6">
+                {selectedJobId ? (
+                  <JobViewer jobId={selectedJobId} onBack={() => setSelectedJobId(null)} />
+                ) : (
+                  <JobList onJobSelect={setSelectedJobId} />
+                )}
               </div>
-            </section>
-          )
-        }
+            </div>
+          </section>
+        </div>
 
         {/* Help Tab */}
-        {
-          activeTab === 'help' && (
-            <section className="py-8">
-              <div className="mx-auto max-w-[95%] xl:max-w-[1400px] px-4 sm:px-6 lg:px-8">
-                <div id="help" className="bg-white rounded-2xl shadow-[0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1)] p-6">
-                  <HelpTab />
-                </div>
+        <div className={activeTab === 'help' ? 'block' : 'hidden'}>
+          <section className="py-8">
+            <div className="mx-auto max-w-[95%] xl:max-w-[1400px] px-4 sm:px-6 lg:px-8">
+              <div id="help" className="bg-white rounded-2xl shadow-[0_1px_3px_0_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1)] p-6">
+                <HelpTab />
               </div>
-            </section>
-          )
-        }
+            </div>
+          </section>
+        </div>
       </main >
 
       {/* Footer */}

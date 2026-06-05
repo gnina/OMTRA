@@ -1,7 +1,6 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional
 import omtra.tasks
 from omtra.utils import omtra_root
 from omtra.tasks.register import TASK_REGISTER
@@ -67,6 +66,12 @@ def create_parser():
         type=int,
         default=250,
         help="Number of integration steps to take when sampling"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=500,
+        help="Maximum number of systems per GPU batch when sampling",
     )
     parser.add_argument(
         "--visualize",
@@ -191,30 +196,20 @@ def create_parser():
         "--fixed-brics-fragments",
         type=str,
         default=None,
-        metavar="IDS",
         help=(
             "Comma-separated BRICS fragment indices to keep fixed during sampling for partial-modality "
             "tasks when using --ligand_file (e.g. '0,2,3'). Indices match RDKit BRICS fragmentation "
-            "Required for partial-modality tasks."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-atoms",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated atom indices in --ligand_file to keep fixed (e.g. '0,2,5,6'). "
         ),
     )
     return parser
-
-
-def _parse_fixed_brics_fragments(arg: Optional[str]) -> Optional[List[int]]:
-    """Parse --fixed-brics-fragments: None = unset, '' = [], '0,1' = [0, 1]."""
-    if arg is None:
-        return None
-    s = arg.strip()
-    if not s:
-        return []
-    out = []
-    for part in s.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        out.append(int(part))
-    return out
 
 
 def _build_pocket_definition(pocket_ligand, pocket_center, pocket_residues, pocket_coords, bbox_length):
@@ -330,25 +325,34 @@ def run_sample(args):
     from omtra.tasks.register import task_name_to_class
     from omtra.utils.checkpoints import get_checkpoint_path_for_task, TASK_TO_CHECKPOINT
     
-    fixed_brics_parsed = _parse_fixed_brics_fragments(args.fixed_brics_fragments)
+    _fixed_atoms_arg = getattr(args, "fixed_atoms", None)
+    fixed_atom_parsed = (
+        None
+        if _fixed_atoms_arg is None
+        else [int(p.strip()) for p in _fixed_atoms_arg.split(",")]
+    )
+    fixed_brics_parsed = (
+        None
+        if args.fixed_brics_fragments is None
+        else [int(p.strip()) for p in args.fixed_brics_fragments.split(",")]
+    )
 
-    if fixed_brics_parsed is not None and args.ligand_file is None:
+    has_fixed_spec = fixed_atom_parsed is not None or fixed_brics_parsed is not None
+
+    if has_fixed_spec and args.ligand_file is None:
         print(
-            "Error: --fixed-brics-fragments requires --ligand_file. "
-            "--pocket_ligand only defines the protein pocket; pass the same SDF "
-            "as --ligand_file too if you want to fix fragments from it."
+            "Error: --fixed-atoms / --fixed-brics-fragments requires --ligand_file. "
         )
         sys.exit(1)
 
-    # Auto-switch to the partial variant when --fixed-brics-fragments is provided
-    if fixed_brics_parsed is not None and not args.task.startswith("partial_"):
+    # Auto-switch to the partial variant when fixed atoms/fragments are provided
+    if has_fixed_spec and not args.task.startswith("partial_"):
         partial_task_name = f"partial_{args.task}"
         if partial_task_name in TASK_TO_CHECKPOINT:
-            print(f"--fixed-brics-fragments provided: switching task {args.task} → {partial_task_name}")
             args.task = partial_task_name
         else:
             print(
-                f"Error: --fixed-brics-fragments was provided for task '{args.task}', "
+                f"Error: fixed structure was provided for task '{args.task}', "
                 f"but no matching partial task '{partial_task_name}' exists."
             )
             sys.exit(1)
@@ -367,14 +371,14 @@ def run_sample(args):
     has_protein, has_ligand, has_pharmacophore, has_pocket_ligand_file, pocket_definition = _validate_task_inputs(args, task)
 
     if len(task.partial_modalities_fixed) > 0 and args.ligand_file is not None:
-        if fixed_brics_parsed is None:
+        if fixed_atom_parsed is None and fixed_brics_parsed is None:
             print(
-                "Error: --fixed-brics-fragments is required for partial-modality tasks "
-                "Pass a comma-separated list of BRICS fragment indices (e.g. 0,1), "
-                "or an empty string '' to fix no atoms."
+                "Error: --fixed-atoms or --fixed-brics-fragments is required for partial-modality tasks. "
+                "Pass comma-separated atom indices or BRICS fragment indices."
             )
             sys.exit(1)
-    fixed_for_load = fixed_brics_parsed if len(task.partial_modalities_fixed) > 0 else None
+    fixed_atoms_for_load = fixed_atom_parsed if len(task.partial_modalities_fixed) > 0 else None
+    fixed_brics_for_load = fixed_brics_parsed if len(task.partial_modalities_fixed) > 0 else None
 
     # validate --use_gt_n_lig_atoms: requires pocket ligand 
     if args.use_gt_n_lig_atoms:
@@ -405,7 +409,8 @@ def run_sample(args):
             task=task,
             n_samples=1,  # 1 graph from the input file
             device=device,
-            fixed_brics_fragments=fixed_for_load,
+            fixed_brics_fragments=fixed_brics_for_load,
+            fixed_atom_indices=fixed_atoms_for_load,
         )
         
         if pocket_definition and not args.pocket_center:

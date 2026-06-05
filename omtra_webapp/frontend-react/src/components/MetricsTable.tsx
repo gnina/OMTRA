@@ -2,17 +2,77 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { apiClient } from '@/lib/api-client';
-import type { SamplingMode } from '@/types';
+import type { MetricsOptions, SamplingMode } from '@/types';
+import { DEFAULT_METRICS_OPTIONS } from '@/types';
 import { Loader2, Settings2, X } from 'lucide-react';
+
+const BASIC_COLUMNS = new Set(['sample_name', 'n_atoms', 'is_connected', 'mw', 'logp', 'tpsa']);
+
+const COLUMN_ORDER = [
+  'sample_name',
+  'n_atoms',
+  'is_connected',
+  'pb_valid',
+  'pb_failing_checks',
+  'vina_score',
+  'strain',
+  'logp',
+  'tpsa',
+  'mw',
+  'clashes',
+  'HBAcceptor',
+  'HBDonor',
+  'Hydrophobic'
+];
+
+const PROTEIN_MODES: SamplingMode[] = [
+  'Protein-conditioned',
+  'Protein+Pharmacophore-conditioned',
+  'Rigid Docking',
+  'Rigid Docking + Pharmacophore',
+];
+
+function allowedMetricColumns(
+  metricsOptions: MetricsOptions | undefined,
+  samplingMode: SamplingMode,
+): Set<string> {
+  const opts = metricsOptions ?? DEFAULT_METRICS_OPTIONS;
+  const allowed = new Set(BASIC_COLUMNS);
+  if (opts.posebusters) {
+    allowed.add('pb_valid');
+    allowed.add('pb_failing_checks');
+  }
+  const isProtein = PROTEIN_MODES.includes(samplingMode);
+  if (isProtein && opts.posecheck) {
+    allowed.add('clashes');
+    allowed.add('HBAcceptor');
+    allowed.add('HBDonor');
+    allowed.add('Hydrophobic');
+  }
+  if (opts.strain) {
+    allowed.add('strain');
+  }
+  if (isProtein && opts.vina) {
+    allowed.add('vina_score');
+  }
+  return allowed;
+}
 
 interface MetricsTableProps {
   jobId: string;
   onRowSelect: (index: number) => void;
   selectedIndex?: number | null;
   samplingMode: SamplingMode;
+  metricsOptions?: MetricsOptions;
 }
 
-export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }: MetricsTableProps) {
+export function MetricsTable({
+  jobId,
+  onRowSelect,
+  selectedIndex,
+  samplingMode,
+  metricsOptions,
+}: MetricsTableProps) {
   const [metrics, setMetrics] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
@@ -48,16 +108,39 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
     loadMetrics();
   }, [jobId]);
 
-  // Filter out unwanted columns  
+  const allowedCols = useMemo(
+    () => allowedMetricColumns(metricsOptions, samplingMode),
+    [metricsOptions, samplingMode],
+  );
+
   const filteredMetrics = metrics.map((m, originalIndex) => {
-    const { tpsa, n_connected_components, molecular_weight, qed, is_invalid, smiles, Warning, PiStacking, is_reference, ...rest } = m;
-    return { __originalIndex: originalIndex, ...rest };
+    const {
+      n_connected_components,
+      qed,
+      is_invalid,
+      smiles,
+      Warning,
+      PiStacking,
+      is_reference,
+      ...rest
+    } = m;
+    
+    if (rest.molecular_weight !== undefined) {
+      rest.mw = rest.molecular_weight;
+      delete rest.molecular_weight;
+    }
+
+    const row: Record<string, unknown> = { __originalIndex: originalIndex };
+    for (const [key, val] of Object.entries(rest)) {
+      if (allowedCols.has(key)) {
+        row[key] = val;
+      }
+    }
+    return row;
   });
 
-  // Get all available columns
   const allColumns = Object.keys(filteredMetrics[0] || {}).filter((col) => col !== '__originalIndex');
 
-  // Check if pb_failing_checks should be shown (only if at least one molecule has failing checks)
   const shouldShowPbFailingChecks = useMemo(() => {
     return filteredMetrics.some((m) => {
       const checks = m.pb_failing_checks;
@@ -65,22 +148,14 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
     });
   }, [filteredMetrics]);
 
-  // Filter columns: exclude pb_failing_checks if no failures, and apply visibility settings
-  const hideVinaScore = samplingMode === 'Unconditional' || samplingMode === 'Pharmacophore-conditioned';
-
   const availableColumns = useMemo(() => {
-    let cols = allColumns.filter((col) => {
-      // Hide pb_failing_checks if no failures
+    return allColumns.filter((col) => {
       if (col === 'pb_failing_checks' && !shouldShowPbFailingChecks) {
-        return false;
-      }
-      if (hideVinaScore && col.toLowerCase().includes('vina')) {
         return false;
       }
       return true;
     });
-    return cols;
-  }, [allColumns, shouldShowPbFailingChecks, hideVinaScore]);
+  }, [allColumns, shouldShowPbFailingChecks]);
 
   // Initialize visible columns on first load (all columns visible by default)
   useEffect(() => {
@@ -97,7 +172,14 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
       if (col === 'sample_name') return true;
       return visibleColumns.has(col);
     });
-    return cols;
+    return cols.sort((a, b) => {
+      const idxA = COLUMN_ORDER.indexOf(a);
+      const idxB = COLUMN_ORDER.indexOf(b);
+      const posA = idxA !== -1 ? idxA : COLUMN_ORDER.length;
+      const posB = idxB !== -1 ? idxB : COLUMN_ORDER.length;
+      if (posA !== posB) return posA - posB;
+      return a.localeCompare(b);
+    });
   }, [availableColumns, visibleColumns]);
 
   const toggleColumn = (column: string) => {
@@ -236,7 +318,7 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
         </div>
       </div>
       <div className="text-sm text-slate-600 mb-3 bg-blue-50/70 rounded-xl px-4 py-2 shadow-sm">
-        💡 Click on any row to view that sample in the viewer above
+        💡 Click on any row to view it above
       </div>
       <div className="overflow-x-auto rounded-xl shadow-sm bg-white">
         <table className="min-w-full divide-y divide-slate-200">
@@ -271,7 +353,7 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
           </thead>
           <tbody className="bg-white divide-y divide-slate-200">
             {sortedMetrics.map((row) => {
-              const originalIndex = row.__originalIndex ?? 0;
+              const originalIndex = (row.__originalIndex as number) ?? 0;
               const isSelected = selectedRow === originalIndex;
               const isRef = metrics[originalIndex]?.is_reference === true;
               return (
@@ -296,9 +378,11 @@ export function MetricsTable({ jobId, onRowSelect, selectedIndex, samplingMode }
                     >
                       {row[col] !== null && row[col] !== undefined
                         ? typeof row[col] === 'number'
-                          ? Number.isInteger(row[col]) || row[col] % 1 === 0
-                            ? String(Math.round(row[col]))
-                            : row[col].toFixed(4)
+                          ? col === 'mw'
+                            ? (row[col] as number).toFixed(2)
+                            : Number.isInteger(row[col]) || (row[col] as number) % 1 === 0
+                              ? String(Math.round(row[col] as number))
+                              : (row[col] as number).toFixed(4)
                           : Array.isArray(row[col])
                             ? row[col].length > 0
                               ? row[col].join(', ')

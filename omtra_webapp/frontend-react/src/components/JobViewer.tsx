@@ -7,7 +7,7 @@ import { JobStatus } from '@/types';
 import { Loader2, Download, ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import { MolecularViewer } from './MolecularViewer';
 import { MetricsTable } from './MetricsTable';
-import { InteractionDiagram2D, prefetchInteractionDiagram } from './InteractionDiagram2D';
+import { InteractionDiagram2D } from './InteractionDiagram2D';
 
 interface JobViewerProps {
   jobId: string;
@@ -16,7 +16,6 @@ interface JobViewerProps {
 
 export function JobViewer({ jobId, onBack }: JobViewerProps) {
   const [moleculeIndex, setMoleculeIndex] = useState(0);
-  const [inputValue, setInputValue] = useState('0');
   const [activeTab, setActiveTab] = useState<'3d' | '2d'>('3d');
   const [prefetchedMolecules, setPrefetchedMolecules] = useState<Record<string, string>>({});
 
@@ -24,11 +23,6 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
   const [proteinData, setProteinData] = useState<{ text: string, format: string } | null>(null);
   const [pharmData, setPharmData] = useState<{ text: string, extension: string } | null>(null);
   const [hasLoadedStructural, setHasLoadedStructural] = useState(false);
-
-  // Sync inputValue when moleculeIndex changes from other sources (arrows, table selection)
-  useEffect(() => {
-    setInputValue(String(moleculeIndex));
-  }, [moleculeIndex]);
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['job-status', jobId],
@@ -117,22 +111,23 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
       }
 
       // 2. Prefetch SDF contents for 3D Viewer
-      for (const file of sdfFiles) {
-        if (!prefetchedMolecules[file.filename]) {
+      const sdfNames = new Set(sdfFiles.map((f) => f.filename));
+      sdfNames.add('fixed_structure_reference.sdf');
+      for (const name of sdfNames) {
+        if (!prefetchedMolecules[name]) {
           try {
-            const blob = await apiClient.downloadFile(jobId, file.filename);
+            const blob = await apiClient.downloadFile(jobId, name);
             const text = await blob.text();
-            setPrefetchedMolecules(prev => ({ ...prev, [file.filename]: text }));
+            setPrefetchedMolecules((prev) => ({ ...prev, [name]: text }));
           } catch (err) {
-            console.error(`Failed to prefetch ${file.filename}:`, err);
+            if (name !== 'fixed_structure_reference.sdf') {
+              console.error(`Failed to prefetch ${name}:`, err);
+            }
           }
         }
       }
 
-      // 3. Prefetch 2D diagrams
-      for (const file of sdfFiles) {
-        prefetchInteractionDiagram(jobId, file.filename).catch(() => { });
-      }
+      // 2D diagrams load on demand when the user opens the 2D tab (avoids hammering PoseView).
     };
 
     if (status?.state === 'SUCCEEDED') {
@@ -270,6 +265,19 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
     }
   };
 
+  const showDiagramTab = (result.params as any).metrics_options?.poseview !== false;
+  const effectiveTab = showDiagramTab ? activeTab : '3d';
+
+  const sampleLabel = (() => {
+    const hasRef = sdfFiles[0]?.filename === "reference_ligand.sdf";
+    if (sdfFiles[moleculeIndex]?.filename === "reference_ligand.sdf") {
+      return "Reference Ligand";
+    }
+    const totalSamples = sdfFiles.length - (hasRef ? 1 : 0);
+    const sampleNumber = hasRef ? moleculeIndex : moleculeIndex + 1;
+    return `Sample ${sampleNumber} of ${totalSamples}`;
+  })();
+
   return (
     <div className="space-y-6" style={{ width: '100%', minWidth: 0 }}>
       <button
@@ -280,171 +288,154 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
         <span className="font-medium">Back to Jobs</span>
       </button>
 
-      <div className="border-b border-slate-200/60 pb-4" style={{ width: '100%', minWidth: 0, overflow: 'visible' }}>
-        <div className="mb-2 flex items-baseline gap-2 flex-wrap">
-          <h2 className="text-2xl font-semibold text-slate-900">
-            Job Details:
-          </h2>
-          <span
-            className="text-2xl font-semibold text-slate-900"
-            style={{
-              wordBreak: 'break-all',
-              overflowWrap: 'anywhere',
-              whiteSpace: 'normal'
-            }}
-          >
-            {jobId}
-          </span>
+      <div className="border-b border-slate-200/60 pb-4 flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div style={{ width: "100%", minWidth: 0, overflow: "visible" }}>
+          <div className="mb-2 flex items-baseline gap-2 flex-wrap">
+            <h2 className="text-2xl font-semibold text-slate-900">
+              Job Details:
+            </h2>
+            <span
+              className="text-2xl font-semibold text-slate-900"
+              style={{
+                wordBreak: "break-all",
+                overflowWrap: "anywhere",
+                whiteSpace: "normal"
+              }}
+            >
+              {jobId}
+            </span>
+          </div>
+          <div className="text-sm text-slate-600 flex items-center gap-2">
+            <span>
+              {!!(result.params as any).fixed_atom_indices?.length ? "Partial " : ""}
+              {(result.params as any).docking_mode || result.params.sampling_mode || "Unconditional"} • {(result.params as any).n_samples || (result.params as any).num_samples || "N/A"} samples • {result.params.steps} steps
+            </span>
+          </div>
         </div>
-        <div className="text-sm text-slate-600">
-          {(result.params as any).docking_mode || result.params.sampling_mode || 'Unconditional'} • {(result.params as any).n_samples || (result.params as any).num_samples || 'N/A'} samples •{' '}
-          {result.params.steps} steps
+
+        <div className="relative group flex-shrink-0 h-fit">
+          <button
+            onClick={handleDownloadAll}
+            className="flex items-center gap-2 px-5 py-2.5 bg-primary-600 text-white rounded-xl font-semibold hover:bg-primary-700 transition-colors shadow-sm hover:shadow-md w-full"
+          >
+            <Download className="w-4 h-4" />
+            Download All
+          </button>
+          <div className="absolute top-full right-0 mt-2 w-56 p-2 bg-slate-800 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 text-center pointer-events-none">
+            Download a ZIP containing all generated structures and metrics
+          </div>
         </div>
       </div>
 
-      {/* Navigation controls above viewer */}
-      <div className="flex items-center justify-center gap-3 bg-slate-50/50 rounded-2xl p-4 relative shadow-sm">
-        {/* Left Arrow */}
+      {/* Viewer Area */}
+      <div className="w-full relative group mb-8">
+        {/* Overlay Navigation Arrows */}
         <button
           onClick={() => {
             const newIndex = Math.max(0, moleculeIndex - 1);
-            const newFile = sdfFiles[Math.min(newIndex, sdfFiles.length - 1)];
-            console.log(`[JobViewer] Back button clicked: ${moleculeIndex} -> ${newIndex}`);
-            console.log(`[JobViewer] Current file: ${currentFile?.filename}, New file: ${newFile?.filename}`);
-            console.warn(`[JobViewer] WARN: Setting moleculeIndex to ${newIndex}, filename will be ${newFile?.filename}`);
             setMoleculeIndex(newIndex);
           }}
           disabled={moleculeIndex === 0}
-          className="absolute left-4 p-3 bg-white rounded-full shadow-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 transition-all hover:scale-110"
+          className="absolute left-6 top-1/2 -translate-y-1/2 z-40 p-3 bg-white/90 hover:bg-white text-slate-800 rounded-full shadow-lg backdrop-blur-sm transition-all disabled:hidden border border-slate-200"
         >
-          <ChevronLeft className="w-6 h-6 text-slate-700" />
+          <ChevronLeft className="w-8 h-8" />
         </button>
 
-        {/* Right Arrow */}
         <button
           onClick={() => {
             const newIndex = Math.min(sdfFiles.length - 1, moleculeIndex + 1);
-            console.log(`[JobViewer] Forward button clicked: ${moleculeIndex} -> ${newIndex}`);
             setMoleculeIndex(newIndex);
-            setInputValue(String(newIndex));
           }}
           disabled={moleculeIndex >= sdfFiles.length - 1}
-          className="absolute right-4 p-3 bg-white rounded-full shadow-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50 transition-all hover:scale-110"
+          className="absolute right-6 top-1/2 -translate-y-1/2 z-40 p-3 bg-white/90 hover:bg-white text-slate-800 rounded-full shadow-lg backdrop-blur-sm transition-all disabled:hidden border border-slate-200"
         >
-          <ChevronRight className="w-6 h-6 text-slate-700" />
+          <ChevronRight className="w-8 h-8" />
         </button>
 
-        <div className="text-center">
-          <span className="font-semibold text-slate-900">
-            {sdfFiles[moleculeIndex]?.filename === 'reference_ligand.sdf'
-              ? 'Reference Ligand'
-              : `Sample ${sdfFiles[0]?.filename === 'reference_ligand.sdf' ? moleculeIndex - 1 : moleculeIndex} of ${sdfFiles.length - 1 - (sdfFiles[0]?.filename === 'reference_ligand.sdf' ? 1 : 0)}`}
-          </span>
-        </div>
-        <input
-          type="number"
-          min={0}
-          max={sdfFiles.length - 1}
-          value={inputValue}
-          onChange={(e) => {
-            setInputValue(e.target.value);
-          }}
-          onBlur={(e) => {
-            const val = parseInt(e.target.value, 10);
-            if (isNaN(val) || val < 0) {
-              setMoleculeIndex(0);
-              setInputValue('0');
-            } else if (val >= sdfFiles.length) {
-              setMoleculeIndex(sdfFiles.length - 1);
-              setInputValue(String(sdfFiles.length - 1));
-            } else {
-              setMoleculeIndex(val);
-              setInputValue(String(val));
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.currentTarget.blur();
-            }
-          }}
-          className="w-24 px-3 py-2.5 border border-slate-200 rounded-xl text-center bg-white text-slate-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors shadow-sm"
-        />
-        <button
-          onClick={handleDownloadAll}
-          className="flex items-center gap-2 px-5 py-2.5 bg-primary-600 text-white rounded-xl font-semibold hover:bg-primary-700 transition-colors shadow-sm hover:shadow-md"
-        >
-          <Download className="w-4 h-4" />
-          Download All
-        </button>
+        {result.params.sampling_mode === "Protein-conditioned" ||
+          result.params.sampling_mode === "Protein+Pharmacophore-conditioned" ||
+          (result.params as any).docking_mode ? (
+          <div className="rounded-2xl bg-white shadow-sm border border-slate-200">
+            {/* Tabs */}
+            <div className="flex border-b border-slate-200/60">
+              <button
+                onClick={() => setActiveTab("3d")}
+                className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${effectiveTab === "3d"
+                  ? "text-primary-600 border-b-2 border-primary-600 bg-primary-50/50"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+                  }`}
+              >
+                3D Viewer
+              </button>
+              {showDiagramTab && (
+              <button
+                onClick={() => setActiveTab("2d")}
+                className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${effectiveTab === "2d"
+                  ? "text-primary-600 border-b-2 border-primary-600 bg-primary-50/50"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+                  }`}
+              >
+                2D Interaction Diagram
+              </button>
+              )}
+            </div>
+
+            {/* Tab Content */}
+            <div className="p-4">
+              <div className={effectiveTab === "3d" ? "block" : "hidden"}>
+                <MolecularViewer
+                  jobId={jobId}
+                  filename={currentFile.filename}
+                  samplingMode={(result.params as any).docking_mode || result.params.sampling_mode}
+                  pocketSelection={(result.params as any).pocket_selection}
+                  inputFilesList={inputFiles}
+                  prefetchedContent={prefetchedMolecules[currentFile.filename]}
+                  referenceLigandContent={
+                    prefetchedMolecules["fixed_structure_reference.sdf"]
+                    ?? prefetchedMolecules["reference_ligand.sdf"]
+                  }
+                  fixedAtomIndices={(result.params as any).fixed_atom_indices}
+                  fixedBricsFragments={(result.params as any).fixed_brics_fragments}
+                  sampleLabel={sampleLabel}
+                />
+              </div>
+              {showDiagramTab && (
+              <div className={effectiveTab === "2d" ? "block" : "hidden"}>
+                <InteractionDiagram2D
+                  jobId={jobId}
+                  filename={currentFile.filename}
+                  sampleLabel={sampleLabel}
+                />
+              </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl p-4 bg-white shadow-sm border border-slate-200">
+            <MolecularViewer
+              jobId={jobId}
+              filename={currentFile.filename}
+              samplingMode={(result.params as any).docking_mode || result.params.sampling_mode || "Unconditional"}
+              pocketSelection={result.params.pocket_selection}
+              inputFilesList={inputFiles}
+              prefetchedContent={prefetchedMolecules[currentFile.filename]}
+              referenceLigandContent={
+                prefetchedMolecules["fixed_structure_reference.sdf"]
+                ?? prefetchedMolecules["reference_ligand.sdf"]
+              }
+              fixedAtomIndices={(result.params as any).fixed_atom_indices}
+              fixedBricsFragments={(result.params as any).fixed_brics_fragments}
+                  sampleLabel={sampleLabel}
+            />
+          </div>
+        )}
       </div>
-
-      {/* Viewer */}
-      {result.params.sampling_mode === 'Protein-conditioned' ||
-        result.params.sampling_mode === 'Protein+Pharmacophore-conditioned' ||
-        (result.params as any).docking_mode ? (
-        <div className="rounded-2xl bg-white shadow-sm">
-          {/* Tabs */}
-          <div className="flex border-b border-slate-200/60">
-            <button
-              onClick={() => setActiveTab('3d')}
-              className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${activeTab === '3d'
-                ? 'text-primary-600 border-b-2 border-primary-600 bg-primary-50/50'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                }`}
-            >
-              3D Viewer
-            </button>
-            <button
-              onClick={() => setActiveTab('2d')}
-              className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${activeTab === '2d'
-                ? 'text-primary-600 border-b-2 border-primary-600 bg-primary-50/50'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                }`}
-            >
-              2D Interaction Diagram
-            </button>
-          </div>
-
-          {/* Tab Content */}
-          <div className="p-4">
-            <div className={activeTab === '3d' ? 'block' : 'hidden'}>
-              <MolecularViewer
-                jobId={jobId}
-                filename={currentFile.filename}
-                samplingMode={(result.params as any).docking_mode || result.params.sampling_mode}
-                inputFilesList={inputFiles}
-                prefetchedContent={prefetchedMolecules[currentFile.filename]}
-                fixedBricsFragments={currentFile.filename !== 'reference_ligand.sdf' ? (result.params as any).fixed_brics_fragments : undefined}
-              />
-            </div>
-            <div className={activeTab === '2d' ? 'block' : 'hidden'}>
-              <InteractionDiagram2D
-                jobId={jobId}
-                filename={currentFile.filename}
-              />
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-2xl p-4 bg-white shadow-sm">
-          <MolecularViewer
-            jobId={jobId}
-            filename={currentFile.filename}
-            samplingMode={(result.params as any).docking_mode || result.params.sampling_mode || 'Unconditional'}
-            pocketSelection={result.params.pocket_selection}
-            inputFilesList={inputFiles}
-            prefetchedContent={prefetchedMolecules[currentFile.filename]}
-            fixedBricsFragments={currentFile.filename !== 'reference_ligand.sdf' ? (result.params as any).fixed_brics_fragments : undefined}
-          />
-        </div>
-      )}
-
       <MetricsTable
         jobId={jobId}
         samplingMode={(result.params as any).docking_mode || result.params.sampling_mode || 'Unconditional'}
+        metricsOptions={result.params.metrics_options}
         onRowSelect={(index) => {
           setMoleculeIndex(index);
-          setInputValue(String(index));
         }}
         selectedIndex={moleculeIndex}
       />

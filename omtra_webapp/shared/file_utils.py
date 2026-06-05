@@ -37,6 +37,14 @@ ALLOWED_EXTENSIONS = ['.sdf', '.cif', '.mol2', '.pdb', '.xyz', '.json']
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 26214400))  # 25MB default
 MAX_FILES_PER_JOB = int(os.getenv('MAX_FILES_PER_JOB', 3))
 
+ZIP_EXCLUDED_OUTPUT_FILES = {
+    'diagrams_status.json',
+    'diagrams_manifest.json',
+    'protein_from_cif.pdb',
+    'reference_ligand.sdf',
+    'fixed_structure_reference.sdf',
+}
+
 # Jobs base directory
 def _resolve_jobs_base_dir() -> Path:
     preferred = Path(os.getenv('JOBS_DIR', '/srv/app/jobs'))
@@ -171,7 +179,7 @@ def validate_molecular_format(filename: str, content: bytes) -> None:
                              raise ValueError(f"Malformed SDF header: Line 4 ('{counts_line[:10]}...') does not start with a valid atom count. SDF files must have 3 header lines followed by a counts line.")
                 
                 supplier = Chem.SDMolSupplier()
-                supplier.SetData(text_content)
+                supplier.SetData(text_content, sanitize=False, removeHs=False)
                 if not any(mol for mol in supplier if mol is not None):
                     raise ValueError("No valid molecules found in SDF. Please ensure it has a proper 4-line header and valid atom/bond blocks.")
             except Exception as e:
@@ -300,7 +308,7 @@ def list_job_outputs(job_id: str) -> List[Path]:
     return list(outputs_dir.glob("*"))
 
 
-def create_zip_archive(job_id: str, sampling_mode: Optional[str] = None) -> Optional[Path]:
+def create_zip_archive(job_id: str) -> Optional[Path]:
     import zipfile
     
     job_dir = get_job_directory(job_id)
@@ -311,8 +319,6 @@ def create_zip_archive(job_id: str, sampling_mode: Optional[str] = None) -> Opti
         logger.error(f"Outputs directory does not exist: {outputs_dir}")
         return None
     
-    is_protein_conditioned = sampling_mode in ["Protein-conditioned", "Protein+Pharmacophore-conditioned"]
-    
     zip_path = job_dir / f"{job_id}_outputs.zip"
     
     try:
@@ -321,20 +327,27 @@ def create_zip_archive(job_id: str, sampling_mode: Optional[str] = None) -> Opti
             for file_path in outputs_dir.glob("*"):
                 if file_path.is_file():
                     filename = file_path.name
+
+                    if filename.endswith("_outputs.zip"):
+                        continue
+
+                    if filename in ZIP_EXCLUDED_OUTPUT_FILES:
+                        continue
                     
                     if filename.startswith("sample_") and filename.endswith(".sdf"):
                         zipf.write(file_path, f"molecules/{filename}")
                         continue
-                    
-                    if filename == "reference_ligand.sdf":
+                        
+                    if "fixed_structure_reference" in filename and ("_diagram.svg" in filename or "_diagram_error.json" in filename):
                         continue
                     
-                    # Diagrams and error files go to 2d_diagrams/ 
-                    if is_protein_conditioned:
-                        if (file_path.suffix.lower() == '.svg' and '_diagram.svg' in filename) or \
-                           (file_path.suffix.lower() == '.json' and '_diagram_error.json' in filename):
-                            zipf.write(file_path, f"2d_diagrams/{filename}")
-                            continue
+                    is_diagram_file = (
+                        (file_path.suffix.lower() == '.svg' and '_diagram.svg' in filename)
+                        or (file_path.suffix.lower() == '.json' and '_diagram_error.json' in filename)
+                    )
+                    if is_diagram_file:
+                        zipf.write(file_path, f"2d_diagrams/{filename}")
+                        continue
 
                     if "per_molecule_metrics" in filename and filename != "per_molecule_metrics.json":
                         continue
@@ -389,9 +402,9 @@ def extract_pharmacophore_from_sdf(sdf_content: bytes) -> dict:
         if not text_content.strip():
             raise ValueError("SDF file is empty or contains no data")
         
-        # Create supplier and parse molecule
+        # Create supplier and parse molecule with relaxed strictness for generated samples
         supplier = Chem.SDMolSupplier()
-        supplier.SetData(text_content)
+        supplier.SetData(text_content, sanitize=False, removeHs=False)
         
         mol = None
         mol_count = 0
@@ -402,7 +415,7 @@ def extract_pharmacophore_from_sdf(sdf_content: bytes) -> dict:
                 break
         
         if mol is None:
-            raise ValueError(f"No valid molecule found in SDF (tried {mol_count} molecules)")
+            raise ValueError(f"No valid molecule found in SDF (tried {mol_count} molecules). Ensure valid structure.")
 
         try:
             # Check if molecule has conformer with 3D coordinates

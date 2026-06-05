@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { decodeBase64Unicode } from '@/lib/api-client';
 
 declare global {
   interface Window {
@@ -92,7 +93,7 @@ export function PharmacophoreViewer({
     // A. Handle Ligand
     if (ligandContent) {
       try {
-        const ligandData = atob(ligandContent);
+        const ligandData = decodeBase64Unicode(ligandContent);
         if (viewerAny._ligandData !== ligandData) {
           if (viewerAny._ligandModel) viewer.removeModel(viewerAny._ligandModel);
           const model = viewer.addModel(ligandData, 'sdf');
@@ -114,7 +115,7 @@ export function PharmacophoreViewer({
     // B. Handle Protein
     if (proteinB64 && proteinFormat) {
       try {
-        const proteinData = atob(proteinB64);
+        const proteinData = decodeBase64Unicode(proteinB64);
         if (viewerAny._proteinData !== proteinData) {
           if (viewerAny._proteinModel) {
             viewer.removeModel(viewerAny._proteinModel);

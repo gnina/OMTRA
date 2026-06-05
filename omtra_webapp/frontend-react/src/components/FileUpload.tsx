@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { Upload, X } from 'lucide-react';
+import { X } from 'lucide-react';
 
 interface FileUploadProps {
   onFilesUploaded: (files: File[]) => void;
@@ -78,8 +78,7 @@ export function FileUpload({ onFilesUploaded, acceptedTypes, maxFiles = 3, maxSi
             : 'border-slate-300 hover:border-primary-400 hover:bg-slate-50'
         }`}
       >
-        <Upload className={`w-10 h-10 mx-auto mb-3 ${isDragging ? 'text-primary-600' : 'text-slate-400'}`} />
-        <p className="text-sm text-slate-700 mb-1 font-medium">
+            <p className="text-sm text-slate-700 mb-1 font-medium">
           Drag and drop files here, or{' '}
           <button
             type="button"

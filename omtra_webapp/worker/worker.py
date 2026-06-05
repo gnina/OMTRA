@@ -29,7 +29,7 @@ import io
 import re
 import threading
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 import redis
 from rq import Worker, Queue
@@ -68,6 +68,33 @@ PROTEIN_INVOLVING_MODES = [
     'Rigid Docking + Pharmacophore'
 ]
 
+DEFAULT_METRICS_OPTIONS = {
+    'posebusters': True,
+    'posecheck': True,
+    'strain': True,
+    'vina': True,
+    'poseview': True,
+}
+
+
+def _resolve_metrics_options(params: Optional[Dict[str, Any]]) -> Dict[str, bool]:
+    """Merge job params metrics_options with defaults (None => all enabled)."""
+    merged = dict(DEFAULT_METRICS_OPTIONS)
+    if not params:
+        return merged
+    raw = params.get('metrics_options')
+    if raw is None:
+        return merged
+    if hasattr(raw, 'model_dump'):
+        raw = raw.model_dump()
+    elif hasattr(raw, 'dict'):
+        raw = raw.dict()
+    if isinstance(raw, dict):
+        for key in DEFAULT_METRICS_OPTIONS:
+            if key in raw:
+                merged[key] = bool(raw[key])
+    return merged
+
 # Setup logging
 logger = setup_logging(
     level=os.getenv('LOG_LEVEL', 'INFO'),
@@ -89,7 +116,7 @@ if missing_checkpoints:
     )
 
 
-# Interaction diagram generation helpers (synchronous versions from API)
+# Interaction diagram generation (ProteinsPlus PoseView)
 def _embed_ligand_in_pdb(sdf_str: str, pdb_str: str) -> Optional[str]:
     """Embed ligand coordinates from SDF into PDB file as HETATM records"""
     try:
@@ -149,23 +176,190 @@ def _embed_ligand_in_pdb(sdf_str: str, pdb_str: str) -> Optional[str]:
         return None
 
 
-def _poll_job(job_id: str, poll_url: str, poll_interval: int = 1, max_polls: int = 60):
-    """Poll job status until complete"""
+POSEVIEW_MAX_POLLS = int(os.environ.get("POSEVIEW_MAX_POLLS", "12"))
+POSEVIEW_POLL_INTERVAL = float(os.environ.get("POSEVIEW_POLL_INTERVAL", "1"))
+PROTEINSPLUS_UPLOAD_MAX_POLLS = int(os.environ.get("PROTEINSPLUS_UPLOAD_MAX_POLLS", "30"))
+
+
+def _poll_job(
+    job_id: str,
+    poll_url: str,
+    poll_interval: float = POSEVIEW_POLL_INTERVAL,
+    max_polls: int = POSEVIEW_MAX_POLLS,
+):
+    """Poll ProteinsPlus job status until complete or max_polls."""
     import requests
-    job = requests.get(poll_url + job_id + '/').json()
-    status = job.get('status', '')
+
+    job = requests.get(poll_url + job_id + "/", timeout=30).json()
+    status = job.get("status", "")
     current_poll = 0
-    
-    while status in ('pending', 'running'):
+
+    while status in ("pending", "running"):
         if current_poll >= max_polls:
             return job
         time.sleep(poll_interval)
-        job = requests.get(poll_url + job_id + '/').json()
-        status = job.get('status', '')
+        job = requests.get(poll_url + job_id + "/", timeout=30).json()
+        status = job.get("status", "")
         current_poll += 1
     return job
 
 
+DIAGRAMS_STATUS_FILE = "diagrams_status.json"
+
+
+def _write_diagrams_status(outputs_dir: Path, **updates: Any) -> None:
+    path = outputs_dir / DIAGRAMS_STATUS_FILE
+    current: Dict[str, Any] = {
+        "pending": [],
+        "in_progress": None,
+        "completed": [],
+        "failed": [],
+    }
+    if path.exists():
+        try:
+            with open(path) as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                current.update(loaded)
+        except Exception:
+            pass
+    current.update(updates)
+    current["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    with open(path, "w") as f:
+        json.dump(current, f, indent=2)
+
+
+def _enqueue_diagram_generation(
+    job_id: str,
+    outputs_dir: Path,
+    diagram_queue: List[Path],
+    protein_file: Path,
+    job_logger: logging.Logger,
+) -> None:
+    """Enqueue serial PoseView diagram generation as a separate RQ job."""
+    manifest_path = outputs_dir / "diagrams_manifest.json"
+    protein_resolved = Path(protein_file).resolve()
+    with open(manifest_path, "w") as f:
+        json.dump(
+            {
+                "protein_file": str(protein_resolved),
+                "ligands": [p.name for p in diagram_queue],
+            },
+            f,
+            indent=2,
+        )
+    _write_diagrams_status(
+        outputs_dir,
+        pending=[p.name for p in diagram_queue],
+        in_progress=None,
+        completed=[],
+        failed=[],
+    )
+    try:
+        redis_conn = redis.from_url(REDIS_URL)
+        queue = Queue("omtra_tasks", connection=redis_conn)
+        queue.enqueue(
+            "worker.generate_diagrams_task",
+            job_id,
+            job_timeout=600,
+            result_ttl=3600,
+        )
+        job_logger.info(
+            f"Enqueued RQ diagram generation job for {len(diagram_queue)} ligands"
+        )
+    except Exception as e:
+        job_logger.error(f"Failed to enqueue diagram generation: {e}", exc_info=True)
+
+
+def _generate_diagrams_serial(
+    outputs_dir: Path,
+    ligand_paths: List[Path],
+    protein_file: Path,
+    job_logger: logging.Logger,
+) -> Tuple[List[str], List[str]]:
+    """Generate interaction diagrams one ligand at a time."""
+    pending_names = [p.name for p in ligand_paths]
+    _write_diagrams_status(
+        outputs_dir,
+        pending=pending_names,
+        in_progress=None,
+        completed=[],
+        failed=[],
+    )
+    job_logger.info(f"Background diagram generation started for {len(ligand_paths)} ligands (serial)")
+
+    completed: List[str] = []
+    failed: List[str] = []
+    protein_path = Path(protein_file) if not isinstance(protein_file, Path) else protein_file
+
+    for sdf_path in ligand_paths:
+        name = sdf_path.name
+        diagram_path = outputs_dir / f"{name}_diagram.svg"
+        error_path = outputs_dir / f"{name}_diagram_error.json"
+
+        if diagram_path.exists() or error_path.exists():
+            completed.append(name)
+            pending_names = [n for n in pending_names if n != name]
+            _write_diagrams_status(
+                outputs_dir,
+                pending=pending_names,
+                in_progress=None,
+                completed=completed,
+                failed=failed,
+            )
+            continue
+
+        _write_diagrams_status(
+            outputs_dir,
+            pending=pending_names,
+            in_progress=name,
+            completed=completed,
+            failed=failed,
+        )
+
+        try:
+            svg, error_msg = _generate_interaction_diagram(sdf_path, protein_path, job_logger)
+            if svg and not error_msg:
+                with open(diagram_path, "w") as f:
+                    f.write(svg)
+                completed.append(name)
+            else:
+                error_detail = error_msg or (
+                    "Failed to generate interaction diagram. PoseView could not detect any interactions."
+                )
+                error_data = {
+                    "statusCode": 503,
+                    "message": error_detail.split(".")[0] if error_detail else "Failed",
+                    "detail": error_detail,
+                }
+                with open(error_path, "w") as f:
+                    json.dump(error_data, f)
+                failed.append(name)
+                job_logger.warning(f"Failed to generate diagram for {name}: {error_detail}")
+        except Exception as e:
+            error_data = {
+                "statusCode": 500,
+                "message": "Failed",
+                "detail": f"Failed to generate interaction diagram: {str(e)}",
+            }
+            with open(error_path, "w") as f:
+                json.dump(error_data, f)
+            failed.append(name)
+            job_logger.warning(f"Error generating diagram for {name}: {e}")
+
+        pending_names = [n for n in pending_names if n != name]
+        _write_diagrams_status(
+            outputs_dir,
+            pending=pending_names,
+            in_progress=None,
+            completed=completed,
+            failed=failed,
+        )
+
+    job_logger.info(
+        f"Diagram generation finished: {len(completed)} succeeded, {len(failed)} failed"
+    )
+    return completed, failed
 
 
 def _load_posecheck_with_timeout(pdb_path: str, timeout: int = 120):
@@ -238,7 +432,11 @@ def _is_blank_svg(svg: str) -> bool:
     return False
 
 
-def _generate_interaction_diagram(ligand_file: Path, protein_file: Path, job_logger: logging.Logger) -> tuple:
+def _generate_interaction_diagram(
+    ligand_file: Path,
+    protein_file: Path,
+    job_logger: logging.Logger,
+) -> Tuple[Optional[str], Optional[str]]:
     """Generate interaction diagram for a single ligand file using ProteinsPlus API v2.
     
     Returns:
@@ -259,8 +457,7 @@ def _generate_interaction_diagram(ligand_file: Path, protein_file: Path, job_log
             try:
                 from biotite.structure.io import pdb
                 from biotite.structure.io.pdbx import CIFFile, get_structure
-                import biotite.structure as struc
-                
+
                 cif_file = CIFFile.read(str(protein_file))
                 st = get_structure(cif_file, model=1, include_bonds=False)
                 st = st[st.res_name != "HOH"]
@@ -288,7 +485,6 @@ def _generate_interaction_diagram(ligand_file: Path, protein_file: Path, job_log
         UPLOAD_URL = f"{API_BASE}/molecule_handler/upload/"
         UPLOAD_JOBS_URL = f"{API_BASE}/molecule_handler/upload/jobs/"
         PROTEINS_URL = f"{API_BASE}/molecule_handler/proteins/"
-        LIGANDS_URL = f"{API_BASE}/molecule_handler/ligands/"
         POSEVIEW_URL = f"{API_BASE}/poseview/"
         POSEVIEW_JOBS_URL = f"{API_BASE}/poseview/jobs/"
         
@@ -306,7 +502,11 @@ def _generate_interaction_diagram(ligand_file: Path, protein_file: Path, job_log
         files = {'protein_file': ('protein.pdb', combined_pdb_file_obj, 'chemical/x-pdb')}
         
         preprocessing_job_submission = requests.post(UPLOAD_URL, files=files, timeout=120).json()
-        preprocessing_job = _poll_job(preprocessing_job_submission['job_id'], UPLOAD_JOBS_URL, poll_interval=1, max_polls=30)
+        preprocessing_job = _poll_job(
+            preprocessing_job_submission["job_id"],
+            UPLOAD_JOBS_URL,
+            max_polls=PROTEINSPLUS_UPLOAD_MAX_POLLS,
+        )
         
         if preprocessing_job.get('status') != 'success':
             error_msg = f"Preprocessing failed: {preprocessing_job.get('error', 'Unknown error')}"
@@ -328,7 +528,11 @@ def _generate_interaction_diagram(ligand_file: Path, protein_file: Path, job_log
         original_protein_file_obj.seek(0)
         files2 = {'protein_file': ('protein.pdb', original_protein_file_obj, 'chemical/x-pdb')}
         preprocessing_job_submission2 = requests.post(UPLOAD_URL, files=files2, timeout=120).json()
-        preprocessing_job2 = _poll_job(preprocessing_job_submission2['job_id'], UPLOAD_JOBS_URL, poll_interval=1, max_polls=30)
+        preprocessing_job2 = _poll_job(
+            preprocessing_job_submission2["job_id"],
+            UPLOAD_JOBS_URL,
+            max_polls=PROTEINSPLUS_UPLOAD_MAX_POLLS,
+        )
         
         if preprocessing_job2.get('status') != 'success':
             error_msg = "Failed to upload original protein"
@@ -340,10 +544,15 @@ def _generate_interaction_diagram(ligand_file: Path, protein_file: Path, job_log
         # Step 4: Generate PoseView
         query = {'protein_id': protein_original['id'], 'ligand_id': ligand_id}
         poseview_job_submission = requests.post(POSEVIEW_URL, data=query, timeout=120).json()
-        poseview_job = _poll_job(poseview_job_submission['job_id'], POSEVIEW_JOBS_URL, poll_interval=1, max_polls=60)
-        
-        if poseview_job.get('status') != 'success':
-            error_msg = f"PoseView failed: {poseview_job.get('error', 'Unknown error')}"
+        poseview_job = _poll_job(poseview_job_submission["job_id"], POSEVIEW_JOBS_URL)
+
+        if poseview_job.get("status") != "success":
+            pv_status = poseview_job.get("status", "")
+            pv_error = poseview_job.get("error")
+            if pv_status in ("pending", "running"):
+                error_msg = "PoseView timed out while generating the interaction diagram."
+            else:
+                error_msg = f"PoseView failed: {pv_error or pv_status or 'Unknown error'}"
             job_logger.warning(f"{error_msg} for {ligand_file.name}")
             return None, error_msg
         
@@ -375,6 +584,36 @@ def _generate_interaction_diagram(ligand_file: Path, protein_file: Path, job_log
         return None, error_msg
 
 
+def generate_diagrams_task(job_id: str) -> Dict[str, Any]:
+    """RQ task: generate interaction diagrams serially after sampling completes."""
+    job_dir = get_job_directory(job_id)
+    log_file = job_dir / "logs" / "job.log"
+    job_logger = setup_logging(level="INFO", log_file=log_file)
+    outputs_dir = job_dir / "outputs"
+    manifest_path = outputs_dir / "diagrams_manifest.json"
+
+    if not manifest_path.exists():
+        job_logger.warning(f"No diagrams_manifest.json for job {job_id}")
+        return {"status": "skipped", "reason": "no manifest"}
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        protein_file = Path(manifest["protein_file"])
+        ligand_paths = [outputs_dir / name for name in manifest.get("ligands", [])]
+        ligand_paths = [p for p in ligand_paths if p.exists()]
+        if not ligand_paths:
+            job_logger.warning("Diagram manifest has no existing ligand files")
+            return {"status": "skipped", "reason": "no ligands"}
+
+        job_logger.info(f"Diagram RQ task started for {len(ligand_paths)} ligands")
+        completed, failed = _generate_diagrams_serial(
+            outputs_dir, ligand_paths, protein_file, job_logger
+        )
+        return {"status": "done", "completed": len(completed), "failed": len(failed)}
+    except Exception as e:
+        job_logger.error(f"Diagram generation task failed: {e}", exc_info=True)
+        raise
 
 
 def sampling_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -414,8 +653,11 @@ def sampling_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[st
 
         # When fixed fragments are selected, run_omtra_sampler handles model
         # loading via cli.run_sample (which switches to partial task/checkpoint)
-        has_fixed_frags = bool(params.get('fixed_brics_fragments'))
-        if has_fixed_frags:
+        has_fixed = bool(
+            (params.get('fixed_atom_indices') and len(params.get('fixed_atom_indices', [])) > 0)
+            or (params.get('fixed_brics_fragments') and len(params.get('fixed_brics_fragments', [])) > 0)
+        )
+        if has_fixed:
             model = None
         else:
             model = load_omtra_model(checkpoint_path, sampling_mode)
@@ -432,9 +674,7 @@ def sampling_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[st
             log_job_event(job_logger, job_id, "sampling_completed", 
                          message="Sampling completed but no result data returned" if result is None else f"Sampling completed with non-dict result: {type(result)}")
         
-        # Diagrams are already generated in parallel during sampling, so no need to generate here
-        
-        # Update job status in Redis to SUCCEEDED (only after diagrams are done)
+        # Update job status in Redis to SUCCEEDED (sampling done; diagrams may still be running in RQ)
         try:
             redis_conn = redis.from_url(REDIS_URL)
             job_data = redis_conn.get(f"job:{job_id}")
@@ -495,6 +735,34 @@ def _save_pocket_reference_coords(coords: Any, output_dir: Path) -> Path:
     return coord_path
 
 
+def _resolve_fixed_structure_for_task(
+    params: Dict[str, Any],
+    base_task_name: str,
+    partial_task_mapping: Optional[Dict[str, str]] = None,
+) -> tuple[str, Optional[str], Optional[str], bool]:
+    """Return (task_name, fixed_atoms_str, fixed_brics_str, has_fixed)."""
+    fixed_atom_indices = params.get('fixed_atom_indices') or []
+    fixed_brics_fragments = params.get('fixed_brics_fragments') or []
+
+    fixed_atoms_str = (
+        ','.join(str(i) for i in fixed_atom_indices) if fixed_atom_indices else None
+    )
+    fixed_brics_str = (
+        ','.join(str(i) for i in fixed_brics_fragments)
+        if fixed_brics_fragments
+        else None
+    )
+    has_fixed = bool(fixed_atoms_str or fixed_brics_str)
+
+    task_name = base_task_name
+    if has_fixed and partial_task_mapping:
+        task_name = partial_task_mapping.get(base_task_name, base_task_name)
+    elif has_fixed and base_task_name == 'rigid_docking_condensed':
+        task_name = 'partial_rigid_docking_condensed'
+
+    return task_name, fixed_atoms_str, fixed_brics_str, has_fixed
+
+
 def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Execute a docking job.
@@ -516,6 +784,7 @@ def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str
         docking_mode = params.get('docking_mode')
         n_samples = params.get('n_samples', 10)
         n_timesteps = params.get('steps', 100)
+        batch_size = params.get('batch_size', 500)
         seed = params.get('seed')
         pocket_selection = params.get('pocket_selection')
         
@@ -529,19 +798,19 @@ def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str
                 f"Unknown docking_mode {docking_mode!r}. "
                 f"Expected one of: {', '.join(sorted(docking_task_mapping))}"
             )
-        task_name = docking_task_mapping[docking_mode]
-
-        # Handle fixed_brics_fragments
-        fixed_brics_list = params.get('fixed_brics_fragments')
-        fixed_brics_str = None
-        if fixed_brics_list and len(fixed_brics_list) > 0:
-            fixed_brics_str = ','.join(str(i) for i in fixed_brics_list)
-            if task_name == 'rigid_docking_condensed':
-                task_name = 'partial_rigid_docking_condensed'
+        task_name, fixed_atoms_str, fixed_brics_str, has_fixed = _resolve_fixed_structure_for_task(
+            params,
+            docking_task_mapping[docking_mode],
+        )
+        if has_fixed:
+            job_logger.info(
+                f"Partial fixed-structure docking: task={task_name}, "
+                f"fixed_atoms={fixed_atoms_str}, fixed_brics={fixed_brics_str}"
+            )
 
         # Get checkpoint path (partial tasks use gnn_partial_prot_cond.ckpt directly)
         from omtra.utils.checkpoints import get_checkpoint_path_for_webapp
-        if fixed_brics_str and task_name.startswith('partial_'):
+        if has_fixed and task_name.startswith('partial_'):
             checkpoint_path = CHECKPOINT_DIR / 'gnn_partial_prot_cond.ckpt'
         else:
             checkpoint_path = get_checkpoint_path_for_webapp(docking_mode, CHECKPOINT_DIR)
@@ -558,6 +827,7 @@ def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str
                 self.n_replicates = 1
                 self.dataset_start_idx = 0
                 self.n_timesteps = n_timesteps
+                self.batch_size = batch_size
                 self.visualize = False
                 self.output_dir = outputs_dir
                 self.pharmit_path = None
@@ -583,6 +853,7 @@ def docking_task(job_id: str, params: Dict[str, Any], input_files: List[Dict[str
                 self.bbox_length = 23.0
                 self.input_files_dir = None
                 self.g_list_from_files = None
+                self.fixed_atoms = fixed_atoms_str
                 self.fixed_brics_fragments = fixed_brics_str
         
         # Handle input files
@@ -898,36 +1169,52 @@ def _run_gnina_score_only(lig_file, prot_file, env=None):
             pass
 
 
-def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, protein_file=None, posecheck_obj=None):
+def compute_fast_molecule_metrics(
+    mol,
+    sample_name=None,
+    sampling_mode=None,
+    protein_file=None,
+    posecheck_obj=None,
+    metrics_options: Optional[Dict[str, bool]] = None,
+):
     from rdkit import Chem
     from rdkit.Chem import Descriptors
-    
+
+    opts = metrics_options if metrics_options is not None else dict(DEFAULT_METRICS_OPTIONS)
+    compute_pb = opts.get('posebusters', True)
+    compute_posecheck = opts.get('posecheck', True)
+    compute_strain = opts.get('strain', True)
+    compute_vina = opts.get('vina', True)
+
     # Store a copy of the molecule for PoseCheck before any sanitization attempts
     mol_to_preserve = Chem.Mol(mol) if mol is not None else None
-    
+
     metrics = {
         'sample_name': sample_name,
         'n_atoms': 0,
         'is_connected': False,
-        'n_connected_components': 0,
         'molecular_weight': None,
-        'qed': None,
+        'logp': None,
         'tpsa': None,
-        'smiles': None,
-        'pb_valid': False,
-        'pb_failing_checks': None,
     }
+    
+    if compute_strain:
+        metrics['strain'] = None
 
-    # If protein-conditioned, ensure interaction metric keys are present
+    if compute_pb:
+        metrics['pb_valid'] = False
+        metrics['pb_failing_checks'] = None
+
     if sampling_mode in PROTEIN_INVOLVING_MODES:
-        metrics.update({
-            'vina_score': None,
-            'logp': None,
-            'clashes': None,
-            'HBAcceptor': None,
-            'HBDonor': None,
-            'Hydrophobic': None,
-        })
+        if compute_vina:
+            metrics['vina_score'] = None
+        if compute_posecheck:
+            metrics.update({
+                'clashes': None,
+                'HBAcceptor': None,
+                'HBDonor': None,
+                'Hydrophobic': None,
+            })
     
     if mol is None:
         return metrics
@@ -952,24 +1239,15 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
             
             try:
                 metrics['molecular_weight'] = round(Descriptors.MolWt(mol), 2)
-            except:
+            except Exception:
                 pass
             try:
                 metrics['logp'] = round(Descriptors.MolLogP(mol), 2)
-            except:
-                pass
-            try:
-                metrics['qed'] = round(Descriptors.qed(mol), 3)
-            except:
+            except Exception:
                 pass
             try:
                 metrics['tpsa'] = round(Descriptors.TPSA(mol), 2)
-            except:
-                pass
-            
-            try:
-                metrics['smiles'] = Chem.MolToSmiles(mol)
-            except:
+            except Exception:
                 pass
                 
         except Chem.rdchem.AtomValenceException:
@@ -985,15 +1263,15 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
         except Exception:
             pass
         
-        if not metrics.get('is_connected', False):
+        if compute_pb and not metrics.get('is_connected', False):
             metrics['pb_valid'] = False
             if metrics.get('pb_failing_checks') is None:
                 metrics['pb_failing_checks'] = ['connectivity']
             elif 'connectivity' not in metrics['pb_failing_checks']:
-                metrics['pb_failing_checks'].append('connectivity') 
-        
+                metrics['pb_failing_checks'].append('connectivity')
+
         # If a protein file is available, compute pb_valid for any task
-        if protein_file and Path(protein_file).exists():
+        if compute_pb and protein_file and Path(protein_file).exists():
             if metrics.get('is_connected', True):
                 try:
                     # Compute pb_valid using PoseBusters
@@ -1088,95 +1366,8 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                         error_msg = str(e) if "No module named" in str(e) else "pb_runtime_error"
                     metrics['pb_failing_checks'] = [error_msg] if error_msg and len(error_msg) > 0 and error_msg != "error" else ['error']
                     logging.warning(f"Failed to compute pb_valid for {sample_name}: {e}")
-            # Only compute protein-ligand interaction metrics for protein-involving jobs
-            if sampling_mode in PROTEIN_INVOLVING_MODES:
-                try:
-                    if not str(protein_file).lower().endswith('.pdb'):
-                        pass
-                    elif posecheck_obj is None:
-                        logging.info(f"Skipping PoseCheck metrics for {sample_name} (protein loading failed or timed out)")
-                    else:
-                        pc = posecheck_obj
-                        pc.load_ligands_from_mols([mol_to_preserve])
-                        
-                        try:
-                            clashes = pc.calculate_clashes()
-                            try:
-                                metrics['clashes'] = int(round(float(clashes.iloc[0]) if hasattr(clashes, 'iloc') else float(clashes[0])))
-                            except Exception:
-                                metrics['clashes'] = None
-                        except Exception as clash_e:
-                            logging.warning(f"Failed to compute clashes for {sample_name}: {clash_e}")
-                            metrics['clashes'] = None
-                        
-                        try:
-                            interactions = pc.calculate_interactions()
-                            label_map = {
-                                'HBAcceptor': ['HBAcceptor', 'HBondAcceptor', 'HydrogenAcceptor', 'Acceptor'],
-                                'HBDonor': ['HBDonor', 'HBondDonor', 'HydrogenDonor', 'Donor'],
-                                'Hydrophobic': ['Hydrophobic'],
-                            }
-                            def column_matches(col, keywords):
-                                try:
-                                    if isinstance(col, tuple) or isinstance(getattr(interactions.columns, 'levels', None), list):
-                                        parts = [str(p) for p in (col if isinstance(col, tuple) else (col,))]
-                                        return any(any(k.lower() in p.lower() for k in keywords) for p in parts)
-                                    return any(k.lower() in str(col).lower() for k in keywords)
-                                except Exception:
-                                    return False
-                            for i_type, keywords in label_map.items():
-                                matched_cols = [col for col in interactions.columns if column_matches(col, keywords)]
-                                if matched_cols:
-                                    try:
-                                        i_sum = interactions[matched_cols].sum(axis=1)
-                                        val = float(i_sum.iloc[0]) if len(i_sum) > 0 else 0.0
-                                    except Exception:
-                                        try:
-                                            val = float(interactions[matched_cols].sum(axis=1)[0])
-                                        except Exception:
-                                            val = 0.0
-                                    metrics[i_type] = int(round(val))
-                                else:
-                                    metrics[i_type] = 0
-                        except Exception as int_e:
-                            logging.warning(f"Failed to compute interaction metrics for {sample_name}: {int_e}")
-                except Exception as e:
-                    logging.warning(f"PoseCheck metrics failed for {sample_name}: {e}")
-            
-            # Compute gnina scores - reached for both PDB and CIF (if converted to PDB)
-            # This is now outside the PDB-only PoseCheck block
-            if protein_file and (str(protein_file).lower().endswith('.pdb') or str(protein_file).lower().endswith('.cif')):
-                try:
-                    # Save molecule to temporary SDF file for GNINA
-                    # Use mol_to_preserve to avoid issues with sanitized molecules
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.sdf', delete=False) as tmp_lig:
-                        tmp_lig_path = Path(tmp_lig.name)
-                        from omtra.eval.system import write_mols_to_sdf
-                        write_mols_to_sdf([mol_to_preserve], str(tmp_lig_path))
-                    
-                    try:
-                        gnina_scores = _run_gnina_score_only(
-                            lig_file=str(tmp_lig_path),
-                            prot_file=str(protein_file),
-                            env=None
-                        )
-                        
-                        if gnina_scores:
-                            metrics['vina_score'] = gnina_scores.get('minimizedAffinity')
-                        else:
-                            _logging.warning(f"GNINA scoring returned no scores for {sample_name}")
-                    finally:
-                        # Clean up temporary ligand file
-                        try:
-                            tmp_lig_path.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                except Exception as gnina_e:
-                    logging.warning(f"Failed to compute GNINA scores for {sample_name}: {gnina_e}")
-                    # Leave gnina scores as None
-        else:
+        elif compute_pb:
             # No protein file: compute pb_valid using 'dock' config for unconditional/pharmacophore jobs
-            # Skip PoseBusters if molecule is disconnected (already set pb_valid=False above)
             if sampling_mode in ['Unconditional', 'Pharmacophore-conditioned'] and metrics.get('is_connected', True):
                 try:
                     # Compute pb_valid using PoseBusters with 'dock' config (no protein required)
@@ -1239,9 +1430,116 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
                     else:
                         metrics['pb_failing_checks'] = []  # No error if sanitization passed
                     logging.warning(f"Failed to compute pb_valid for {sample_name} (no protein): {e}, using sanitization check")
-            else:
+            elif compute_pb:
                 metrics['pb_valid'] = bool(sanitized_ok)
-                metrics['pb_failing_checks'] = [] if sanitized_ok else ['sanitization']  # No PoseBusters, just sanitization check
+                metrics['pb_failing_checks'] = [] if sanitized_ok else ['sanitization']
+        
+        # PoseCheck interactions and clashes for protein-involving jobs
+        if (
+            sampling_mode in PROTEIN_INVOLVING_MODES
+            and compute_posecheck
+        ):
+            try:
+                if not str(protein_file).lower().endswith('.pdb'):
+                    pass
+                elif posecheck_obj is None:
+                    logging.info(f"Skipping PoseCheck metrics for {sample_name} (protein loading failed or timed out)")
+                else:
+                    pc = posecheck_obj
+                    pc.load_ligands_from_mols([mol_to_preserve])
+
+                    try:
+                        clashes = pc.calculate_clashes()
+                        try:
+                            metrics['clashes'] = int(round(float(clashes.iloc[0]) if hasattr(clashes, 'iloc') else float(clashes[0])))
+                        except Exception:
+                            metrics['clashes'] = None
+                    except Exception as clash_e:
+                        logging.warning(f"Failed to compute clashes for {sample_name}: {clash_e}")
+                        metrics['clashes'] = None
+
+                    try:
+                        interactions = pc.calculate_interactions()
+                        label_map = {
+                            'HBAcceptor': ['HBAcceptor', 'HBondAcceptor', 'HydrogenAcceptor', 'Acceptor'],
+                            'HBDonor': ['HBDonor', 'HBondDonor', 'HydrogenDonor', 'Donor'],
+                            'Hydrophobic': ['Hydrophobic'],
+                        }
+                        def column_matches(col, keywords):
+                            try:
+                                if isinstance(col, tuple) or isinstance(getattr(interactions.columns, 'levels', None), list):
+                                    parts = [str(p) for p in (col if isinstance(col, tuple) else (col,))]
+                                    return any(any(k.lower() in p.lower() for k in keywords) for p in parts)
+                                return any(k.lower() in str(col).lower() for k in keywords)
+                            except Exception:
+                                return False
+                        for i_type, keywords in label_map.items():
+                            matched_cols = [col for col in interactions.columns if column_matches(col, keywords)]
+                            if matched_cols:
+                                try:
+                                    i_sum = interactions[matched_cols].sum(axis=1)
+                                    val = float(i_sum.iloc[0]) if len(i_sum) > 0 else 0.0
+                                except Exception:
+                                    try:
+                                        val = float(interactions[matched_cols].sum(axis=1)[0])
+                                    except Exception:
+                                        val = 0.0
+                                metrics[i_type] = int(round(val))
+                            else:
+                                metrics[i_type] = 0
+                    except Exception as int_e:
+                        logging.warning(f"Failed to compute interaction metrics for {sample_name}: {int_e}")
+            except Exception as e:
+                logging.warning(f"PoseCheck interactions failed for {sample_name}: {e}")
+
+        # Strain
+        if compute_strain:
+            try:
+                if posecheck_obj is not None:
+                    pc = posecheck_obj
+                    pc.load_ligands_from_mols([mol_to_preserve])
+                else:
+                    from posecheck import PoseCheck
+                    pc = PoseCheck()
+                    pc.load_ligands_from_mols([mol_to_preserve])
+                
+                strain = pc.calculate_strain_energy()
+                if hasattr(strain, 'iloc'):
+                    metrics['strain'] = round(float(strain.iloc[0]), 2)
+                else:
+                    metrics['strain'] = round(float(strain[0]), 2)
+            except Exception as strain_e:
+                logging.warning(f"Failed to compute strain for {sample_name}: {strain_e}")
+                metrics['strain'] = None
+
+        if compute_vina and protein_file and (str(protein_file).lower().endswith('.pdb') or str(protein_file).lower().endswith('.cif')):
+            try:
+                # Save molecule to temporary SDF file for GNINA
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.sdf', delete=False) as tmp_lig:
+                    tmp_lig_path = Path(tmp_lig.name)
+                    from omtra.eval.system import write_mols_to_sdf
+                    write_mols_to_sdf([mol_to_preserve], str(tmp_lig_path))
+                
+                try:
+                    gnina_scores = _run_gnina_score_only(
+                        lig_file=str(tmp_lig_path),
+                        prot_file=str(protein_file),
+                        env=None
+                    )
+                    
+                    if gnina_scores:
+                        metrics['vina_score'] = gnina_scores.get('minimizedAffinity')
+                    else:
+                        _logging.warning(f"GNINA scoring returned no scores for {sample_name}")
+                finally:
+                    # Clean up temporary ligand file
+                    try:
+                        tmp_lig_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            except Exception as gnina_e:
+                logging.warning(f"Failed to compute GNINA scores for {sample_name}: {gnina_e}")
+                # Leave gnina scores as None
     except Exception as e:
         logging.error(f"Error in compute_fast_molecule_metrics for {sample_name}: {e}")
         # Still return metrics even if there's an error
@@ -1324,6 +1622,7 @@ def run_omtra_sampler(
         sampling_mode = params.get('sampling_mode')
         n_samples = params.get('n_samples', 10)
         n_timesteps = params.get('steps', 100)
+        batch_size = params.get('batch_size', 500)
         checkpoint_path = params.get('checkpoint_path')
         seed = params.get('seed')
         n_lig_atoms_mean = params.get('n_lig_atoms_mean')
@@ -1355,19 +1654,27 @@ def run_omtra_sampler(
                 f"Expected one of: {', '.join(sorted(task_mapping))}"
             )
         
-        task_name = task_mapping[sampling_mode]
-
-        # Handle fixed_brics_fragments from params
-        fixed_brics_list = params.get('fixed_brics_fragments')
-        fixed_brics_str = None
-        if fixed_brics_list and len(fixed_brics_list) > 0:
-            fixed_brics_str = ','.join(str(i) for i in fixed_brics_list)
-            # Switch to partial task variant directly
-            partial_mapping = {
-                'fixed_protein_ligand_denovo_condensed': 'partial_fixed_protein_ligand_denovo_condensed',
-                'rigid_docking_condensed': 'partial_rigid_docking_condensed',
-            }
-            task_name = partial_mapping.get(task_name, task_name)
+        partial_mapping = {
+            'fixed_protein_ligand_denovo_condensed': 'partial_fixed_protein_ligand_denovo_condensed',
+            'rigid_docking_condensed': 'partial_rigid_docking_condensed',
+        }
+        task_name, fixed_atoms_str, fixed_brics_str, has_fixed = _resolve_fixed_structure_for_task(
+            params,
+            task_mapping[sampling_mode],
+            partial_task_mapping=partial_mapping,
+        )
+        if has_fixed and job_logger:
+            job_logger.info(
+                f"Partial fixed-structure sampling: task={task_name}, "
+                f"fixed_atoms={fixed_atoms_str}, fixed_brics={fixed_brics_str}"
+            )
+            partial_ckpt = CHECKPOINT_DIR / 'gnn_partial_prot_cond.ckpt'
+            if partial_ckpt.exists():
+                checkpoint_path = str(partial_ckpt)
+            elif job_logger:
+                job_logger.warning(
+                    f"Partial checkpoint missing at {partial_ckpt}; using {checkpoint_path}"
+                )
         
         # Create a mock args object like the CLI does
         class MockArgs:
@@ -1379,6 +1686,7 @@ def run_omtra_sampler(
                 self.n_replicates = 1
                 self.dataset_start_idx = 0
                 self.n_timesteps = n_timesteps
+                self.batch_size = batch_size
                 self.visualize = False
                 self.output_dir = outputs_dir
                 self.pharmit_path = None
@@ -1404,6 +1712,7 @@ def run_omtra_sampler(
                 self.bbox_length = 23.0
                 self.input_files_dir = None
                 self.g_list_from_files = None
+                self.fixed_atoms = fixed_atoms_str
                 self.fixed_brics_fragments = fixed_brics_str
         
         # Set up args based on sampling mode
@@ -1581,6 +1890,20 @@ def run_omtra_sampler(
     # Import and call the CLI's run_sample function
     from cli import run_sample
     run_sample(args)
+
+    # Save template ligand coordinates for fixed-atom visualization in the web UI
+    has_fixed_structure = bool(
+        getattr(args, 'fixed_atoms', None) or getattr(args, 'fixed_brics_fragments', None)
+    )
+    lig_path = getattr(args, 'ligand_file', None)
+    if has_fixed_structure and lig_path and outputs_dir and Path(str(lig_path)).exists():
+        try:
+            shutil.copy2(str(lig_path), outputs_dir / 'fixed_structure_reference.sdf')
+            if job_logger:
+                job_logger.info('Saved fixed_structure_reference.sdf for results viewer')
+        except Exception as e:
+            if job_logger:
+                job_logger.warning(f'Could not save fixed_structure_reference.sdf: {e}')
     
     # Split the combined SDF file into individual sample files
     molecules = []
@@ -1710,69 +2033,18 @@ def run_omtra_sampler(
             except Exception as conv_e:
                 job_logger.warning(f"CIF→PDB conversion failed: {conv_e}", exc_info=True)
         
-        # Prepare for parallel diagram generation
-        diagram_threads = []
-        diagram_lock = threading.Lock()
-        diagram_results = {}  # Track which diagrams succeeded/failed
-        
-        def generate_diagram_for_sample(sdf_file_path: Path, protein_file_path: Optional[str], sample_idx: int):
-            """Generate diagram for a single sample in a background thread"""
-            if not protein_file_path or sampling_mode not in PROTEIN_INVOLVING_MODES:
-                return
-            
-            try:
-                # Convert protein_file_path to Path if it's a string
-                protein_path = Path(protein_file_path) if isinstance(protein_file_path, str) else protein_file_path
-                
-                diagram_filename = f"{sdf_file_path.name}_diagram.svg"
-                error_filename = f"{sdf_file_path.name}_diagram_error.json"
-                cached_diagram_path = outputs_dir / diagram_filename
-                error_path = outputs_dir / error_filename
-                
-                # Skip if already exists
-                if cached_diagram_path.exists() or error_path.exists():
-                    with diagram_lock:
-                        diagram_results[sample_idx] = 'skipped'
-                    return
-                
-                svg, error_msg = _generate_interaction_diagram(sdf_file_path, protein_path, job_logger)
-                
-                if svg and not error_msg:
-                    with open(cached_diagram_path, 'w') as f:
-                        f.write(svg)
-                    with diagram_lock:
-                        diagram_results[sample_idx] = 'success'
-                    job_logger.info(f"Generated diagram for {sdf_file_path.name}")
-                else:
-                    # Save error file
-                    error_detail = error_msg or "Failed to generate interaction diagram. PoseView could not detect any interactions. This can happen if the ligand is too far from the protein binding site or the coordinate systems don't align."
-                    error_data = {
-                        "statusCode": 503,
-                        "message": error_detail.split('.')[0] if error_detail else "Failed",
-                        "detail": error_detail
-                    }
-                    with open(error_path, 'w') as f:
-                        json.dump(error_data, f)
-                    with diagram_lock:
-                        diagram_results[sample_idx] = 'failed'
-                    job_logger.warning(f"Failed to generate diagram for {sdf_file_path.name}: {error_detail}")
-            except Exception as e:
-                # Save error file for unexpected exceptions
-                error_path = outputs_dir / f"{sdf_file_path.name}_diagram_error.json"
-                error_data = {
-                    "statusCode": 500,
-                    "message": "Failed",
-                    "detail": f"Failed to generate interaction diagram: {str(e)}"
-                }
-                with open(error_path, 'w') as f:
-                    json.dump(error_data, f)
-                with diagram_lock:
-                    diagram_results[sample_idx] = 'error'
-                job_logger.warning(f"Error generating diagram for {sdf_file_path.name}: {e}")
-        
+        # Queue ligands for serial background diagram generation (after job completes)
+        diagram_queue: List[Path] = []
+        metrics_opts = _resolve_metrics_options(params)
+
         # Pre-load PoseCheck protein once for all samples
         posecheck_obj = None
-        if sampling_mode in PROTEIN_INVOLVING_MODES and protein_file and str(protein_file).lower().endswith('.pdb'):
+        if (
+            sampling_mode in PROTEIN_INVOLVING_MODES
+            and protein_file
+            and str(protein_file).lower().endswith('.pdb')
+            and (metrics_opts.get('posecheck') or metrics_opts.get('strain'))
+        ):
             try:
                 posecheck_obj = _load_posecheck_with_timeout(str(protein_file), timeout=120)
                 if posecheck_obj is None:
@@ -1784,7 +2056,7 @@ def run_omtra_sampler(
 
         # Save individual sample files and compute metrics
         for i, mol in enumerate(molecules):
-            individual_file = outputs_dir / f"sample_{i:03d}.sdf"
+            individual_file = outputs_dir / f"sample_{i + 1:02d}.sdf"
             write_mols_to_sdf([mol], str(individual_file))
             
             # Check if molecule is invalid (marked with _Invalid property)
@@ -1801,13 +2073,14 @@ def run_omtra_sampler(
                 job_logger.warning(f"Saved sample {i+1} (INVALID - {invalid_reason}): {individual_file}")
             
             # Compute fast metrics for this molecule
-            sample_name = f"sample_{i:03d}"
+            sample_name = f"sample_{i + 1:02d}"
             metrics = compute_fast_molecule_metrics(
-                mol, 
+                mol,
                 sample_name=sample_name,
                 sampling_mode=sampling_mode,
                 protein_file=protein_file,
-                posecheck_obj=posecheck_obj
+                posecheck_obj=posecheck_obj,
+                metrics_options=metrics_opts,
             )
             
             # Mark invalid molecules in metrics with Warning
@@ -1816,24 +2089,19 @@ def run_omtra_sampler(
             
             all_molecule_metrics.append(metrics)
             
-            # Start diagram generation in background thread
-            if sampling_mode in PROTEIN_INVOLVING_MODES and protein_file:
-                thread = threading.Thread(
-                    target=generate_diagram_for_sample,
-                    args=(individual_file, protein_file, i),
-                    daemon=False
-                )
-                thread.start()
-                diagram_threads.append(thread)
+            if metrics_opts.get('poseview') and sampling_mode in PROTEIN_INVOLVING_MODES and protein_file:
+                diagram_queue.append(individual_file)
         
         # Include reference/pocket ligand as the first entry if available
         pocket_ligand_path = getattr(args, 'pocket_ligand', None)
         if pocket_ligand_path and Path(str(pocket_ligand_path)).exists() and sampling_mode in PROTEIN_INVOLVING_MODES:
             try:
                 ref_mol = None
-                supplier = Chem.SDMolSupplier(str(pocket_ligand_path), removeHs=True, sanitize=True)
+                supplier = Chem.SDMolSupplier(str(pocket_ligand_path), removeHs=True, sanitize=False)
                 for m in supplier:
                     if m is not None:
+                        m.UpdatePropertyCache(strict=False)
+                        Chem.GetSymmSSSR(m)
                         ref_mol = m
                         break
 
@@ -1847,18 +2115,13 @@ def run_omtra_sampler(
                         sampling_mode=sampling_mode,
                         protein_file=protein_file,
                         posecheck_obj=posecheck_obj,
+                        metrics_options=metrics_opts,
                     )
                     ref_metrics['is_reference'] = True
                     all_molecule_metrics.insert(0, ref_metrics)
 
-                    if sampling_mode in PROTEIN_INVOLVING_MODES and protein_file:
-                        thread = threading.Thread(
-                            target=generate_diagram_for_sample,
-                            args=(ref_sdf, protein_file, -1),
-                            daemon=False,
-                        )
-                        thread.start()
-                        diagram_threads.append(thread)
+                    if metrics_opts.get('poseview') and sampling_mode in PROTEIN_INVOLVING_MODES and protein_file:
+                        diagram_queue.insert(0, ref_sdf)
 
                     job_logger.info(f"Added reference ligand from {pocket_ligand_path} with metrics")
                 else:
@@ -1866,12 +2129,15 @@ def run_omtra_sampler(
             except Exception as ref_e:
                 job_logger.warning(f"Failed to add reference ligand: {ref_e}")
 
-        # Wait for all diagram generation threads to complete
-        if diagram_threads:
-            job_logger.info(f"Waiting for {len(diagram_threads)} diagram generation threads to complete...")
-            for thread in diagram_threads:
-                thread.join()
-        
+        if metrics_opts.get('poseview') and diagram_queue and protein_file:
+            _enqueue_diagram_generation(
+                job_id,
+                outputs_dir,
+                diagram_queue,
+                Path(protein_file),
+                job_logger,
+            )
+
         # Save per-molecule metrics to JSON file
         if all_molecule_metrics:
             metrics_file = outputs_dir / "per_molecule_metrics.json"

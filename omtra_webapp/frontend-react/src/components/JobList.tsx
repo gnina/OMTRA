@@ -115,7 +115,9 @@ export function JobList({ onJobSelect }: JobListProps) {
             ? formatElapsedTime(job.elapsed_seconds)
             : null;
           const nSamples = (job.params as any)?.n_samples || (job.params as any)?.num_samples || 'N/A';
-          const mode = job.params?.docking_mode || job.params?.sampling_mode || 'Unconditional';
+          const baseMode = job.params?.docking_mode || job.params?.sampling_mode || 'Unconditional';
+          const isPartial = !!(job.params as any)?.fixed_atom_indices?.length;
+          const mode = isPartial ? `Partial ${baseMode}` : baseMode;
 
           return (
             <div

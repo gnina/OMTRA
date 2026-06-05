@@ -57,7 +57,16 @@ export function HelpTab() {
               <div>
                 <strong className="text-slate-900">Detected Pockets</strong>
                 <p className="text-sm text-slate-600 mt-1">
-                  Upload a protein to auto-detect binding sites using Pocketeer. Select one to define the pocket.
+                  Upload a protein to auto-detect binding sites using{' '}
+                  <a
+                    href="https://github.com/cch1999/pocketeer"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary-600 hover:text-primary-700 underline font-medium"
+                  >
+                    Pocketeer
+                  </a>
+                  . Select one to define the pocket.
                 </p>
               </div>
             </li>
@@ -83,15 +92,16 @@ export function HelpTab() {
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
               <h4 className="font-bold text-slate-900 mb-2">Adding pharmacophore constraints</h4>
               <ul className="list-disc pl-5 text-sm space-y-1">
-                <li><strong>Upload a pharmacophore file</strong>: Upload a <strong>JSON file exported from <a href="https://pharmit.csb.pitt.edu" target="_blank" rel="noopener noreferrer" className="text-primary-600 underline">Pharmit</a></strong> or an <strong>XYZ file</strong> with pharmacophore features.</li>
+                <li><strong>Upload a pharmacophore file</strong>: Upload an SDF file and select pharmacophore spheres interactively. Alternatively, upload a JSON file with pharmacophore features exported from <a href="https://pharmit.csb.pitt.edu" target="_blank" rel="noopener noreferrer" className="text-primary-600 underline">Pharmit</a> or using <a href="https://github.com/gnina/OMTRA/blob/main/omtra/scripts/mol2pharm.py" target="_blank" rel="noopener noreferrer" className="text-primary-600 underline">this script</a>.</li>
                 <li><strong>Select constraints</strong>: Pharmacophores appear as wireframe spheres in the 3D viewer. Click any sphere to select it as a conditioning constraint (solid = selected). We recommend selecting fewer than 8.</li>
               </ul>
             </div>
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-              <h4 className="font-bold text-slate-900 mb-2">Fixing BRICS fragments</h4>
+              <h4 className="font-bold text-slate-900 mb-2">Fix structure (partial generation)</h4>
               <ul className="list-disc pl-5 text-sm space-y-1">
-                <li><strong>Select fragments</strong>: For supported protein-conditioned design and rigid docking jobs, upload an SDF ligand and choose BRICS fragments to keep fixed during sampling.</li>
-                <li><strong>Output viewer</strong>: Fixed atoms are highlighted with colored wireframe spheres in generated molecules.</li>
+                <li><strong>By fragment or by atom</strong>: For protein-conditioned de novo and rigid docking, open <em>Fix structure</em> on the reference/docking SDF. Use BRICS fragments for quick scaffold locking, or switch to per-atom mode for arbitrary subsets.</li>
+                <li><strong>3D selection</strong>: Click to toggle; hold <kbd className="px-1 py-0.5 bg-slate-200 rounded text-xs">Shift</kbd> and drag to box-select.</li>
+                <li><strong>Results</strong>: Fixed atoms are highlighted in amber in the output 3D viewer.</li>
               </ul>
             </div>
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">

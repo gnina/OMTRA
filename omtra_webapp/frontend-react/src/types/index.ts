@@ -14,12 +14,29 @@ export type SamplingMode =
   | 'Rigid Docking'
   | 'Rigid Docking + Pharmacophore';
 
+export interface MetricsOptions {
+  posebusters: boolean;
+  posecheck: boolean;
+  strain: boolean;
+  vina: boolean;
+  poseview: boolean;
+}
+
+export const DEFAULT_METRICS_OPTIONS: MetricsOptions = {
+  posebusters: true,
+  posecheck: true,
+  strain: true,
+  vina: true,
+  poseview: true,
+};
+
 export interface SamplingParams {
   sampling_mode?: SamplingMode;
   docking_mode?: DockingMode;
   seed?: number | null;
   n_samples: number;
   steps: number;
+  batch_size?: number;
   device?: string;
   n_lig_atoms_mean?: number | null;
   n_lig_atoms_std?: number | null;
@@ -29,6 +46,8 @@ export interface SamplingParams {
     bbox_length?: number;
   };
   fixed_brics_fragments?: number[];
+  fixed_atom_indices?: number[];
+  metrics_options?: MetricsOptions;
 }
 
 export interface BricsFragment {
@@ -151,6 +170,7 @@ export interface DockingParams {
   seed?: number | null;
   n_samples: number;
   steps: number;
+  batch_size?: number;
   device?: string;
   pocket_selection?: {
     type: 'center' | 'residues' | 'file' | 'coords';
@@ -158,6 +178,8 @@ export interface DockingParams {
     bbox_length?: number;
   };
   fixed_brics_fragments?: number[];
+  fixed_atom_indices?: number[];
+  metrics_options?: MetricsOptions;
 }
 
 export interface DockingJobSubmission {
