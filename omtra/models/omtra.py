@@ -411,8 +411,13 @@ class OMTRA(pl.LightningModule):
             for group in ["ligand_identity", "ligand_identity_condensed"]
         )
         if has_ligand and self.lig_com_offset_std > 0.0 and g.num_nodes("lig") > 0:
-            offset = torch.randn(g.batch_size, 3, device=g.device) * self.lig_com_offset_std
-            per_atom_offset = offset[node_batch_idxs["lig"]]  # (n_lig_atoms, 3)
+            # random direction (uniform on the sphere) + magnitude uniform in [0, lig_com_offset_std].
+            # Matches the inference offset (direction + fixed magnitude); here magnitude is sampled.
+            direction = torch.randn(g.batch_size, 3, device=g.device)
+            direction = direction / direction.norm(dim=1, keepdim=True)                       # (B, 3) unit vectors
+            radius = torch.rand(g.batch_size, 1, device=g.device) * self.lig_com_offset_std   # (B, 1) in [0, std)
+            offset = direction * radius                                                       # (B, 3)
+            per_atom_offset = offset[node_batch_idxs["lig"]]                                  # (n_lig_atoms, 3)
             g.nodes["lig"].data['x_0'] = g.nodes["lig"].data['x_0'] + per_atom_offset
 
         g = self.sample_conditional_path(
