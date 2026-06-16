@@ -116,12 +116,7 @@ def parse_args():
         default=0.0,
         help="Magnitude of center of mass offset (default: 0.0)"
     )
-    parser.add_argument(
-        "--plinder_path",
-        type=Path,
-        default='/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder', 
-        help="Path to plinder dataset"
-    )
+
     parser.add_argument(
         "--alpha",
         type=float,
