@@ -33,6 +33,7 @@ beta: null # beta-distribution beta for Plinder dynamic cropping
 additional_prot_crop: null # additional fixed distance to crop protein pocket during inference (test split)
 pharm_pos_std: 0.0 # standard deviation to sample noise variance from for pharm positions
 prot_pos_std: 0.0 # standard deviation to sample noise std dev from for protein atom positions
+lig_com_offset_std: 0.0 # standard deviation to sample noise std dev from for ligand center of mass positions
 offset_std: 0.0 # offset to prior positions
 
 pharmit_path: ${omtra_root:}/data/pharmit
