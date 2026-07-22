@@ -51,3 +51,9 @@ omtra = "cli:main"
 
 [tool.setuptools]
 py-modules = ["cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "requires_data: marks tests that require real dataset files (deselect with '-m \"not requires_data\"')",
+]

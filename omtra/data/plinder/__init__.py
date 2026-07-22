@@ -121,7 +121,6 @@ class LigandData:
             elif xace_dict[k] is None and k not in ['fixed_atom_mask', 'fixed_edge_mask']:
                 raise ValueError(f"{k} is None but not in ['fixed_atom_mask', 'fixed_edge_mask']")
 
-
             if k == 'x':
                 xace_dict[k] = xace_dict[k].float()
             else:

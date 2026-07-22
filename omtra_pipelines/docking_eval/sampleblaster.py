@@ -38,6 +38,12 @@ def parse_args():
         required=True,
         help='Number of replicate commands per chunk'
     )
+    parser.add_argument(
+        '--bs_per_gbmem',
+        type=float,
+        default=5.0,
+        help='Target batch size per GB of GPU memory for docking_eval.py (default: 5.0)'
+    )
     
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument(
@@ -101,12 +107,54 @@ def parse_args():
         help='Dataset arg passed to docking_eval.py (default: plinder)'
     )
     parser.add_argument(
+        "--plinder_path",
+        type=Path,
+        default=None,
+        help="Path to plinder dataset (default: None)"
+    )
+    parser.add_argument(
         "--crossdocked_path",
         type=Path,
         default=None,
         help="Path to crossdocked dataset (default: None)"
     )
-    
+    parser.add_argument(
+        "--com_offset_magnitude",
+        type=float,
+        default=0.0,
+        help="Magnitude of center of mass offset (default: 0.0)"
+    )
+
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=None,
+        help="Beta distribution alpha parameter for Plinder dynamic cropping (default: None)"
+    )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=None,
+        help="Beta distribution beta parameter for Plinder dynamic cropping (default: None)"
+    )
+    parser.add_argument(
+        "--crop_min_distance", 
+        type=float,
+        default=None,
+        help="Beta distribution minimum cropping distance for Plinder dynamic cropping (default: None)"
+    )
+    parser.add_argument(
+        "--crop_max_distance", 
+        type=float,
+        default=None,
+        help="Beta distribution maximum cropping distance for Plinder dynamic cropping (default: None)"
+    )
+    parser.add_argument(
+        "--additional_prot_crop",
+        type=float,
+        default=None,
+        help="Additional fixed protein crop distance for Plinder test-time cropping (default: None)"
+    )
     return parser.parse_args()
 
 
@@ -156,25 +204,31 @@ def generate_commands(chunks, chunk_files, args):
                 'python',
                 str(Path(__file__).parent / 'docking_eval.py'),
                 f'--task={args.task}',
-                f'--n_replicates={args.reps_per_cmd}',
-                f'--n_samples={len(chunks[chunk_idx])}',
+                f'--sys_idx_file={chunk_file}',
+                f'--n_replicates={args.reps_per_cmd}',  # Each command handles 1 replicate
+                f'--n_samples={len(chunks[chunk_idx])}',  # Number of systems in this chunk
+                f'--bs_per_gbmem={args.bs_per_gbmem}',
+                f'--output_dir={cmd_output_dir}',  # Output directory for this chunk and replicate
+                f'--plinder_path={args.plinder_path}',
+                f'--split={args.split}',
+                f'--dataset={args.dataset}', 
+                f'--com_offset_magnitude={args.com_offset_magnitude}',
             ]
 
-            if args.samples_dir is not None:
-                cmd_parts.append(f'--samples_dir={cmd_dir}')
-            else:
-                cmd_parts.extend([
-                    f'--ckpt_path={args.ckpt_path}',
-                    f'--sys_idx_file={chunk_file}',
-                    f'--bs_per_gbmem=5',
-                    f'--output_dir={cmd_dir}',
-                    f'--plinder_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder',
-                    f'--split={args.split}',
-                    f'--dataset={args.dataset}',
-                ])
-                if args.crossdocked_path is not None:
-                    cmd_parts.append(f'--crossdocked_path={args.crossdocked_path}')
-
+            if args.alpha is not None:
+                cmd_parts.append(f'--alpha={args.alpha}')
+            if args.beta is not None:
+                cmd_parts.append(f'--beta={args.beta}')
+            if args.crop_min_distance is not None:
+                cmd_parts.append(f'--crop_min_distance={args.crop_min_distance}')
+            if args.crop_max_distance is not None:
+                cmd_parts.append(f'--crop_max_distance={args.crop_max_distance}')
+            if args.additional_prot_crop is not None:
+                cmd_parts.append(f'--additional_prot_crop={args.additional_prot_crop}')
+            if args.crossdocked_path is not None:
+                cmd_parts.append(f'--crossdocked_path={args.crossdocked_path}')
+            
+            # Add additional arguments
             if args.additional_args:
                 cmd_parts.extend(args.additional_args.split())
 

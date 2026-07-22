@@ -24,3 +24,4 @@ scheduler_config:
   type: cosine_decay
   min_lr_factor: 0.1  # Optional, defaults to 0.1 (1
 
+lig_com_offset_std: ${lig_com_offset_std}

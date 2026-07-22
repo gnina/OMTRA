@@ -87,6 +87,7 @@ class OMTRA(pl.LightningModule):
         lr_warmup_steps: int = 0,
         prot_pos_std: float = 0.0, #standard deviation for adding noise to protein atom positions
         bernoulli_mask_p: float = 0.0, # probability of keeping each atom fixed in Bernoulli masking for partial modality conditioning (0.0 = disabled)
+        lig_com_offset_std: float = 0.0, #standard deviation for offsetting ligand center of mass
 
     ):
         super().__init__()
@@ -115,6 +116,7 @@ class OMTRA(pl.LightningModule):
         self.scheduler_config = scheduler_config
         self.prot_pos_std = prot_pos_std
         self.bernoulli_mask_p = bernoulli_mask_p
+        self.lig_com_offset_std = lig_com_offset_std
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -410,12 +412,27 @@ class OMTRA(pl.LightningModule):
         # than setting to prior value (which is usually mask token)
         task_class: Task = task_name_to_class(task_name)
 
+<<<<<<< HEAD
         # Apply Bernoulli atom-level masking for partial modality conditioning
         if self.bernoulli_mask_p > 0.0 and len(task_class.partial_modalities_fixed) > 0 and g.num_nodes("lig") > 0:
-            g = self.apply_bernoulli_mask(g, task_class)
+=======
+        # shift ligand prior (x_0) to simulate displaced pocket definition
+        # x_1_true is untouched so loss targets are unaffected
+            group in task_class.groups_present
+            for group in ["ligand_identity", "ligand_identity_condensed"]
+        )
+        if has_ligand and self.lig_com_offset_std > 0.0 and g.num_nodes("lig") > 0:
+            # random direction (uniform on the sphere) + magnitude uniform in [0, lig_com_offset_std].
+            # Matches the inference offset (direction + fixed magnitude); here magnitude is sampled.
+            direction = torch.randn(g.batch_size, 3, device=g.device)
+            direction = direction / direction.norm(dim=1, keepdim=True)                       # (B, 3) unit vectors
+            radius = torch.rand(g.batch_size, 1, device=g.device) * self.lig_com_offset_std   # (B, 1) in [0, std)
+            offset = direction * radius                                                       # (B, 3)
+            per_atom_offset = offset[node_batch_idxs["lig"]]                                  # (n_lig_atoms, 3)
+            g.nodes["lig"].data['x_0'] = g.nodes["lig"].data['x_0'] + per_atom_offset
+>>>>>>> dynamic-crop
 
         g = self.sample_conditional_path(
-            g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask
         )
 
         if self.distort_p > 0.0:
@@ -507,6 +524,11 @@ class OMTRA(pl.LightningModule):
         for modality in task_class.modalities_generated:
             is_categorical = modality.is_categorical
 
+            # skip loss if there are no nodes of this type
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                losses[modality.name] = torch.tensor(0.0, device=g.device)
+                continue
+
             if self.time_scaled_loss:
                 mod_weight = t_weights
 
@@ -528,11 +550,6 @@ class OMTRA(pl.LightningModule):
 
             inp = vf_output[modality.name]
             target = targets[modality.name]
-
-            # skip loss if there are no nodes of this type
-            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
-                losses[modality.name] = torch.tensor(0.0, device=g.device)
-                continue
 
             if disable_time_scaled_loss and modality.is_categorical:
                 mod_loss = fn.cross_entropy(

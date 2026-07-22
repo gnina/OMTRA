@@ -39,6 +39,13 @@ import biotite.structure as struc
 from omtra.constants import DEFAULT_DISTANCE_RANGE
 import functools
 from scipy.spatial.distance import cdist
+from omtra.dataset.crop_utils import (
+    crop_structure_data,
+    filter_npndes_by_distance,
+    sample_crop_distance,
+    crop_structure_data_multiple_distances,
+    compute_ligand_groups,
+)
 
 import warnings
 
@@ -64,6 +71,11 @@ class PlinderDataset(ZarrDataset):
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
         res_id_embed_dim: int = 64,
         max_pharms_sampled: int = 8,
+        crop_min_distance: Optional[float] = None,
+        crop_max_distance: Optional[float] = None,
+        alpha: Optional[float] = None,   # beta distribution alpha parameter for dynamic cropping
+        beta: Optional[float] = None,    # beta distribution beta parameter for dynamic cropping
+        additional_prot_crop: Optional[float] = None, # additional fixed distance to crop from pocket residues
     ):
         super().__init__(
             split,
@@ -83,6 +95,27 @@ class PlinderDataset(ZarrDataset):
         self.res_id_embed_dim = res_id_embed_dim
 
         self.max_pharms_sampled = max_pharms_sampled
+
+        # Dynamic cropping: only applied during training when both distances are specified
+        self.crop_min_distance = crop_min_distance
+        self.crop_max_distance = crop_max_distance
+        # Convert string 'None' to actual None (defensive check, in case OmegaConf converts it)
+        self.alpha = None if alpha == 'None' or alpha is None else alpha
+        self.beta = None if beta == 'None' or beta is None else beta
+        self.dynamic_crop = (
+            crop_min_distance is not None 
+            and crop_max_distance is not None
+            and self.alpha is not None
+            and self.beta is not None
+            and split in ['train', 'test']
+        )
+
+        # Store additional_prot_crop distance if in test split, otherwise None
+        self.additional_prot_crop = (
+            additional_prot_crop 
+            if additional_prot_crop is not None and split in ["test"]
+            else None
+        )
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
@@ -431,6 +464,81 @@ class PlinderDataset(ZarrDataset):
                     interactions=interactions
                 )
 
+
+        # Apply dynamic cropping during training (should this be if include_protein and then if self.dynamic_crop
+        #in case dyanmic crop is not enabled but we need the protein?)
+        if self.dynamic_crop and include_protein:
+            # Break ligand atoms into n_groups groups (ligand.coords of shape (M,3))
+            lig_atom_groups = []
+            n_lig_atoms = len(ligand.coords)
+            n_groups = compute_ligand_groups(n_lig_atoms)
+            atoms_per_group = max(2, n_lig_atoms // n_groups)
+
+            for i in range(0, n_lig_atoms, atoms_per_group):
+                lig_atom_groups.append(ligand.coords[i:i+atoms_per_group])
+            
+            # Get crop distances for each group of ligand atoms
+            crop_distances = [sample_crop_distance(self.crop_min_distance, self.crop_max_distance, self.alpha, self.beta) for _ in lig_atom_groups]
+
+            # Crop the pocket
+            cropped_pocket = crop_structure_data_multiple_distances(pocket, lig_atom_groups, crop_distances)
+            
+            # If cropping results in empty pocket, fall back to uncropped
+            if cropped_pocket is not None:
+                pocket = cropped_pocket
+                
+                # Filter NPNDEs by distance to ligand
+                crop_dist = sample_crop_distance(self.crop_min_distance, self.crop_max_distance, self.alpha, self.beta)
+                npndes = filter_npndes_by_distance(npndes, ligand.coords, crop_dist)
+                
+                # Crop link structure using same residue set as pocket
+                # Link structures are positionally aligned with pocket, so we 
+                # compute a mask from pocket and apply to link
+                link_structure = apo if apo else pred
+                if link_structure is not None:
+                    # Build the set of (chain_id, res_id) pairs in cropped pocket
+                    cropped_res_set = set(zip(pocket.chain_ids, pocket.res_ids))
+                    
+                    # Create atom-level mask for original pocket to map to link
+                    # Since link is aligned, same indices in original pocket correspond to same atoms in link
+                    original_pocket_coords = self.slice_array("pocket/coords", pocket_start, pocket_end)
+                    original_pocket_res_ids = self.slice_array("pocket/res_ids", pocket_start, pocket_end)
+                    original_pocket_chain_ids = self.slice_array("pocket/chain_ids", pocket_start, pocket_end)
+                    
+                    link_atom_mask = np.array([
+                        (original_pocket_chain_ids[i], original_pocket_res_ids[i]) in cropped_res_set
+                        for i in range(len(original_pocket_coords))
+                    ], dtype=bool)
+                    
+                    # Apply mask to link structure coords
+                    if link_structure.coords is not None:
+                        link_structure.coords = link_structure.coords[link_atom_mask]
+                    
+                    # For backbone, compute mask from original pocket backbone
+                    if link_structure.backbone is not None and link_structure.backbone.coords is not None:
+                        original_bb_res_ids = self.slice_array("pocket/backbone_res_ids", pocket_bb_start, pocket_bb_end)
+                        original_bb_chain_ids = self.slice_array("pocket/backbone_chain_ids", pocket_bb_start, pocket_bb_end)
+                        
+                        link_bb_mask = np.array([
+                            (original_bb_chain_ids[i], original_bb_res_ids[i]) in cropped_res_set
+                            for i in range(len(original_bb_res_ids))
+                        ], dtype=bool)
+                        
+                        link_structure.backbone.coords = link_structure.backbone.coords[link_bb_mask]
+                    
+                    # Update apo or pred reference
+                    if apo is not None:
+                        apo = link_structure
+                    else:
+                        pred = link_structure
+
+        if self.additional_prot_crop is not None and include_protein:
+            # Crop the pocket with an additional fixed distance
+            cropped_pocket = crop_structure_data(pocket, ligand.coords, self.additional_prot_crop)
+            
+            # If cropping results in empty pocket, fall back to original pocket
+            if cropped_pocket is not None:
+                pocket = cropped_pocket
 
         system = SystemData(
             system_id=system_info["system_id"],

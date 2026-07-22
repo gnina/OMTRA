@@ -68,7 +68,13 @@ def parse_args():
     sampling.add_argument("--max_batch_size", type=int, default=500, help='Maximum number of systems to sample per batch.')
     sampling.add_argument("--bs_per_gbmem", type=float, default=None, help='Batch size per GB/EM on the GPU.')
     
-
+    sampling.add_argument("--com_offset_magnitude", type=float, default=0.0, help="Magnitude of random offset to apply to the center of mass of generated ligands for metrics computation. Set to 0 to disable.")
+    
+    sampling.add_argument("--alpha", type=float, default=None, help="Beta distribution alpha parameter for Plinder dynamic cropping (overrides config).")
+    sampling.add_argument("--beta", type=float, default=None, help="Beta distribution beta parameter for Plinder dynamic cropping (overrides config).")
+    sampling.add_argument("--crop_min_distance", type=float, default=None, help="Beta distribution minimum cropping distance for Plinder dynamic cropping (overrides config).")
+    sampling.add_argument("--crop_max_distance", type=float, default=None, help="Beta distribution maximum cropping distance for Plinder dynamic cropping (overrides config).")
+    sampling.add_argument("--additional_prot_crop", type=float, default=None, help="Additional fixed distance to crop from pocket residues for Plinder dynamic cropping (overrides config).")
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
 
@@ -82,6 +88,8 @@ def parse_args():
     metrics.add_argument('--disable_strain', action='store_true', help='Disables strain energy calculation.')
     metrics.add_argument("--disable_ground_truth_metrics", action="store_true", help='Disables all relevant metrics on the truth ligand.')
     metrics.add_argument("--disable_fixed_frag_metrics", action="store_true", help='Disables computations of fixed fragment metrics.')
+    metrics.add_argument("--disable_lddt", action="store_true", help='Disables lDDT computation.')
+
 
     args = p.parse_args()
 
@@ -101,6 +109,7 @@ def sample_system(ckpt_path: Path,
                   sys_idx_file: Path = None,
                   plinder_path: Path = None,
                   crossdocked_path: Path = None,
+                  com_offset_magnitude: float = 0.0,
                   **kwargs
                   ):
     
@@ -142,7 +151,20 @@ def sample_system(ckpt_path: Path,
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
         
-        cfg = quick_load.load_cfg(overrides=['task_group=protein'], plinder_path=plinder_path)
+        # Build config overrides, including alpha/beta and cropping distances if provided
+        overrides = ['task_group=protein']
+        if args.alpha is not None:
+            overrides.append(f'alpha={args.alpha}')
+        if args.beta is not None:
+            overrides.append(f'beta={args.beta}')
+        if args.crop_min_distance is not None:
+            overrides.append(f'crop_min_distance={args.crop_min_distance}')
+        if args.crop_max_distance is not None:
+            overrides.append(f'crop_max_distance={args.crop_max_distance}')
+        if args.additional_prot_crop is not None:
+            overrides.append(f'additional_prot_crop={args.additional_prot_crop}')
+
+        cfg = quick_load.load_cfg(overrides=overrides, plinder_path=plinder_path)
         plinder_datamodule = datamodule_from_config(cfg)    
         dataset = plinder_datamodule.load_dataset(split).datasets['plinder'][plinder_link_version]
         
@@ -191,7 +213,17 @@ def sample_system(ckpt_path: Path,
 
     # set coms if protein is present
     if 'protein_identity' in task.groups_present and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed'])):
-        coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
+        #offsetting the COMS, each system in a random direction by same magnitude
+        coms = []
+        for g in g_list:
+            com = g.nodes['lig'].data['x_1_true'].mean(dim=0)
+            if com_offset_magnitude > 0:
+                direction = torch.randn(3) 
+                direction = direction / direction.norm()
+                offset = (direction * com_offset_magnitude).to(com.device)
+                coms.append(com + offset)
+            else:
+                coms.append(com)
     else:
         coms = None
     
@@ -405,6 +437,7 @@ def main(args):
                                                           dataset_name=args.dataset,
                                                           plinder_path=args.plinder_path,
                                                           crossdocked_path=args.crossdocked_path,
+                                                          com_offset_magnitude=args.com_offset_magnitude,
                                                           **kwargs)
         
         print("Finished sampling. Clearing torch GPU cache...\n")
@@ -455,15 +488,19 @@ def main(args):
         pb_mode = determine_pb_mode(task)
 
         is_partial_task = len(task.partial_modalities_fixed) > 0
+        lig_identity_generated = 'ligand_identity_condensed' in task.groups_generated
+        protein_generated = "protein_structure" in task.groups_generated
 
         metrics_to_run = {'pb_valid': not args.disable_pb_valid,
                         'gnina': not args.disable_gnina,
                         'posecheck': not args.disable_posecheck,
-                        'rmsd': not args.disable_rmsd and 'ligand_identity_condensed' not in task.groups_generated,
+                        'rmsd': not args.disable_rmsd and (not lig_identity_generated),
                         'interaction_recovery': not args.disable_interaction_recovery,
                         'pharm_match': (not args.disable_pharm_match) and ('pharmacophore' in task.groups_present),
                         'ground_truth': not args.disable_ground_truth_metrics,
-                        'fixed_frag_metrics': (not args.disable_fixed_frag_metrics) and is_partial_task}
+                        'fixed_frag_metrics': (not args.disable_fixed_frag_metrics) and is_partial_task,
+                        'lddt_lig': (not args.disable_lddt) and (not protein_generated) and (not lig_identity_generated),
+                        'lddt': (not args.disable_lddt) and protein_generated and (not lig_identity_generated)}
 
         # Auto-disable metrics that are inapplicable for this task
         from omtra.eval.metrics.compute import determine_applicable_metrics

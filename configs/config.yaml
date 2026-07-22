@@ -26,13 +26,19 @@ fake_atom_p: 0.3 # upper bound on fraction of fake atoms added to a molecule
 distort_p: 0.2  # upper bound on fraction of atoms distorted
 plinder_pskip_factor: 0.0 # 0 -> no weighted sampling, 1 -> uniform sampling over clusters
 res_id_embed_dim: 64 # dimension of residue id embedding
+crop_min_distance: 4 # minimum crop distance for Plinder dynamic cropping
+crop_max_distance: 10 # maximum crop distance for Plinder dynamic cropping
+alpha: null # beta-distribution alpha for Plinder dynamic cropping
+beta: null # beta-distribution beta for Plinder dynamic cropping
+additional_prot_crop: null # additional fixed distance to crop protein pocket during inference (test split)
 pharm_pos_std: 0.0 # standard deviation to sample noise variance from for pharm positions
 prot_pos_std: 0.0 # standard deviation to sample noise std dev from for protein atom positions
 bernoulli_mask_p: 0.0 # probability of keeping each atom fixed in Bernoulli masking (0.0 = disabled)
+lig_com_offset_std: 0.0 # standard deviation to sample noise std dev from for ligand center of mass positions
 offset_std: 0.0 # offset to prior positions
 
 pharmit_path: ${omtra_root:}/data/pharmit
-plinder_path: ${omtra_root:}/data/plinder
+plinder_path: ${omtra_root:}/data/plinder_12A_final
 crossdocked_path: ${omtra_root:}/data/crossdocked/internal_split0
 
 

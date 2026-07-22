@@ -398,3 +398,4 @@ Refer to [docs/training.md](docs/training.md) for details on training OMTRA mode
 - [Pharmacophore Inputs](docs/pharmacophores.md) — File formats and preparation of pharmacophore inputs
 - [Pharmit Dataset](docs/pharmit_dataset.md) — Details on the Pharmit dataset and how to use it
 - [Reproducing Results](docs/reproducing_results.md) — Instructions for reproducing published results
+- [Testing](docs/testing.md) — Guide to running and writing tests

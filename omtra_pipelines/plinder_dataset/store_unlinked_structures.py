@@ -72,6 +72,7 @@ def main():
         output_path=args.output,
         num_workers=args.num_cpus,
         category=None,
+        pocket_cutoff=args.pocket_cutoff,
     )
 
     df = pd.read_parquet(args.data).drop_duplicates("system_id")

@@ -1,4 +1,9 @@
 processed_data_dir: ${plinder_path}
 pskip_factor: ${plinder_pskip_factor} # 0 -> no weighted sampling, 1 -> uniform sampling over clusters
 res_id_embed_dim: ${res_id_embed_dim} # dimension of residue id embedding
+crop_min_distance: ${crop_min_distance}
+crop_max_distance: ${crop_max_distance}
+alpha: ${alpha}
+beta: ${beta}
+additional_prot_crop: ${additional_prot_crop} # additional fixed distance to crop protein pocket during inference (test split)
 # graphs_per_chunk: 1000
