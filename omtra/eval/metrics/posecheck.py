@@ -1,8 +1,20 @@
-from typing import Dict, List, Optional
-
+from typing import Dict, List, Optional, Tuple
+import numpy as np
 import pandas as pd
 from rdkit import Chem
 from posecheck import PoseCheck
+from scipy.spatial.distance import cdist
+
+from omtra.data.pharmacophores import (
+    smarts_patterns,
+    matching_types,
+    matching_distance,
+    interaction_distance, 
+    interaction_angle,
+    get_smarts_matches,
+    _get_receptor_pharmacophores,
+    _get_ligand_pharmacophores,
+)
 
 
 def posecheck_all(
@@ -94,6 +106,74 @@ def _interaction_recovery(
 
     return (recovery.sum(axis=1) / recovery.shape[1]).to_list()
 
+def _interaction_recovery_smarts(
+    gen_ligs: List[Chem.Mol],
+    true_lig: Chem.Mol,
+    true_prot_file: str,
+) -> List[float]:
+    """Compute interaction recovery using SMARTS-based pharmacophore matching."""
+    recovery_feature_types = ["Aromatic", "PositiveIon", "NegativeIon", 
+                              "HydrogenAcceptor", "HydrogenDonor", "Halogen"]
+
+    #load receptor and grab pharmacophores
+    receptor = Chem.MolFromPDBFile(true_prot_file, removeHs=False)
+    receptor = Chem.AddHs(receptor, addCoords=True)
+    receptor_pharmacophores = _get_receptor_pharmacophores(receptor, recovery_feature_types)
+
+    #grab ligand pharmacophores (already mol)
+    true_pharmacophores = _get_ligand_pharmacophores(true_lig, recovery_feature_types)
+
+    #find interactions between ligand and receptor pharmacophores
+    true_interactions = _find_interactions(true_pharmacophores, receptor_pharmacophores)
+
+    if not true_interactions:
+        return [float("nan")] * len(gen_ligs)
+
+    #iterate through generated ligands and compute recovery for each
+    recovery: List[float] = []
+    for lig in gen_ligs:
+        lig_pharmacophores = _get_ligand_pharmacophores(lig, recovery_feature_types)
+        lig_interactions = _find_interactions(lig_pharmacophores, receptor_pharmacophores)
+        recovered = len(true_interactions & lig_interactions) / len(true_interactions)
+        recovery.append(recovered)
+
+    return recovery
+
+def _find_interactions(
+    ligand_pharmacophores: Dict[str, List[np.ndarray]],
+    receptor_pharmacophores: Dict[str, List[Tuple[np.ndarray, tuple]]],
+) -> set:
+    """Pair ligand pharmacophore features against complementary receptor
+    pharmacophore features (same feature-type pairing + cutoffs as
+    check_interaction) and record which residue each contact is on.
+
+    Returns: set of (ligand_feature_type, residue_id) contacts.
+    """
+    found = set()
+
+    for lig_feature, lig_positions in ligand_pharmacophores.items():
+        if not lig_positions:
+            continue
+        lig_positions_arr = np.array(lig_positions)
+
+        paired_features = matching_types[lig_feature]
+        cutoffs = matching_distance[lig_feature]
+
+        for rec_feature, cutoff in zip(paired_features, cutoffs):
+            rec_matches = receptor_pharmacophores.get(rec_feature, [])
+            if not rec_matches:
+                continue
+
+            rec_positions_arr = np.array([pos for pos, _ in rec_matches])
+            rec_residue_ids = [res_id for _, res_id in rec_matches]
+
+            distances = cdist(lig_positions_arr, rec_positions_arr)
+            for i in range(distances.shape[0]):
+                hit_idxs = np.where(distances[i] <= cutoff)[0]
+                for r_idx in hit_idxs:
+                    found.add((lig_feature, rec_residue_ids[r_idx]))
+
+    return found
 
 def posecheck_clashes(ligs: List[Chem.Mol], prot_file: str) -> List[float]:
     """Compute steric clashes for each ligand against the protein."""
