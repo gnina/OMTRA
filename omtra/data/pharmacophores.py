@@ -1,3 +1,5 @@
+from typing import Dict, List, Tuple
+
 import numpy as np
 import rdkit.Chem as Chem
 from scipy.spatial.distance import cdist
@@ -52,6 +54,25 @@ matching_distance = {
     "Hydrophobic": [5, 4,],
     'Halogen': [5, 4]
 }
+# based on posecheck distances
+interaction_distance = {
+    "Aromatic": [6, 4.5],
+    "HydrogenDonor": [3.5],
+    "HydrogenAcceptor": [3.5, 3.5],
+    "PositiveIon": [4.5, 4.5],
+    "NegativeIon": [4.5],
+    "Hydrophobic": [5, 4,],
+    'Halogen': [5, 3.5]
+}
+
+# based on posecheck angle ranges
+interaction_angle = {
+    "Aromatic": [(0,90), (0,30)], #ring normal vectors
+    "HydrogenDonor": [(130, 180)], #D-H-A angle
+    "HydrogenAcceptor": [(130, 180), ((80), 140)], #D-H-A angle, H-A-X angle
+    "Halogen": [(None, None), (130, 180)], #D-H-A angle, D-X-A angle
+}
+
 #@profile
 def get_smarts_matches(rdmol, smarts_pattern):
     """Find positions of a SMARTS pattern in molecule."""
@@ -206,3 +227,62 @@ def get_pharmacophores(mol, rec=None):
             raise NotImplementedError("Didn't know how to handle this edge case for I because I was working on ligand-only data")
 
     return P, X, V, I
+
+#compute pharmacophores for metrics computation
+def _get_receptor_pharmacophores(
+    receptor: Chem.Mol,
+    feature_types: List[str],
+) -> Dict[str, List[Tuple[np.ndarray, tuple]]]:
+    """For each feature type, find every SMARTS match on the receptor and
+    pair its position with the residue it belongs to.
+
+    Returns: {feature_type: [(position, residue_id), (position, residue_id), ...]}
+    """
+    receptor = Chem.AddHs(Chem.Mol(receptor), addCoords=True)
+
+    receptor_pharmacophores: Dict[str, List[Tuple[np.ndarray, tuple]]] = {}
+    for feature in feature_types:
+        matches_for_feature = []
+        for pattern in smarts_patterns[feature]:
+            matches, _, feature_positions = get_smarts_matches(receptor, pattern)
+            for atom_idxs, position in zip(matches, feature_positions):
+                residue_id = _residue_atom_id(receptor, atom_idxs[0])
+                matches_for_feature.append((position, residue_id))
+        receptor_pharmacophores[feature] = matches_for_feature
+
+    return receptor_pharmacophores
+
+def _residue_atom_id(mol: Chem.Mol, atom_idx: int) -> Tuple[str, int, str, str]:
+    """Stable identity for a receptor atom: (chain, resnum, resname, atomname)."""
+    info = mol.GetAtomWithIdx(atom_idx).GetPDBResidueInfo()
+    if info is None:
+        return ("", -1, "", "")
+    return (
+        info.GetChainId(),
+        info.GetResidueNumber(),
+        info.GetResidueName().strip(),
+        info.GetName().strip(),
+    )
+
+def _get_ligand_pharmacophores(
+    ligand: Chem.Mol,
+    feature_types: List[str],
+) -> Dict[str, List[np.ndarray]]:
+    """For each feature type, find every SMARTS match on the ligand and
+    return its position (no residue -- ligand atoms aren't part of a protein).
+
+    Returns: {feature_type: [position, position, ...]}
+    """
+    ligand = Chem.AddHs(Chem.Mol(ligand), addCoords=True)
+
+    ligand_pharmacophores: Dict[str, List[np.ndarray]] = {}
+    for feature in feature_types:
+        positions_for_feature = []
+        for pattern in smarts_patterns[feature]:
+            _, _, feature_positions = get_smarts_matches(ligand, pattern)
+            positions_for_feature.extend(feature_positions)
+        ligand_pharmacophores[feature] = positions_for_feature
+
+    return ligand_pharmacophores
+
+    
