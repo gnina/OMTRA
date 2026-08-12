@@ -1,5 +1,8 @@
+from typing import List
+
 import numpy as np
 from rdkit.Chem.Features import FeatDirUtilsRD as FeatDirUtils
+import rdkit.Chem as Chem
 
 def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = True):
     """Compute the direction vector for an aromatic feature."""
@@ -166,3 +169,21 @@ def GetHalogenFeatVects(featAtoms, atomsLoc, rdmol):
     v1 *= -1.0
     v1 = v1 / np.linalg.norm(v1)
     return [v1]
+
+def AngleBetween(v1: np.ndarray, v2: np.ndarray) -> float:
+    """Angle in degrees between two vectors, in [0, 180]."""
+    v1 = v1 / np.linalg.norm(v1)
+    v2 = v2 / np.linalg.norm(v2)
+    cos_angle = np.clip(np.dot(v1, v2), -1.0, 1.0)
+    return float(np.degrees(np.arccos(cos_angle)))
+
+
+def GetDonorHPositions(atom_idx: int, rdmol: Chem.Mol) -> List[np.ndarray]:
+    """Real 3D coordinates of the explicit hydrogens on a donor atom
+    (needed for D-H...A angle checks; mol must already have explicit Hs)."""
+    conf = rdmol.GetConformer()
+    return [
+        np.array(conf.GetAtomPosition(nbor.GetIdx()))
+        for nbor in rdmol.GetAtomWithIdx(atom_idx).GetNeighbors()
+        if nbor.GetAtomicNum() == 1
+    ]
