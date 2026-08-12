@@ -67,10 +67,11 @@ interaction_distance = {
 
 # based on posecheck angle ranges
 interaction_angle = {
-    "Aromatic": [(0,90), (0,30)], #ring normal vectors
-    "HydrogenDonor": [(130, 180)], #D-H-A angle
-    "HydrogenAcceptor": [(130, 180), ((80), 140)], #D-H-A angle, H-A-X angle
-    "Halogen": [(None, None), (130, 180)], #D-H-A angle, D-X-A angle
+    "Aromatic": [(0, 90), (0, 30)], # ring normal vectors
+    "HydrogenDonor": [(130, 180)], # D-H-A angle
+    "HydrogenAcceptor": [(130, 180), (80, 140)], # D-H-A angle, H-A-X angle
+    "PositiveIon": [(None, None), (0, 30)], # NegativeIon: distance only; Aromatic: CationPi angle (symmetric case for the Aromatic-PositiveIon pairing)
+    "Halogen": [(None, None), (130, 180)], # D-H-A angle, D-X-A angle
 }
 
 #@profile
