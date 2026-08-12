@@ -22,15 +22,13 @@ types_file_dir ="/net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types"
 root_dir = "/net/galaxy/home/koes/paf46_shared/cd2020_v1.3"
 zarr_output_dir = "test_external_output.zarr" #these are not used
 
-#load the file
-data = torch.load('/net/galaxy/home/koes/jmgupta/omtra_2/omtra_pipelines/crossdocked_dataset/crossdocked_external_splits/split_by_name.pt')
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Test Crossdocked dataset processing")
     parser.add_argument("--cd_directory", type=str, default=types_file_dir, help="Crossdocked types file directory")
     parser.add_argument("--pocket_cutoff", type=float, default=8.0, help="Pocket cutoff distance")
     parser.add_argument("--zarr_output_dir", type=str, default=zarr_output_dir, help="Output Zarr directory for testing")
     parser.add_argument("--root_dir", type=str, default=root_dir, help="Root directory for crossdocked data")
+    parser.add_argument("--split_pt_file", type=str, default='/net/galaxy/home/koes/jmgupta/omtra_2/omtra_pipelines/crossdocked_dataset/crossdocked_external_splits/split_by_name.pt', help="Path to the split_by_name.pt file")
 
     parser.add_argument("--max_batches", type=str, default="None", help="Maximum number of batches to process")
     parser.add_argument("--batch_size", type=int, default=500, help="Batch size for processing ligand-receptor pairs")
@@ -48,6 +46,9 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     output_dir = Path(args.zarr_output_dir)
+
+    # Load the split_by_name.pt file
+    data = torch.load(args.split_pt_file)
 
     # # Create converters
     converter_train = CrossdockedNoLinksZarrConverter(output_path=str(output_dir / f"train.zarr"), num_workers=args.n_cpus)
