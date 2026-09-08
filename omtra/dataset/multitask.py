@@ -3,6 +3,7 @@ import numpy as np
 import dgl
 from typing import List, Dict
 from copy import deepcopy
+from pathlib import Path
 from omegaconf import DictConfig
 
 from omtra.dataset.register import dataset_name_to_class
@@ -64,15 +65,21 @@ class MultitaskDataSet(torch.utils.data.Dataset):
             single_dataset_config = deepcopy(self.single_dataset_configs[dataset_name])
 
             if dataset_name == 'plinder':
+                plinder_exclude_ids = None
+                if plinder_exclude_file := single_dataset_config.pop("plinder_exclude_file", None):
+                    plinder_exclude_ids = set(
+                        l for l in Path(plinder_exclude_file).read_text().splitlines() if l.strip()
+                    )
                 plinder_dataset_objects = {}
                 for plinder_link_name in sorted(list(plinder_link_versions)):
                     if plinder_link_name:
                         plinder_dataset_objects[plinder_link_name] = dataset_class(
                             link_version=plinder_link_name,
-                            split=self.split, 
+                            split=self.split,
                             graph_config=self.graph_config,
                             prior_config=self.prior_config,
                             fake_atom_p=fake_atom_p,
+                            exclude_system_ids=plinder_exclude_ids,
                             **single_dataset_config)
                 self.datasets[dataset_name] = plinder_dataset_objects
             else:

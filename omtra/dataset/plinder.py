@@ -64,6 +64,7 @@ class PlinderDataset(ZarrDataset):
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
         res_id_embed_dim: int = 64,
         max_pharms_sampled: int = 8,
+        exclude_system_ids: Optional[set] = None,
     ):
         super().__init__(
             split,
@@ -91,6 +92,10 @@ class PlinderDataset(ZarrDataset):
             if 'cluster_id' not in self.system_lookup.columns:
                 raise ValueError(f'Weighted sampling enabled but no cluster assignments found for plinder link version {link_version} and split {split}')
             self.system_lookup = compute_pskip(self.system_lookup, pskip_factor=self.pskip_factor)
+
+        if exclude_system_ids is not None:
+            mask = ~self.system_lookup["system_id"].isin(exclude_system_ids)
+            self.system_lookup = self.system_lookup[mask].reset_index(drop=True)
 
         self.encode_element = {
             element: i for i, element in enumerate(protein_element_map)
@@ -177,9 +182,7 @@ class PlinderDataset(ZarrDataset):
                    condensed_atom_typing: bool,
                    partial_modality_conditioning: bool,
     ) -> SystemData:
-        system_info = self.system_lookup[
-            self.system_lookup["system_idx"] == index
-        ].iloc[0]
+        system_info = self.system_lookup.iloc[index]
 
         rec_start, rec_end = int(system_info["rec_start"]), int(system_info["rec_end"])
         backbone_start, backbone_end = (
@@ -1189,9 +1192,7 @@ class PlinderDataset(ZarrDataset):
         """ 
         Returns the starting and ending atom indices for the ligand 
         """
-        system_info = self.system_lookup[
-            self.system_lookup["system_idx"] == index
-        ].iloc[0]
+        system_info = self.system_lookup.iloc[index]
 
         lig_atom_start, lig_atom_end = (
             int(system_info["lig_atom_start"]),
