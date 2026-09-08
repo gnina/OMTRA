@@ -206,5 +206,5 @@ def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[st
 @functools.lru_cache()
 def get_edge_approximators() -> Dict[str, torch.nn.Module]:
     dict_path = Path(omtra_root()) / 'omtra/constants/radius_edge_approximators/edge_pred_mlps.pt'
-    edge_pred_mlps = torch.load(dict_path)
+    edge_pred_mlps = torch.load(dict_path, weights_only=False)
     return edge_pred_mlps

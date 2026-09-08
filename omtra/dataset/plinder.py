@@ -59,7 +59,7 @@ class PlinderDataset(ZarrDataset):
         graph_config: Optional[DictConfig] = None,
         prior_config: Optional[DictConfig] = None,
         fake_atom_p: float = 0.0,
-        pskip_factor: float = 0.0, 
+        pskip_factor: float = 0.0,
         # this is a parmaeter that controls whether/how we do weighted sampling of the the dataset
         # if pskip_factor = 1, we do uniform sampling over all clusters in the system, and if it is 0, we apply no weighted sampling.
         res_id_embed_dim: int = 64,
