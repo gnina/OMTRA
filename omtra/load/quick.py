@@ -106,20 +106,30 @@ def omtra_from_config(cfg: DictConfig) -> OMTRA:
 def omtra_from_checkpoint(ckpt_path: str, map_location=None) -> OMTRA:
     """
     Load the OMTRA model from a checkpoint.
-    
+
     Args:
         ckpt_path (str): Path to the checkpoint file.
         map_location: Passed to Lightning load_from_checkpoint (e.g. "cpu").
-    
+
     Returns:
         model: The loaded OMTRA model.
     """
 
-    # load model
     kwargs = {}
     if map_location is not None:
         kwargs["map_location"] = map_location
-    model = OMTRA.load_from_checkpoint(ckpt_path, **kwargs)
+
+    # Force weights_only=False regardless of what Lightning passes - checkpoints
+    # contain OmegaConf types that are not in PyTorch 2.6's safe globals list.
+    _orig = torch.load
+    def _load_unsafe(*args, **kw):
+        kw['weights_only'] = False
+        return _orig(*args, **kw)
+    torch.load = _load_unsafe
+    try:
+        model = OMTRA.load_from_checkpoint(ckpt_path, **kwargs)
+    finally:
+        torch.load = _orig
 
     return model
 
@@ -154,7 +164,7 @@ def omtra_from_partial_checkpoint(cfg: DictConfig, ckpt_path: str, secondary_ckp
     """
     model = omtra_from_config(cfg)
 
-    ckpt1 = torch.load(ckpt_path, map_location="cpu")
+    ckpt1 = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state_dict1 = ckpt1["state_dict"] if "state_dict" in ckpt1 else ckpt1
 
     excluded_keys = {"vector_field.task_embedding.weight"}
@@ -175,7 +185,7 @@ def omtra_from_partial_checkpoint(cfg: DictConfig, ckpt_path: str, secondary_ckp
     print(f"Missing keys: {len(missing_keys)}")
 
     if secondary_ckpt_path is not None:
-        ckpt2 = torch.load(secondary_ckpt_path, map_location="cpu")
+        ckpt2 = torch.load(secondary_ckpt_path, map_location="cpu", weights_only=False)
         state_dict2 = ckpt2["state_dict"] if "state_dict" in ckpt2 else ckpt2
 
         supplemental_state_dict = {
