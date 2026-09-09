@@ -1,1 +1,2 @@
 processed_data_dir: ${crossdocked_path}
+crossdocked_exclude_file: ${crossdocked_exclude_file}

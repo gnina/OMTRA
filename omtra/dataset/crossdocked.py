@@ -62,6 +62,7 @@ class CrossdockedDataset(ZarrDataset):
         fake_atom_p: float = 0.0,
         res_id_embed_dim: int = 64,
         max_pharms_sampled: int = 8,
+        exclude_pdb_codes: Optional[set] = None,
     ):
         #zarr files are read by the init function of the parent class, ZarrDataset
         super().__init__(
@@ -87,6 +88,15 @@ class CrossdockedDataset(ZarrDataset):
         atom_counts = (self.system_lookup['lig_atom_end'] - self.system_lookup['lig_atom_start'])
         valid_systems = atom_counts >= 6
         self.system_lookup = self.system_lookup[valid_systems].reset_index(drop=True)
+
+        # Leakage filtering: drop systems whose receptor PDB code (first 4 chars of
+        # rec_pdb, e.g. "5dxt_A_rec.pdb" -> "5DXT") is in the exclusion set. Only the
+        # DataFrame rows are dropped; the system_idx column preserves original zarr
+        # positions used for data retrieval, so filtering rows is safe.
+        if exclude_pdb_codes:
+            pdb_codes = self.system_lookup['rec_pdb'].str[:4].str.upper()
+            keep = ~pdb_codes.isin(exclude_pdb_codes)
+            self.system_lookup = self.system_lookup[keep].reset_index(drop=True)
 
         self.encode_element = {
             element: i for i, element in enumerate(protein_element_map)

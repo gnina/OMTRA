@@ -1,0 +1,35 @@
+# this block must be included in all task_group configs
+# especially the datamodule: default attribue
+defaults:
+  - _self_
+  - datamodule: default
+
+
+# Define tasks with time-varying probabilities
+# this is p(task) but p(task) can change through the course of training
+task_phases:
+  - duration_batches: null
+    tasks:
+      - name: rigid_docking_condensed
+        probability: 0.475
+      - name: fixed_protein_ligand_denovo_condensed
+        probability: 0.475
+      - name: denovo_ligand_condensed
+        probability: 0.025
+      - name: ligand_conformer_condensed
+        probability: 0.025
+
+# define p(dataset|task) coupling (assume static for simplicity)
+# CrossDocked 0.33 / PLINDER 0.67 on the two heavy tasks (size-proportional to the
+# unfiltered datasets, ~35.8% CD). Used by Model 4 (light PB filter).
+dataset_task_coupling:
+  rigid_docking_condensed:
+    - [crossdocked, 0.33]
+    - [plinder, 0.67]
+  fixed_protein_ligand_denovo_condensed:
+    - [crossdocked, 0.33]
+    - [plinder, 0.67]
+  denovo_ligand_condensed:
+    - [pharmit, 1.0]
+  ligand_conformer_condensed:
+    - [pharmit, 1.0]

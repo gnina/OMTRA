@@ -82,9 +82,22 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                             exclude_system_ids=plinder_exclude_ids,
                             **single_dataset_config)
                 self.datasets[dataset_name] = plinder_dataset_objects
+            elif dataset_name == 'crossdocked':
+                crossdocked_exclude_codes = None
+                if crossdocked_exclude_file := single_dataset_config.pop("crossdocked_exclude_file", None):
+                    crossdocked_exclude_codes = set(
+                        l.strip().upper() for l in Path(crossdocked_exclude_file).read_text().splitlines() if l.strip()
+                    )
+                self.datasets[dataset_name] = dataset_class(
+                    split=self.split,
+                    graph_config=self.graph_config,
+                    prior_config=self.prior_config,
+                    fake_atom_p=fake_atom_p,
+                    exclude_pdb_codes=crossdocked_exclude_codes,
+                    **single_dataset_config)
             else:
                 self.datasets[dataset_name] = dataset_class(
-                    split=self.split, 
+                    split=self.split,
                     graph_config=self.graph_config,
                     prior_config=self.prior_config,
                     fake_atom_p=fake_atom_p,
