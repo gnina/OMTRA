@@ -17,3 +17,4 @@ t_alpha: 1.8
 cat_loss_weight: 0.8
 time_scaled_loss: False
 pharm_pos_std: ${pharm_pos_std}
+lig_com_offset_std: ${lig_com_offset_std}
