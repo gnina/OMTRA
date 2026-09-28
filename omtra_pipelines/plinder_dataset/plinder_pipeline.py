@@ -192,56 +192,43 @@ class SystemProcessor:
         else:
             return receptor
 
+    def _residue_backbone_reorder_indices(
+        self, residue_atoms: struc.AtomArray
+    ) -> Optional[list[int]]:
+        """Return local indices with N, CA, C first (in that order), then other atoms."""
+        names = residue_atoms.atom_name
+        backbone_indices = []
+        for atom_name in ("N", "CA", "C"):
+            idxs = np.where(names == atom_name)[0]
+            if len(idxs) == 0:
+                return None
+            backbone_indices.append(int(idxs[0]))
+        others = sorted(
+            i for i in range(len(residue_atoms)) if i not in backbone_indices
+        )
+        return backbone_indices + others
+
     def reorder_backbone_atoms(
         self, receptor: struc.AtomArray, unique_residues
     ) -> struc.AtomArray:
-        reordered_atoms = []
+        global_order = []
 
-        for chain_id, res_id in unique_residues:
+        for chain_id, res_id in sorted(unique_residues):
             residue_mask = (receptor.chain_id == chain_id) & (receptor.res_id == res_id)
+            full_indices = np.where(residue_mask)[0]
             residue_atoms = receptor[residue_mask]
-
-            n_mask = residue_atoms.atom_name == "N"
-            ca_mask = residue_atoms.atom_name == "CA"
-            c_mask = residue_atoms.atom_name == "C"
-            backbone_mask = n_mask | ca_mask | c_mask
-
-            n_idx = np.where(n_mask)[0][0] if np.any(n_mask) else -1
-            ca_idx = np.where(ca_mask)[0][0] if np.any(ca_mask) else -1
-            c_idx = np.where(c_mask)[0][0] if np.any(c_mask) else -1
-
-            new_order = []
-
-            if n_idx > 0:
-                new_order.extend(list(range(n_idx)))
-
-            if n_idx != -1:
-                new_order.append(n_idx)
-
-            if n_idx != -1 and ca_idx != -1:
-                for i in range(n_idx + 1, ca_idx):
-                    if not backbone_mask[i]:
-                        new_order.append(i)
-
-            if ca_idx != -1:
-                new_order.append(ca_idx)
-
-            if ca_idx != -1 and c_idx != -1:
-                for i in range(ca_idx + 1, c_idx):
-                    if not backbone_mask[i]:
-                        new_order.append(i)
-
-            if c_idx != -1:
-                new_order.append(c_idx)
-
-            if c_idx != -1 and c_idx < len(residue_atoms) - 1:
-                new_order.extend(range(c_idx + 1, len(residue_atoms)))
-
+            new_order = self._residue_backbone_reorder_indices(residue_atoms)
+            if new_order is None:
+                logger.warning(
+                    f"Missing backbone atoms in residue {chain_id}:{res_id} "
+                    f"for {self.system_id}"
+                )
+                return None
             for idx in new_order:
-                reordered_atoms.append(residue_atoms[idx])
+                global_order.append(int(full_indices[idx]))
 
-        if reordered_atoms:
-            return struc.stack(reordered_atoms)
+        if global_order:
+            return receptor[np.array(global_order, dtype=int)]
         else:
             logger.warning(f"Failed to reorder backbone {self.system_id}")
             return None
