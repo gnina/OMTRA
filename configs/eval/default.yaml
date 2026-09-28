@@ -558,6 +558,13 @@ predapo_conditioned_ligand_docking_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
+  - pocket_rmsd:
+      train: true
+      params: {}
 protein_ligand_denovo:
   - validity:
       train: true

@@ -177,6 +177,28 @@ def ligand_rmsd(
     return metrics
 
 
+@register_eval("pocket_rmsd")
+def pocket_rmsd_eval(
+    sampled_systems: List[SampledSystem], params: Dict[str, Any]
+) -> Dict[str, Any]:
+    from omtra.eval.metrics.pocket_rmsd import pocket_rmsd_from_atom_arrays
+
+    metrics = {}
+    values = []
+    for sys in sampled_systems:
+        try:
+            score = pocket_rmsd_from_atom_arrays(
+                sys.get_protein_array(reference=False, include_bonds=False),
+                sys.get_protein_array(reference=True, include_bonds=False),
+            )
+        except Exception:
+            score = float("nan")
+        if not np.isnan(score):
+            values.append(score)
+    metrics["pocket_rmsd"] = np.nanmean(values) if values else -1.0
+    return metrics
+
+
 @register_eval("volume_overlap")
 def volume_overlap(
     sampled_systems: List[SampledSystem], params: Dict[str, Any]

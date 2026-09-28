@@ -50,6 +50,12 @@ def build_sampling_command(task_info: dict, config: dict) -> str:
 
     _add_if_not_none(parts, "--plinder_path", paths.get("plinder"))
     _add_if_not_none(parts, "--crossdocked_path", paths.get("crossdocked"))
+    _add_if_not_none(parts, "--pdbbind_path", paths.get("pdbbind"))
+    _add_if_not_none(parts, "--crop_min_distance", sampling_opts.get("crop_min_distance"))
+    _add_if_not_none(parts, "--crop_max_distance", sampling_opts.get("crop_max_distance"))
+    _add_if_not_none(parts, "--additional_prot_crop", sampling_opts.get("additional_prot_crop"))
+    _add_if_not_none(parts, "--alpha", sampling_opts.get("alpha"))
+    _add_if_not_none(parts, "--beta", sampling_opts.get("beta"))
 
     return " ".join(parts)
 
@@ -93,9 +99,12 @@ def build_metrics_command(task_info: dict, config: dict) -> str:
     _add_flag(parts, "--disable_interaction_recovery", metrics_opts.get("disable_interaction_recovery", False))
     _add_flag(parts, "--disable_pharm_match", metrics_opts.get("disable_pharm_match", False))
     _add_flag(parts, "--disable_ground_truth_metrics", metrics_opts.get("disable_ground_truth_metrics", False))
+    _add_flag(parts, "--disable_lddt", metrics_opts.get("disable_lddt", False))
+    _add_flag(parts, "--disable_pocket_rmsd", metrics_opts.get("disable_pocket_rmsd", False))
 
     _add_if_not_none(parts, "--plinder_path", paths.get("plinder"))
     _add_if_not_none(parts, "--crossdocked_path", paths.get("crossdocked"))
+    _add_if_not_none(parts, "--pdbbind_path", paths.get("pdbbind"))
 
     return " ".join(parts)
 

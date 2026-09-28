@@ -15,7 +15,13 @@ def _resolve_gnina_binary(gnina_binary: Optional[str] = None) -> Path:
     if gnina_binary is not None:
         path = Path(gnina_binary)
     else:
-        path = Path(omtra_root()) / "gnina.1.3.2"
+        root = Path(omtra_root())
+        for candidate in (root / "local" / "bin" / "gnina.1.3.2", root / "gnina.1.3.2"):
+            if candidate.is_file():
+                path = candidate
+                break
+        else:
+            path = root / "local" / "bin" / "gnina.1.3.2"
 
     if not path.is_file():
         raise FileNotFoundError(
@@ -62,17 +68,18 @@ def _run_gnina(
                 "--seed", "42",
             ]
         
+        torch_root = Path(torch.__file__).parent.parent
         torch_lib_path = str(Path(torch.__file__).parent / "lib")
-        cudnn_lib_path = str(
-            Path(torch.__file__).parent.parent
-            / "nvidia"
-            / "cudnn"
-            / "lib"
+        nvidia_root = torch_root / "nvidia"
+        nvidia_lib_paths = sorted(
+            str(p)
+            for p in nvidia_root.glob("*/lib")
+            if p.is_dir()
         )
         
         env = os.environ.copy()
         existing_ld_path = env.get("LD_LIBRARY_PATH", "")
-        paths = [torch_lib_path, cudnn_lib_path]
+        paths = [torch_lib_path] + nvidia_lib_paths
         if existing_ld_path:
             paths.append(existing_ld_path)
 

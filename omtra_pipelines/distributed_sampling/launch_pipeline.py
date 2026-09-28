@@ -38,6 +38,7 @@ from string import Template
 
 from omegaconf import OmegaConf, DictConfig
 
+from omtra.utils import omtra_root
 from omtra_pipelines.distributed_sampling.manifest import (
     build_manifest,
     build_manifest_cli,
@@ -581,6 +582,7 @@ def main():
         "time_metrics": slurm.get("time_metrics", "8:00:00"),
         "time_aggregate": slurm.get("time_aggregate", "0:30:00"),
         "conda_env": slurm.get("conda_env", "omtra"),
+        "omtra_root": str(Path(omtra_root()).resolve()),
         "extra_sbatch_args": slurm.get("extra_sbatch_args", ""),
         "log_dir": str(output_dir / "logs"),
         "status_dir": str(output_dir / "status"),
@@ -613,6 +615,15 @@ def main():
 
     sampling_array = make_array_spec(sampling_ids) if run_sampling else ""
     metrics_array = make_array_spec(metrics_ids) if run_metrics else ""
+
+    # Limit concurrent array tasks (e.g. "0-299%4") to reduce GPU contention.
+    array_max_parallel = slurm.get("array_max_parallel")
+    if array_max_parallel is not None:
+        throttle = f"%{int(array_max_parallel)}"
+        if sampling_array:
+            sampling_array = f"{sampling_array}{throttle}"
+        if metrics_array:
+            metrics_array = f"{metrics_array}{throttle}"
 
     print(f"\nOutput directory: {output_dir}")
     print(f"Commands files:  {sampling_cmds_path}")

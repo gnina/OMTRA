@@ -27,13 +27,14 @@ from omtra.eval.metrics.gnina import gnina_score_and_minimize
 from omtra.eval.metrics.posecheck import posecheck_all
 from omtra.eval.metrics.fixed_fragment import fixed_frag_metrics
 from omtra.eval.metrics.lddt import lddt_pli_scores
+from omtra.eval.metrics.pocket_rmsd import pocket_rmsd
 
 
 # ---------------------------------------------------------------------------
 # Public constants
 # ---------------------------------------------------------------------------
 
-VALID_EVAL_METRICS = {"posebusters", "gnina", "posecheck", "rmsd", "pharmacophore", "lddt_lig", "lddt"}
+VALID_EVAL_METRICS = {"posebusters", "gnina", "posecheck", "rmsd", "pharmacophore", "lddt_lig", "lddt", "pocket_rmsd"}
 
 CLI_TO_INTERNAL = {
     "posebusters": "pb_valid",
@@ -43,6 +44,7 @@ CLI_TO_INTERNAL = {
     "pharmacophore": "pharm_match",
     "lddt_lig": "lddt_lig",
     "lddt": "lddt",
+    "pocket_rmsd": "pocket_rmsd",
 }
 
 
@@ -109,6 +111,7 @@ def determine_applicable_metrics(
         "lddt_lig": has_protein and not lig_identity_generated and not protein_structure_generated,
         # lDDT-PLI with generated protein (flexible docking)
         "lddt": has_protein and not lig_identity_generated and protein_structure_generated,
+        "pocket_rmsd": has_protein and protein_structure_generated,
     }
 
     # If specific metrics requested, filter to only those
@@ -479,6 +482,24 @@ def compute_metrics(
                             (sys_id, data["gen_prot_id"], data["gen_ligs_ids"][i]),
                             "lddt",
                         ] = score
+
+            # ---- Pocket RMSD (flexible protein) ----
+            if metrics_to_run.get("pocket_rmsd"):
+                gen_prot_file = data.get("gen_prot_file")
+                true_prot_file = data.get("true_prot_file")
+                if gen_prot_file is not None and true_prot_file is not None:
+                    for i, lig_id in enumerate(data["gen_ligs_ids"]):
+                        score = run_with_timeout(
+                            pocket_rmsd,
+                            timeout=120,
+                            gen_prot_file=str(gen_prot_file),
+                            true_prot_file=str(true_prot_file),
+                        )
+                        if score is not None:
+                            metrics.loc[
+                                (sys_id, data["gen_prot_id"], lig_id),
+                                "pocket_rmsd",
+                            ] = score
 
             # ---- Pharmacophore matching ----
             if metrics_to_run["pharm_match"]:

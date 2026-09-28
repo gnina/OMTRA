@@ -50,6 +50,7 @@ def parse_args():
     sampling.add_argument("--sys_idx_file", type=str, default=None, help='Path to a file with pre-selected system indices.')
     sampling.add_argument("--plinder_path", type=str, default=None, help="Path to the Plinder dataset (optional).")
     sampling.add_argument("--crossdocked_path", type=str, default=None, help="Path to the Crossdocked dataset (optional).")
+    sampling.add_argument("--pdbbind_path", type=str, default=None, help="Path to the PDBBind dataset (optional).")
 
     sampling.add_argument("--n_samples", type=int, default=None, help='Number of samples to evaluate.')
     sampling.add_argument("--n_replicates", type=int, help="Number of replicates per input sample.", required=True)
@@ -84,11 +85,27 @@ def parse_args():
     metrics.add_argument("--disable_ground_truth_metrics", action="store_true", help='Disables all relevant metrics on the truth ligand.')
     metrics.add_argument("--disable_fixed_frag_metrics", action="store_true", help='Disables computations of fixed fragment metrics.')
     metrics.add_argument("--disable_lddt", action="store_true", help='Disables lDDT computation.')
+    metrics.add_argument("--disable_pocket_rmsd", action="store_true", help='Disables pocket RMSD computation.')
 
 
     args = p.parse_args()
 
     return args
+
+
+def _crop_config_overrides(args) -> list[str]:
+    overrides = []
+    if args.alpha is not None:
+        overrides.append(f'alpha={args.alpha}')
+    if args.beta is not None:
+        overrides.append(f'beta={args.beta}')
+    if args.crop_min_distance is not None:
+        overrides.append(f'crop_min_distance={args.crop_min_distance}')
+    if args.crop_max_distance is not None:
+        overrides.append(f'crop_max_distance={args.crop_max_distance}')
+    if args.additional_prot_crop is not None:
+        overrides.append(f'additional_prot_crop={args.additional_prot_crop}')
+    return overrides
 
 
 def sample_system(ckpt_path: Path,
@@ -104,7 +121,9 @@ def sample_system(ckpt_path: Path,
                   sys_idx_file: Path = None,
                   plinder_path: Path = None,
                   crossdocked_path: Path = None,
+                  pdbbind_path: Path = None,
                   com_offset_magnitude: float = 0.0,
+                  crop_overrides: list[str] | None = None,
                   **kwargs
                   ):
     
@@ -121,6 +140,8 @@ def sample_system(ckpt_path: Path,
         train_cfg.plinder_path = plinder_path
     if crossdocked_path:
         train_cfg.crossdocked_path = crossdocked_path
+    if pdbbind_path:
+        train_cfg.pdbbind_path = pdbbind_path
 
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -128,7 +149,8 @@ def sample_system(ckpt_path: Path,
     # 4) instantiate datamodule & model
     #dm  = quick_load.datamodule_from_config(train_cfg)
     #multitask_dataset = dm.load_dataset(split)
-    model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
+    # load model on CPU first to avoid GPU OOM during checkpoint restore
+    model = quick_load.omtra_from_checkpoint(ckpt_path, map_location="cpu").to(device).eval()
 
     if sys_idx_file is None:
         dataset_idxs = range(dataset_start_idx, dataset_start_idx + n_samples) 
@@ -143,22 +165,17 @@ def sample_system(ckpt_path: Path,
             
     sys_info = None
 
+    crop_overrides = crop_overrides or []
+
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
-        
-        # Build config overrides, including alpha/beta and cropping distances if provided
-        overrides = ['task_group=protein']
-        if args.alpha is not None:
-            overrides.append(f'alpha={args.alpha}')
-        if args.beta is not None:
-            overrides.append(f'beta={args.beta}')
-        if args.crop_min_distance is not None:
-            overrides.append(f'crop_min_distance={args.crop_min_distance}')
-        if args.crop_max_distance is not None:
-            overrides.append(f'crop_max_distance={args.crop_max_distance}')
-        if args.additional_prot_crop is not None:
-            overrides.append(f'additional_prot_crop={args.additional_prot_crop}')
 
+        # protein also instantiates exp/ apo zarrs; pred-only 12Å stores do not have them.
+        if plinder_link_version == 'pred':
+            task_group = 'plinder_predapo'
+        else:
+            task_group = 'protein'
+        overrides = [f'task_group={task_group}'] + crop_overrides
         cfg = quick_load.load_cfg(overrides=overrides, plinder_path=plinder_path)
         plinder_datamodule = datamodule_from_config(cfg)    
         dataset = plinder_datamodule.load_dataset(split).datasets['plinder'][plinder_link_version]
@@ -173,6 +190,19 @@ def sample_system(ckpt_path: Path,
         sys_info['n_gt_lig_atoms'] =  sys_info['lig_atom_end'] - sys_info['lig_atom_start']
         sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'n_gt_lig_atoms', 'sys_id']]
 
+    elif dataset == 'pdbbind':
+        plinder_link_version = task.plinder_link_version
+
+        overrides = ['task_group=pdbbind_predapo'] + crop_overrides
+        cfg = quick_load.load_cfg(overrides=overrides, pdbbind_path=pdbbind_path)
+        pdbbind_datamodule = datamodule_from_config(cfg)
+        dataset = pdbbind_datamodule.load_dataset(split).datasets['pdbbind'][plinder_link_version]
+        dataset_name = 'pdbbind'
+
+        sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].loc[dataset_idxs].copy()
+        sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in range(sys_info.shape[0])]
+        sys_info['n_gt_lig_atoms'] = sys_info['lig_atom_end'] - sys_info['lig_atom_start']
+        sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'n_gt_lig_atoms', 'sys_id']]
 
     elif dataset == 'crossdocked':
 
@@ -407,6 +437,7 @@ def main(args):
             gpu_mem_available = free_mem // (1024**3) # in GB (free memory only)
             max_batch_size = int(gpu_mem_available * args.bs_per_gbmem)
             max_batch_size = max(1, max_batch_size)  # ensure at least batch size of 1
+            max_batch_size = min(max_batch_size, args.max_batch_size)
             print(f"Setting max_batch_size to {max_batch_size} based on available GPU memory.")
         else:
             max_batch_size = args.max_batch_size
@@ -425,7 +456,9 @@ def main(args):
                                                           dataset_name=args.dataset,
                                                           plinder_path=args.plinder_path,
                                                           crossdocked_path=args.crossdocked_path,
+                                                          pdbbind_path=args.pdbbind_path,
                                                           com_offset_magnitude=args.com_offset_magnitude,
+                                                          crop_overrides=_crop_config_overrides(args),
                                                           **kwargs)
         
         print("Finished sampling. Clearing torch GPU cache...\n")
@@ -488,7 +521,8 @@ def main(args):
                         'ground_truth': not args.disable_ground_truth_metrics,
                         'fixed_frag_metrics': (not args.disable_fixed_frag_metrics) and is_partial_task,
                         'lddt_lig': (not args.disable_lddt) and (not protein_generated) and (not lig_identity_generated),
-                        'lddt': (not args.disable_lddt) and protein_generated and (not lig_identity_generated)}
+                        'lddt': (not args.disable_lddt) and protein_generated and (not lig_identity_generated),
+                        'pocket_rmsd': (not args.disable_pocket_rmsd) and protein_generated}
 
         # Auto-disable metrics that are inapplicable for this task
         from omtra.eval.metrics.compute import determine_applicable_metrics

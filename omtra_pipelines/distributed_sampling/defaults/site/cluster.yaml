@@ -15,3 +15,4 @@ slurm:
 paths:
   plinder: /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder
   crossdocked: /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/crossdocked/internal_split0
+  pdbbind: /net/pulsar/home/koes/ras425/OMTRA/data/pdbbind_12A

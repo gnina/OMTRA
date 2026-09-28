@@ -33,13 +33,16 @@ This pipeline requires the GNINA pre-built binary under the OMTRA root directory
 | Argument | Default | Description | 
 |----------|-------------|-------------| 
 | `--task` | Required | Task to sample for (e.g. rigid_docking_condensed). |
-| `--dataset` | `plinder` | Dataset. Options: Plinder or Crossdocked |
+| `--dataset` | `plinder` | Dataset. Options: plinder, crossdocked, or pdbbind |
 | `--split` | `val` | Data split (i.e., train, val). |
 | `--dataset_start_idx` | `0` | Index in the dataset to start sampling from. |
 | `--sample_start_idx` | `None` | Index in the sample directory to start getting samples from. |
 | `--sys_idx_file` | `None` | Path to a file with pre-selected system indices. |
 | `--plinder_path` | `None` | Path to the Plinder dataset (optional). |
 | `--crossdocked_path` | `None` | Path to the Crossdocked dataset (optional). |
+| `--pdbbind_path` | `None` | Path to the PDBBind zarr root (optional, e.g. `data/pdbbind_12A`). |
+| `--crop_min_distance` | `None` | Override minimum dynamic pocket crop distance (Å). |
+| `--crop_max_distance` | `None` | Override maximum dynamic pocket crop distance (Å). |
 | `--n_samples` | Required | Number of samples. |
 | `--n_replicates` | Required | Number of replicates per sample. |
 | `--n_timesteps` | `250` | Number of integration steps to take when sampling. |

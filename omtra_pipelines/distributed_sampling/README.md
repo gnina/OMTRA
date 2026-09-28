@@ -28,7 +28,7 @@ In both pipeline modes, metrics are always computed by `docking_eval.py --sample
 
 2. **OMTRA installed** — The repo must be on a shared filesystem. The `omtra` CLI command must be on `$PATH`.
 
-3. **gnina** — For gnina-based metrics, the binary must be at `{repo_root}/gnina.1.3.2`. If unavailable, disable with `metrics.disable_gnina=true`.
+3. **gnina** — For gnina-based metrics, place the binary at `{repo_root}/local/bin/gnina.1.3.2`. If unavailable, disable with `metrics.disable_gnina=true`.
 
 4. **Dataset paths** (dataset mode) — Set in a site config or your job config under `paths:`.
 
