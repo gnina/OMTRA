@@ -8,6 +8,7 @@ defaults:
   - prior: 
     - conformer_indep_offset
     - denovo_permute_offset
+    - predapo
   - callbacks: no_checkpoint
   - wandb_conf: default
   - eval: default
@@ -37,6 +38,7 @@ offset_std: 0.0 # offset to prior positions
 
 pharmit_path: ${omtra_root:}/data/pharmit
 plinder_path: ${omtra_root:}/data/plinder_12A_final
+pdbbind_path: ${omtra_root:}/data/pdbbind_12A
 crossdocked_path: ${omtra_root:}/data/crossdocked/internal_split0
 
 

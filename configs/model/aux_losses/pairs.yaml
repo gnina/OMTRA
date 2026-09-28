@@ -7,3 +7,8 @@ lig_pairdist:
   params:
     weight: 0.3
     d_max: 4.0
+
+prot_pairdist:
+  params:
+    weight: 0.3
+    d_max: 4.0

@@ -169,3 +169,89 @@ class LigPairLoss(nn.Module):
         Check if this auxiliary loss supports the given task.
         """
         return 'ligand_identity' in task.groups_present or 'ligand_identity_condensed' in task.groups_present
+
+
+@register_aux_loss(name='prot_pairdist')
+class ProtPairLoss(nn.Module):
+    """
+    Auxiliary loss for pairwise distances among nearby pocket atoms.
+    Mirrors LigPairLoss: MSE between predicted and ground-truth distances for
+    pairs with dij_true < d_max. Uses a radius graph on x_1_true for efficiency.
+    """
+
+    def __init__(
+        self,
+        d_max: float = 4.0,
+        weight: float = 1.0,
+        max_num_neighbors: int = 64,
+    ):
+        super().__init__()
+        self.d_max = d_max
+        self.weight = weight
+        self.max_num_neighbors = max_num_neighbors
+
+    def forward(
+        self,
+        g: dgl.DGLHeteroGraph,
+        dst_dict: Dict[str, torch.Tensor],
+        task: Task,
+        node_batch_idxs: Dict[str, torch.Tensor],
+        lig_ue_mask: torch.Tensor,
+        time_weights: torch.Tensor,
+    ):
+        device = g.device
+        n_prot = g.num_nodes('prot_atom')
+        if n_prot == 0 or 'prot_atom_x' not in dst_dict:
+            return torch.tensor(0.0, device=device)
+
+        x_1_true = g.nodes['prot_atom'].data['x_1_true']
+        batch = node_batch_idxs['prot_atom']
+
+        # Same pair set as complete-graph + d_max filter, without O(N^2)
+        edge_idxs = tc.radius(
+            x=x_1_true,
+            y=x_1_true,
+            batch_x=batch,
+            batch_y=batch,
+            r=self.d_max,
+            max_num_neighbors=self.max_num_neighbors,
+        )
+        src_idxs = edge_idxs[0]
+        dst_idxs = edge_idxs[1]
+
+        # Undirected pairs once; drop self-loops
+        undirected = src_idxs < dst_idxs
+        src_idxs = src_idxs[undirected]
+        dst_idxs = dst_idxs[undirected]
+
+        if src_idxs.numel() == 0:
+            return torch.tensor(0.0, device=device)
+
+        x_diff_true = x_1_true[src_idxs] - x_1_true[dst_idxs]
+        dij_true = _norm_no_nan(x_diff_true)
+
+        # Radius already uses r=d_max; keep explicit filter to mirror lig_pairdist
+        d_mask = dij_true < self.d_max
+        if not d_mask.any():
+            return torch.tensor(0.0, device=device)
+
+        dij_true = dij_true[d_mask]
+        src_idxs = src_idxs[d_mask]
+        dst_idxs = dst_idxs[d_mask]
+
+        x_1_pred = dst_dict['prot_atom_x']
+        x_diff_gen = x_1_pred[src_idxs] - x_1_pred[dst_idxs]
+        dij_pred = _norm_no_nan(x_diff_gen)
+
+        time_scaled_loss = time_weights is not None
+        reduction = 'none' if time_scaled_loss else 'mean'
+        loss = F.mse_loss(dij_pred, dij_true, reduction=reduction)
+
+        if time_scaled_loss:
+            time_weights_expanded = time_weights[batch[src_idxs]]
+            loss = (loss * time_weights_expanded).mean()
+
+        return loss * self.weight
+
+    def supports_task(self, task: Task) -> bool:
+        return 'protein_structure' in task.groups_generated

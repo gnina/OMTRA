@@ -12,7 +12,7 @@ import torch
 OmegaConf.register_new_resolver("omtra_root", omtra_root, replace=True)
 
 
-def load_cfg(config_dir: str = None, config_name: str = "config.yaml", pharmit_path: str = None, plinder_path: str = None, crossdocked_path: str = None, overrides: List[str] = []):
+def load_cfg(config_dir: str = None, config_name: str = "config.yaml", pharmit_path: str = None, plinder_path: str = None, crossdocked_path: str = None, pdbbind_path: str = None, overrides: List[str] = []):
     """
     Load the configuration from the specified directory and file name.
     
@@ -37,6 +37,8 @@ def load_cfg(config_dir: str = None, config_name: str = "config.yaml", pharmit_p
         overrides.append(f'plinder_path={plinder_path}')
     if crossdocked_path is not None:
         overrides.append(f'crossdocked_path={crossdocked_path}')
+    if pdbbind_path is not None:
+        overrides.append(f'pdbbind_path={pdbbind_path}')
     
     if len(overrides) == 0:
         overrides = None
@@ -101,19 +103,23 @@ def omtra_from_config(cfg: DictConfig) -> OMTRA:
 
     return model
 
-def omtra_from_checkpoint(ckpt_path: str) -> OMTRA:
+def omtra_from_checkpoint(ckpt_path: str, map_location=None) -> OMTRA:
     """
     Load the OMTRA model from a checkpoint.
     
     Args:
         ckpt_path (str): Path to the checkpoint file.
+        map_location: Passed to Lightning load_from_checkpoint (e.g. "cpu").
     
     Returns:
         model: The loaded OMTRA model.
     """
 
     # load model
-    model = OMTRA.load_from_checkpoint(ckpt_path)
+    kwargs = {}
+    if map_location is not None:
+        kwargs["map_location"] = map_location
+    model = OMTRA.load_from_checkpoint(ckpt_path, **kwargs)
 
     return model
 

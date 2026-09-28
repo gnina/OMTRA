@@ -40,22 +40,23 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         self.task_space = td_coupling.task_space
         self.dataset_space = td_coupling.dataset_space
 
-        # loop over tasks that use plinder, infer from the task, which version of plinder is needed
-        plinder_link_versions = set()
-        try:
-            plinder_coupling_idx = self.dataset_space.index('plinder')
-        except ValueError:
-            plinder_coupling_idx = None
-        if plinder_coupling_idx is not None:
-            # get tasks that use plinder
-            p_task_plinder = td_coupling.p_dataset_task[:, :, plinder_coupling_idx]
-            p_task_plinder = p_task_plinder.sum(dim=0) # tensor of shape (len(task_space))
-            tasks_using_plinder = torch.where(p_task_plinder > 0)[0].tolist()
-            for task_idx in tasks_using_plinder:
+        # infer link versions needed for plinder / pdbbind from coupled tasks
+        linked_datasets = ('plinder', 'pdbbind')
+        link_versions_by_dataset: Dict[str, set] = {ds: set() for ds in linked_datasets}
+        for dataset_name in linked_datasets:
+            try:
+                coupling_idx = self.dataset_space.index(dataset_name)
+            except ValueError:
+                continue
+            p_task_dataset = td_coupling.p_dataset_task[:, :, coupling_idx]
+            p_task_dataset = p_task_dataset.sum(dim=0)
+            tasks_using_dataset = torch.where(p_task_dataset > 0)[0].tolist()
+            for task_idx in tasks_using_dataset:
                 task_name = self.task_space[task_idx]
                 task_class = task_name_to_class(task_name)
-                plinder_link_versions.add(task_class.plinder_link_version)
-
+                link_versions_by_dataset[dataset_name].add(
+                    task_class.plinder_link_version
+                )
 
         # initialize dataset classes
         self.datasets = {}
@@ -63,18 +64,20 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         for dataset_name, dataset_class in zip(self.dataset_space, dataset_classes):
             single_dataset_config = deepcopy(self.single_dataset_configs[dataset_name])
 
-            if dataset_name == 'plinder':
-                plinder_dataset_objects = {}
-                for plinder_link_name in sorted(list(plinder_link_versions)):
-                    if plinder_link_name:
-                        plinder_dataset_objects[plinder_link_name] = dataset_class(
-                            link_version=plinder_link_name,
-                            split=self.split, 
+            if dataset_name in linked_datasets:
+                link_versions = link_versions_by_dataset[dataset_name]
+                linked_dataset_objects = {}
+                for link_name in sorted(link_versions):
+                    if link_name:
+                        linked_dataset_objects[link_name] = dataset_class(
+                            link_version=link_name,
+                            split=self.split,
                             graph_config=self.graph_config,
                             prior_config=self.prior_config,
                             fake_atom_p=fake_atom_p,
-                            **single_dataset_config)
-                self.datasets[dataset_name] = plinder_dataset_objects
+                            **single_dataset_config,
+                        )
+                self.datasets[dataset_name] = linked_dataset_objects
             else:
                 self.datasets[dataset_name] = dataset_class(
                     split=self.split, 
@@ -105,8 +108,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
         dataset_name = self.dataset_space[dataset_idx]
         dataset_obj = self.datasets[dataset_name]
-        if dataset_name == 'plinder':
-            # get the plinder link version that this task uses
+        if dataset_name in ('plinder', 'pdbbind'):
             plinder_link_version = task.plinder_link_version
             dataset_obj = dataset_obj[plinder_link_version]
             

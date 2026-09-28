@@ -1,0 +1,34 @@
+# Multitask training: predapo docking on Plinder + protein/ligand tasks on Plinder/Pharmit
+defaults:
+  - _self_
+  - datamodule: default
+
+task_phases:
+  - duration_batches: null
+    tasks:
+      - name: predapo_conditioned_ligand_docking_condensed
+        probability: 0.2375
+      - name: protein_ligand_denovo_condensed
+        probability: 0.2375
+      - name: rigid_docking_condensed
+        probability: 0.2375
+      - name: fixed_protein_ligand_denovo_condensed
+        probability: 0.2375
+      - name: denovo_ligand_condensed
+        probability: 0.025
+      - name: ligand_conformer_condensed
+        probability: 0.025
+
+dataset_task_coupling:
+  predapo_conditioned_ligand_docking_condensed:
+    - [plinder, 1.0]
+  protein_ligand_denovo_condensed:
+    - [plinder, 1.0]
+  rigid_docking_condensed:
+    - [plinder, 1.0]
+  fixed_protein_ligand_denovo_condensed:
+    - [plinder, 1.0]
+  denovo_ligand_condensed:
+    - [pharmit, 1.0]
+  ligand_conformer_condensed:
+    - [pharmit, 1.0]

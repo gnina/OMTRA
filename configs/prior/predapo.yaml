@@ -1,0 +1,16 @@
+predapo_conditioned_ligand_docking_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.573
+      ot: False
+      translation: True
+      offset_std: ${offset_std}
+  prot_atom_x:
+    type: apo_pred
+    params:
+      std: 1.0
+  npnde_x:
+    type: target_dependent_gaussian
+    params:
+      std: 1.0

@@ -1,0 +1,15 @@
+# Eval/train predapo flexible docking on Plinder without instantiating exp/ apo zarrs.
+# task_group=protein also loads expapo tasks, which fail on pred-only 12Å stores.
+defaults:
+  - _self_
+  - datamodule: default
+
+task_phases:
+  - duration_batches: null
+    tasks:
+      - name: predapo_conditioned_ligand_docking_condensed
+        probability: 1.0
+
+dataset_task_coupling:
+  predapo_conditioned_ligand_docking_condensed:
+    - [plinder, 1.0]

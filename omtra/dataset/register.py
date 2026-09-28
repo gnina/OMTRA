@@ -1,11 +1,13 @@
 from omtra.dataset.pharmit import PharmitDataset
 from omtra.dataset.plinder import PlinderDataset
 from omtra.dataset.crossdocked import CrossdockedDataset
+from omtra.dataset.pdbbind import PdbbindDataset
 
 supported_datasets = [
     PharmitDataset,
-    PlinderDataset, 
+    PlinderDataset,
     CrossdockedDataset,
+    PdbbindDataset,
 ]
 
 dataset_names = [cls_obj.name for cls_obj in supported_datasets]

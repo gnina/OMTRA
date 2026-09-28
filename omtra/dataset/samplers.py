@@ -100,22 +100,21 @@ class MultiTaskSampler(Sampler):
                 for task_idx in task_idxs:
                     self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
 
-            elif dataset_name == 'plinder':
+            elif dataset_name in ('plinder', 'pdbbind'):
 
-                for plinder_link_version, plinder_dataset_object in self.datasets[dataset_name].items():
+                for link_version, linked_dataset_object in self.datasets[dataset_name].items():
                     chunk_tracker_idx = len(self.chunk_trackers)
                     self.chunk_trackers[chunk_tracker_idx] = GraphChunkTracker(
-                        plinder_dataset_object,
+                        linked_dataset_object,
                         *chunk_tracker_args
                     )
-                    # get the tasks that use this plinder link version
-                    task_idxs = []
+                    link_task_idxs = []
                     for task_idx, task_name in enumerate(self.task_space):
                         task_class = task_name_to_class(task_name)
-                        if task_class.plinder_link_version == plinder_link_version:
-                            task_idxs.append(task_idx)
+                        if task_class.plinder_link_version == link_version:
+                            link_task_idxs.append(task_idx)
 
-                    for task_idx in task_idxs:
+                    for task_idx in link_task_idxs:
                         self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
             else:
                 raise NotImplementedError(f"Dataset {dataset_name} not supported")
