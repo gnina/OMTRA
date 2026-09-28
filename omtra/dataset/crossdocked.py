@@ -1116,6 +1116,8 @@ class CrossdockedDataset(ZarrDataset):
             g.nodes["prot_atom"].data["x_0"] = self.get_link_coords(
                 system.link, pocket_mask, bb_pocket_mask, "prot_atom_x"
             )
+            # Keep the un-noised cropped AF/exp apo; sample_priors overwrites x_0.
+            g.nodes["prot_atom"].data["x_0_true"] = g.nodes["prot_atom"].data["x_0"].clone()
 
         # sample priors
         g = sample_priors(g, task_class=task_class, prior_fns=prior_fns, training=True)

@@ -41,6 +41,7 @@ import functools
 from scipy.spatial.distance import cdist
 from omtra.dataset.crop_utils import (
     crop_structure_data,
+    crop_structure_by_residue_set,
     filter_npndes_by_distance,
     sample_crop_distance,
     crop_structure_data_multiple_distances,
@@ -324,17 +325,23 @@ class PlinderDataset(ZarrDataset):
                     coords=self.slice_array(
                         "apo/backbone_coords", link_bb_start, link_bb_end
                     ),
-                    res_ids=None,
+                    res_ids=self.slice_array(
+                        "apo/backbone_res_ids", link_bb_start, link_bb_end
+                    ),
                     res_names=None,
-                    chain_ids=None,
+                    chain_ids=self.slice_array(
+                        "apo/backbone_chain_ids", link_bb_start, link_bb_end
+                    ),
                 )
                 apo = StructureData(
                     coords=self.slice_array("apo/coords", link_start, link_end),
-                    atom_names=None,
+                    atom_names=self.slice_array(
+                        "apo/atom_names", link_start, link_end
+                    ),
                     elements=None,
-                    res_ids=None,
+                    res_ids=self.slice_array("apo/res_ids", link_start, link_end),
                     res_names=None,
-                    chain_ids=None,
+                    chain_ids=self.slice_array("apo/chain_ids", link_start, link_end),
                     cif=system_info["link_cif"],
                     backbone_mask=None,
                     backbone=apo_backbone,
@@ -344,17 +351,23 @@ class PlinderDataset(ZarrDataset):
                     coords=self.slice_array(
                         "pred/backbone_coords", link_bb_start, link_bb_end
                     ),
-                    res_ids=None,
+                    res_ids=self.slice_array(
+                        "pred/backbone_res_ids", link_bb_start, link_bb_end
+                    ),
                     res_names=None,
-                    chain_ids=None,
+                    chain_ids=self.slice_array(
+                        "pred/backbone_chain_ids", link_bb_start, link_bb_end
+                    ),
                 )
                 pred = StructureData(
                     coords=self.slice_array("pred/coords", link_start, link_end),
-                    atom_names=None,
+                    atom_names=self.slice_array(
+                        "pred/atom_names", link_start, link_end
+                    ),
                     elements=None,
-                    res_ids=None,
+                    res_ids=self.slice_array("pred/res_ids", link_start, link_end),
                     res_names=None,
-                    chain_ids=None,
+                    chain_ids=self.slice_array("pred/chain_ids", link_start, link_end),
                     cif=system_info["link_cif"],
                     backbone_mask=None,
                     backbone=pred_backbone,
@@ -491,46 +504,18 @@ class PlinderDataset(ZarrDataset):
                 crop_dist = sample_crop_distance(self.crop_min_distance, self.crop_max_distance, self.alpha, self.beta)
                 npndes = filter_npndes_by_distance(npndes, ligand.coords, crop_dist)
                 
-                # Crop link structure using same residue set as pocket
-                # Link structures are positionally aligned with pocket, so we 
-                # compute a mask from pocket and apply to link
+                # Crop link structure to the same residue set as the cropped pocket.
                 link_structure = apo if apo else pred
                 if link_structure is not None:
-                    # Build the set of (chain_id, res_id) pairs in cropped pocket
                     cropped_res_set = set(zip(pocket.chain_ids, pocket.res_ids))
-                    
-                    # Create atom-level mask for original pocket to map to link
-                    # Since link is aligned, same indices in original pocket correspond to same atoms in link
-                    original_pocket_coords = self.slice_array("pocket/coords", pocket_start, pocket_end)
-                    original_pocket_res_ids = self.slice_array("pocket/res_ids", pocket_start, pocket_end)
-                    original_pocket_chain_ids = self.slice_array("pocket/chain_ids", pocket_start, pocket_end)
-                    
-                    link_atom_mask = np.array([
-                        (original_pocket_chain_ids[i], original_pocket_res_ids[i]) in cropped_res_set
-                        for i in range(len(original_pocket_coords))
-                    ], dtype=bool)
-                    
-                    # Apply mask to link structure coords
-                    if link_structure.coords is not None:
-                        link_structure.coords = link_structure.coords[link_atom_mask]
-                    
-                    # For backbone, compute mask from original pocket backbone
-                    if link_structure.backbone is not None and link_structure.backbone.coords is not None:
-                        original_bb_res_ids = self.slice_array("pocket/backbone_res_ids", pocket_bb_start, pocket_bb_end)
-                        original_bb_chain_ids = self.slice_array("pocket/backbone_chain_ids", pocket_bb_start, pocket_bb_end)
-                        
-                        link_bb_mask = np.array([
-                            (original_bb_chain_ids[i], original_bb_res_ids[i]) in cropped_res_set
-                            for i in range(len(original_bb_res_ids))
-                        ], dtype=bool)
-                        
-                        link_structure.backbone.coords = link_structure.backbone.coords[link_bb_mask]
-                    
-                    # Update apo or pred reference
-                    if apo is not None:
-                        apo = link_structure
-                    else:
-                        pred = link_structure
+                    cropped_link = crop_structure_by_residue_set(
+                        link_structure, cropped_res_set
+                    )
+                    if cropped_link is not None:
+                        if apo is not None:
+                            apo = cropped_link
+                        else:
+                            pred = cropped_link
 
         if self.additional_prot_crop is not None and include_protein:
             # Crop the pocket with an additional fixed distance
@@ -539,6 +524,17 @@ class PlinderDataset(ZarrDataset):
             # If cropping results in empty pocket, fall back to original pocket
             if cropped_pocket is not None:
                 pocket = cropped_pocket
+                link_structure = apo if apo else pred
+                if link_structure is not None:
+                    cropped_res_set = set(zip(pocket.chain_ids, pocket.res_ids))
+                    cropped_link = crop_structure_by_residue_set(
+                        link_structure, cropped_res_set
+                    )
+                    if cropped_link is not None:
+                        if apo is not None:
+                            apo = cropped_link
+                        else:
+                            pred = cropped_link
 
         system = SystemData(
             system_id=system_info["system_id"],
@@ -600,14 +596,40 @@ class PlinderDataset(ZarrDataset):
     def get_link_coords(
         self,
         link: StructureData,
+        holo: StructureData,
         pocket_mask: torch.Tensor,
         bb_pocket_mask: torch.Tensor,
         modality_name: str,
     ) -> torch.Tensor:
         if modality_name == "prot_atom_x":
-            x_0 = torch.from_numpy(link.coords[pocket_mask]).float()
+            holo_indices = pocket_mask.nonzero(as_tuple=True)[0].cpu().numpy()
+            link_index = {
+                (str(link.chain_ids[i]), int(link.res_ids[i]), str(link.atom_names[i])): i
+                for i in range(len(link.coords))
+            }
+            coords = np.empty((len(holo_indices), 3), dtype=np.float32)
+            for out_i, holo_i in enumerate(holo_indices):
+                key = (
+                    str(holo.chain_ids[holo_i]),
+                    int(holo.res_ids[holo_i]),
+                    str(holo.atom_names[holo_i]),
+                )
+                coords[out_i] = link.coords[link_index[key]]
+            x_0 = torch.from_numpy(coords).float()
         elif modality_name == "prot_res":
-            x_0 = torch.from_numpy(link.backbone.coords[bb_pocket_mask]).float()
+            holo_bb_indices = bb_pocket_mask.nonzero(as_tuple=True)[0].cpu().numpy()
+            link_bb_index = {
+                (str(link.backbone.chain_ids[i]), int(link.backbone.res_ids[i])): i
+                for i in range(len(link.backbone.coords))
+            }
+            coords = np.empty((len(holo_bb_indices), 3, 3), dtype=np.float32)
+            for out_i, holo_i in enumerate(holo_bb_indices):
+                key = (
+                    str(holo.backbone.chain_ids[holo_i]),
+                    int(holo.backbone.res_ids[holo_i]),
+                )
+                coords[out_i] = link.backbone.coords[link_bb_index[key]]
+            x_0 = torch.from_numpy(coords).float()
         else:
             raise NotImplementedError(
                 f"{modality_name} does not have linked structure coords"
@@ -1170,8 +1192,10 @@ class PlinderDataset(ZarrDataset):
                 )
 
             g.nodes["prot_atom"].data["x_0"] = self.get_link_coords(
-                system.link, pocket_mask, bb_pocket_mask, "prot_atom_x"
+                system.link, system.receptor, pocket_mask, bb_pocket_mask, "prot_atom_x"
             )
+            # Keep the un-noised cropped AF/exp apo; sample_priors overwrites x_0.
+            g.nodes["prot_atom"].data["x_0_true"] = g.nodes["prot_atom"].data["x_0"].clone()
 
         # sample priors
         g = sample_priors(g, 

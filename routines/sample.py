@@ -109,6 +109,12 @@ def parse_args():
         help="Path to the Plinder dataset (optional)"
     )
     p.add_argument(
+        "--pdbbind_path",
+        type=str,
+        default=None,
+        help="Path to the PDBBind dataset (optional)"
+    )
+    p.add_argument(
         "--crossdocked_path",
         type=str,
         default=None,
@@ -254,12 +260,22 @@ def write_ground_truth(
         )
 
         # write the ground truth protein if present
+        g_cpu = g_list[cond_idx].to('cpu') if g_list is not None else None
         if 'protein_identity' in task.groups_present:
             if prot_cif:
                 gt_prot_file = sys_gt_dir / "protein.cif"
                 sys.write_protein(gt_prot_file, ground_truth=True)
             else:
-                sys.write_protein_pdb(sys_gt_dir, filename='protein', ground_truth=True)
+                sys.write_protein_pdb(sys_gt_dir, filename='protein', ground_truth=True, g=g_cpu)
+
+            apo_prior = (task.priors.get('prot_atom_x') or {}).get('type')
+            if (
+                apo_prior in ('apo_pred', 'apo_exp')
+                and g_cpu is not None
+                and 'prot_atom' in g_cpu.ntypes
+                and 'x_0_true' in g_cpu.nodes['prot_atom'].data
+            ):
+                sys.write_protein_pdb(sys_gt_dir, filename='apo', apo=True, g=g_cpu)
 
         # write the ground truth pharmacophore
         if 'pharmacophore' in task.groups_present:
@@ -318,24 +334,16 @@ def main(args):
                 train_cfg.plinder_path = args.plinder_path
             if args.crossdocked_path:
                 train_cfg.crossdocked_path = args.crossdocked_path
+            if getattr(args, "pdbbind_path", None):
+                train_cfg.pdbbind_path = args.pdbbind_path
 
-            # instantiate datamodule & model
-            if args.dataset == 'plinder':
-                spoof_cfg = quick_load.load_cfg(overrides=[
-                    'task_group=prot_protpharm_cond',
-                    f'plinder_path={args.plinder_path}',
-                    f'pharmit_path={args.pharmit_path}',
-                ])
-                dm = quick_load.datamodule_from_config(spoof_cfg)
-                multitask_dataset = dm.load_dataset(args.split)
-            else:
-                dm  = quick_load.datamodule_from_config(train_cfg)
-                multitask_dataset = dm.load_dataset(args.split)
+            dm = quick_load.datamodule_from_config(train_cfg)
+            multitask_dataset = dm.load_dataset(args.split)
 
             # get raw dataset object
-            if args.dataset == 'plinder':
+            if args.dataset in ('plinder', 'pdbbind'):
                 plinder_link_version = task.plinder_link_version
-                dataset = multitask_dataset.datasets['plinder'][plinder_link_version]
+                dataset = multitask_dataset.datasets[args.dataset][plinder_link_version]
             elif args.dataset == 'pharmit':
                 dataset = multitask_dataset.datasets['pharmit']
             elif args.dataset == 'crossdocked':

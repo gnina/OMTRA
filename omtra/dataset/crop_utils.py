@@ -122,7 +122,7 @@ def crop_structure_data(
             cropped_backbone = BackboneData(
                 coords=bb.coords[bb_mask],
                 res_ids=bb.res_ids[bb_mask],
-                res_names=bb.res_names[bb_mask],
+                res_names=bb.res_names[bb_mask] if bb.res_names is not None else None,
                 chain_ids=bb.chain_ids[bb_mask],
             )
     
@@ -204,7 +204,7 @@ def crop_structure_data_multiple_distances(
             cropped_backbone = BackboneData(
                 coords=bb.coords[bb_mask],
                 res_ids=bb.res_ids[bb_mask],
-                res_names=bb.res_names[bb_mask],
+                res_names=bb.res_names[bb_mask] if bb.res_names is not None else None,
                 chain_ids=bb.chain_ids[bb_mask],
             )
     
@@ -220,6 +220,59 @@ def crop_structure_data_multiple_distances(
         pocket_embedding=None,  # embeddings would need special handling if present
         cif=structure.cif,
     )
+
+
+def crop_structure_by_residue_set(
+    structure: StructureData,
+    residue_set: set,
+) -> Optional[StructureData]:
+    """Crop a structure to atoms whose (chain_id, res_id) is in residue_set."""
+    if (
+        not residue_set
+        or structure.coords is None
+        or len(structure.coords) == 0
+        or structure.chain_ids is None
+        or structure.res_ids is None
+    ):
+        return None
+
+    atom_mask = np.array([
+        (structure.chain_ids[i], structure.res_ids[i]) in residue_set
+        for i in range(len(structure.coords))
+    ], dtype=bool)
+
+    if not atom_mask.any():
+        return None
+
+    cropped_backbone = None
+    if structure.backbone is not None and structure.backbone.res_ids is not None:
+        bb = structure.backbone
+        bb_mask = np.array([
+            (bb.chain_ids[i], bb.res_ids[i]) in residue_set
+            for i in range(len(bb.coords))
+        ], dtype=bool)
+
+        if bb_mask.any():
+            cropped_backbone = BackboneData(
+                coords=bb.coords[bb_mask],
+                res_ids=bb.res_ids[bb_mask],
+                res_names=bb.res_names[bb_mask] if bb.res_names is not None else None,
+                chain_ids=bb.chain_ids[bb_mask],
+            )
+
+    return StructureData(
+        coords=structure.coords[atom_mask],
+        atom_names=structure.atom_names[atom_mask] if structure.atom_names is not None else None,
+        elements=structure.elements[atom_mask] if structure.elements is not None else None,
+        res_ids=structure.res_ids[atom_mask],
+        res_names=structure.res_names[atom_mask] if structure.res_names is not None else None,
+        chain_ids=structure.chain_ids[atom_mask],
+        backbone_mask=structure.backbone_mask[atom_mask] if structure.backbone_mask is not None else None,
+        backbone=cropped_backbone,
+        pocket_embedding=None,
+        cif=structure.cif,
+    )
+
 
 def compute_structure_crop_mask(
     structure: StructureData,

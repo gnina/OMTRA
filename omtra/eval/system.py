@@ -373,12 +373,12 @@ class SampledSystem:
             
         return atom_array
 
-    def get_protein_array(self, g=None, reference: bool = False, include_bonds: bool = True):
-        if g is None and reference and include_bonds:
+    def get_protein_array(self, g=None, reference: bool = False, include_bonds: bool = True, apo: bool = False):
+        if g is None and reference and include_bonds and not apo:
             if self._cached_protein_array is not None:
                 return self._cached_protein_array
         coords, atom_names, elements, res_ids, res_names, chain_ids, hetero = (
-            self.extract_protdata_from_graph(g=g, reference=reference)
+            self.extract_protdata_from_graph(g=g, reference=reference, apo=apo)
         )
 
         # TODO: handle case of mixed int and str chain identifiers?
@@ -396,7 +396,7 @@ class SampledSystem:
             hetero=hetero,
             include_bonds=include_bonds,
         )
-        if g is None and reference and include_bonds:
+        if g is None and reference and include_bonds and not apo:
             self._cached_protein_array = arr
         return arr
 
@@ -577,16 +577,20 @@ class SampledSystem:
             bond_dst_idxs,
         )
 
-    def extract_protdata_from_graph(self, g=None, reference: bool = False):
+    def extract_protdata_from_graph(self, g=None, reference: bool = False, apo: bool = False):
         if g is None:
             g = self.g
 
-        if reference:
+        if apo:
+            feat_suffix = "0_true"
+        elif reference:
             feat_suffix = "1_true"
         else:
             feat_suffix = "1"
 
-        coords = g.nodes["prot_atom"].data[f"x_{feat_suffix}"].numpy()
+        coords = g.nodes["prot_atom"].data[f"x_{feat_suffix}"]
+        if isinstance(coords, torch.Tensor):
+            coords = coords.detach().cpu().numpy()
         atypes = g.nodes["prot_atom"].data[f"a_1_true"].numpy()
         atom_type_map_array = np.array(self.protein_atom_type_map, dtype="U3")
         atom_names = atom_type_map_array[atypes]
@@ -805,11 +809,12 @@ class SampledSystem:
             output_dir: str,
             filename: str,
             ground_truth: bool = False,
-            
+            apo: bool = False,
+            g=None,
         ):
         """Write a protein a PDB file."""
         output_dir = Path(output_dir)
-        arrs = [self.get_protein_array(reference=ground_truth)]
+        arrs = [self.get_protein_array(g=g, reference=ground_truth, apo=apo)]
         write_arrays_to_pdb(arrs, output_dir, filename)
 
 
