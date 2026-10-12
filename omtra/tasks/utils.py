@@ -19,6 +19,7 @@ def build_edges(g: dgl.DGLHeteroGraph,
                 graph_config,
                 etype_subset: List[str] = None,
                 lig_only: bool = False,
+                node_positions: Dict[str, torch.Tensor] = None,
                 ) -> dgl.DGLHeteroGraph:
     batch_num_nodes, batch_num_edges = get_batch_info(g)
     batch_size = g.batch_size
@@ -43,7 +44,11 @@ def build_edges(g: dgl.DGLHeteroGraph,
         if g.num_nodes(src_ntype) == 0 or g.num_nodes(dst_ntype) == 0:
             continue
         
-        src_pos, dst_pos = g.nodes[src_ntype].data["x_t"], g.nodes[dst_ntype].data["x_t"]
+        if node_positions is None:
+            src_pos, dst_pos = g.nodes[src_ntype].data["x_t"], g.nodes[dst_ntype].data["x_t"]
+        else:
+            # positions updated inside the network forward pass; x_t on the graph still holds the input coordinates
+            src_pos, dst_pos = node_positions[src_ntype], node_positions[dst_ntype]
         builder_fn = edge_builders.get(etype)
         if builder_fn is None:
             raise NotImplementedError(f"Error getting edge builder for {etype}")

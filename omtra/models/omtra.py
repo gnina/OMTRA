@@ -521,40 +521,29 @@ class OMTRA(pl.LightningModule):
                 losses[modality.name] = torch.tensor(0.0, device=g.device)
                 continue
 
-            if self.time_scaled_loss:
-                mod_weight = t_weights
-
-                if is_categorical:
-                    mod_weight = mod_weight * self.cat_loss_weight
-
-                if modality.graph_entity == "edge":
-                    mod_weight = mod_weight[edge_batch_idxs[modality.entity_name]][
-                        upper_edge_mask[modality.entity_name]
-                    ]
-                else:
-                    mod_weight = mod_weight[node_batch_idxs[modality.entity_name]]
-                mod_weight = mod_weight.unsqueeze(-1)
-
-            elif is_categorical:
-                mod_weight = self.cat_loss_weight
-            else:
-                mod_weight = 1.0
-
             inp = vf_output[modality.name]
             target = targets[modality.name]
 
-            if disable_time_scaled_loss and modality.is_categorical:
-                mod_loss = fn.cross_entropy(
-                    inp, target, reduction="mean", ignore_index=-100
-                )
-            elif disable_time_scaled_loss and not modality.is_categorical:
-                mod_loss = fn.mse_loss(inp, target, reduction="mean")
+            # Per-element losses, then the intended weighting: categorical loss weight, and the time weight
+            # 1/(1-t)^2 (clipped) per graph for time-scaled losses. The weights were previously computed and
+            # then discarded, so the primary loss was an unweighted mean.
+            if is_categorical:
+                raw = fn.cross_entropy(inp, target, reduction="none", ignore_index=-100,
+                                       weight=self.loss_fn_dict[modality.name].weight)
+                valid = target != -100
+                raw = raw * self.cat_loss_weight
             else:
-                mod_loss = self.loss_fn_dict[modality.name](inp, target)
-
-            losses[modality.name] = mod_loss
-            if self.time_scaled_loss:
-                losses[modality.name] = losses[modality.name].mean()
+                raw = fn.mse_loss(inp, target, reduction="none")
+                raw = raw.reshape(raw.shape[0], -1).mean(-1)
+                valid = torch.ones_like(raw, dtype=torch.bool)
+            if self.time_scaled_loss and not disable_time_scaled_loss:
+                if modality.graph_entity == "edge":
+                    idx = edge_batch_idxs[modality.entity_name][upper_edge_mask[modality.entity_name]]
+                else:
+                    idx = node_batch_idxs[modality.entity_name]
+                raw = raw * t_weights[idx]
+            # a completely unmasked categorical modality has no targets at this time
+            losses[modality.name] = raw.sum() / valid.sum().clamp_min(1)
 
         # compute auxiliary losses
         for aux_loss_name, aux_loss_fn in self.aux_loss_fn_dict.items():

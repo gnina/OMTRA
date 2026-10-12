@@ -111,6 +111,14 @@ class PlinderDataset(ZarrDataset):
             and split in ['train', 'test']
         )
 
+        if (crop_min_distance is not None and crop_max_distance is not None
+                and (self.alpha is None or self.beta is None) and split == 'train'):
+            import warnings
+            warnings.warn(
+                f'crop_min_distance={crop_min_distance} and crop_max_distance={crop_max_distance} are set but '
+                f'alpha/beta are not, so dynamic cropping is INACTIVE and the native pocket is used. '
+                f'Set alpha and beta to crop dynamically.', stacklevel=2)
+
         # Store additional_prot_crop distance if in test split, otherwise None
         self.additional_prot_crop = (
             additional_prot_crop 
@@ -1159,6 +1167,22 @@ class PlinderDataset(ZarrDataset):
             )
         )
 
+        # get prior functions
+        prior_fns = get_prior(task_class, self.prior_config, training=True)
+
+        # if the task requires a linked structure for the prior, fetch its coordinates before the graph is built,
+        # so the clean input is available both as the prior's starting point and (optionally) for protein topology
+        link_coords = None
+        if include_protein and "apo" in prior_fns.get("prot_atom_x", ("", None))[0]:
+            if system.link is None:
+                raise ValueError(
+                    "system.link is None, cannot retrieve link coordinates."
+                )
+            link_coords = self.get_link_coords(
+                system.link, system.receptor, pocket_mask, bb_pocket_mask, "prot_atom_x"
+            )
+            node_data["prot_atom"]["x_0_true"] = link_coords.clone()
+
         g = build_complex_graph(
             node_data,
             edge_idxs,
@@ -1179,23 +1203,10 @@ class PlinderDataset(ZarrDataset):
             # Add the position embeddings to the graph's protein atom nodes
             g.nodes["prot_atom"].data["pos_enc_1_true"] = protein_position_encodings
 
-        # get prior functions
-        prior_fns = get_prior(task_class, self.prior_config, training=True)
-
-        # first, if the task requires a linked structure for the prior,
-        # manually add this to the graph
-
-        if "apo" in prior_fns.get("prot_atom_x", ("", None))[0]:
-            if system.link is None:
-                raise ValueError(
-                    "system.link is None, cannot retrieve link coordinates."
-                )
-
-            g.nodes["prot_atom"].data["x_0"] = self.get_link_coords(
-                system.link, system.receptor, pocket_mask, bb_pocket_mask, "prot_atom_x"
-            )
-            # Keep the un-noised cropped AF/exp apo; sample_priors overwrites x_0.
-            g.nodes["prot_atom"].data["x_0_true"] = g.nodes["prot_atom"].data["x_0"].clone()
+        if link_coords is not None:
+            g.nodes["prot_atom"].data["x_0"] = link_coords
+            # Keep the un-noised cropped apo/predicted input; sample_priors overwrites x_0.
+            g.nodes["prot_atom"].data["x_0_true"] = link_coords.clone()
 
         # sample priors
         g = sample_priors(g, 

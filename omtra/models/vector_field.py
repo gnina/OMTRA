@@ -602,7 +602,7 @@ class VectorField(nn.Module):
                 )
                 # every convs_per_update convolutions, update the node positions and edge features
                 # TODO: this code has gotten hairy, the molecule update operation should be collected into a separate method to make denoise_graph cleaner
-                if conv_idx != 0 and (conv_idx + 1) % self.convs_per_update == 0:
+                if (conv_idx + 1) % self.convs_per_update == 0:
                     if self.separate_mol_updaters:
                         updater_idx = conv_idx // self.convs_per_update
                     else:
@@ -666,8 +666,17 @@ class VectorField(nn.Module):
 
                     if self.rebuild_edges and not last_update:
                         g = remove_edges(g, lig_only=True)
-                        g = build_edges(g, task_class, node_batch_idx, self.graph_config, lig_only=True)
-                        edges_to_rebuild = [k for k in x_diff if 'lig' in k and k != 'lig_to_lig']
+                        g = build_edges(g, task_class, node_batch_idx, self.graph_config, lig_only=True,
+                                        node_positions=node_positions)
+                        # A relation that was empty can gain edges after a coordinate update, so select from the
+                        # graph schema and drop the stale distances of relations that were rebuilt.
+                        edges_to_rebuild = [
+                            k for k in g.etypes
+                            if 'lig' in k and k != 'lig_to_lig' and 'covalent' not in k
+                        ]
+                        for etype in edges_to_rebuild:
+                            x_diff.pop(etype, None)
+                            d.pop(etype, None)
                         x_diff_rebuilt, d_rebuilt = self.precompute_distances(g, node_positions, etype=edges_to_rebuild)
                         x_diff.update(x_diff_rebuilt)
                         d.update(d_rebuilt)

@@ -121,8 +121,17 @@ def build_complex_graph(
 
     # TODO: cleaner, more centralized way to inject protein covalent bonds into graph structure
     if num_nodes['prot_atom'] > 0 and graph_config.get('cov_prot_edges', False):
+        # Which structure defines the fixed covalent protein edges. 'target' (default, unchanged behavior) uses the
+        # holo coordinates; for apo/predicted-input tasks use 'input' so the topology is derived from the input.
+        persistent_source = graph_config.get('persistent_prot_edge_source', 'target')
+        source_keys = {'target': 'x_1_true', 'input': 'x_0_true'}
+        if persistent_source not in source_keys:
+            raise ValueError(f'Unknown persistent_prot_edge_source: {persistent_source}')
+        source_key = source_keys[persistent_source]
+        if source_key not in node_data['prot_atom']:
+            raise ValueError(f'Persistent protein edges require prot_atom.{source_key}')
         cov_edges = tc.radius_graph(
-                node_data['prot_atom']['x_1_true'], 
+                node_data['prot_atom'][source_key],
                 r=2.1, # i've done some testing, this captures pretty much just covalent bonds and nothing else
                 # it may capture di-sulfide bridges too which may be a desireable feature..tbd
             )

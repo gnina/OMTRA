@@ -46,7 +46,11 @@ def sample_priors(
         
         # determine args for the prior function
         if 'apo' in prior_name:
-            args = [g_data_loc[modality.entity_name].data[f'{modality.data_key}_0'], ]
+            # Start from the preserved clean linked coordinates (x_0_true). x_0 may already hold a noisy
+            # draw (the dataset samples the prior once), and drawing from it again would add noise twice.
+            clean_key = f'{modality.data_key}_0_true'
+            data_loc = g_data_loc[modality.entity_name].data
+            args = [data_loc[clean_key] if clean_key in data_loc else data_loc[f'{modality.data_key}_0'], ]
         elif training or 'target_dependent' in prior_name:
             target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
             args = [target_data, ]

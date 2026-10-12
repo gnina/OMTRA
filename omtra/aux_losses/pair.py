@@ -69,6 +69,12 @@ class ProtLigDist(nn.Module):
         dst_idxs = edge_idxs[1]  # prot atom indicies
 
 
+        if src_idxs.numel() == 0:
+            # no protein-ligand pair within the cutoff: a zero loss that keeps the graph connected
+            # (a mean over no pairs would be NaN)
+            return (g.nodes['lig'].data['x_d'].sum() +
+                    g.nodes['prot_atom'].data['x_d'].sum()) * 0.0
+
         # compute dij for generated structure
         x_diff_gen = g.nodes['lig'].data['x_d'][src_idxs] - g.nodes['prot_atom'].data['x_d'][dst_idxs]
         dij_gen = _norm_no_nan(x_diff_gen)
@@ -139,6 +145,9 @@ class LigPairLoss(nn.Module):
 
         # get a mask for distances < d_max
         d_mask = dij_true < self.d_max
+
+        if not d_mask.any():
+            return dst_dict['lig_x'].sum() * 0.0
 
         # apply that mask on atom pairs
         dij_true = dij_true[d_mask]
