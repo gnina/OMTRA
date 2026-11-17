@@ -833,6 +833,11 @@ class VectorField(nn.Module):
         if cat_temp_func is None:
             cat_temp_func = self.cat_temp_func
 
+        # `n_timesteps` is the number of TIME POINTS; the integrator performs n_timesteps - 1 updates (and network evaluations).
+        # A single time point means zero updates and used to fail later with an unrelated KeyError, so it is rejected here.
+        if tspan is None and (n_timesteps is None or int(n_timesteps) < 2):
+            raise ValueError(f'integrate needs n_timesteps >= 2 time points (n_timesteps - 1 integration updates), got {n_timesteps!r}')
+
         if tspan is None:
             if time_spacing == "even":
                 t = torch.linspace(0, 1, n_timesteps, device=g.device)
@@ -943,7 +948,11 @@ class VectorField(nn.Module):
 
             if visualize:
                 add_frame(g)
-                
+
+        # bookkeeping for callers/tests: N time points = N-1 updates = N-1 network evaluations; the last prediction was made at t[-2]
+        self.last_integration_info = dict(n_time_points=int(t.shape[0]), n_updates=int(t.shape[0]) - 1,
+                                          n_network_evals=int(t.shape[0]) - 1, t_last_prediction=float(t[-2]))
+
         # set x_1 = x_t
         for modality in task.node_modalities_present:
             ntype = modality.entity_name
