@@ -77,6 +77,10 @@ class ProtLigDist(nn.Module):
         x_diff_true = g.nodes['lig'].data['x_1_true'][src_idxs] - g.nodes['prot_atom'].data['x_1_true'][dst_idxs]
         dij_true = _norm_no_nan(x_diff_true)
 
+        if dij_gen.numel() == 0:
+            # Preserve the graph so backward yields finite zero gradients.
+            return (g.nodes['lig'].data['x_d'].sum() + g.nodes['prot_atom'].data['x_d'].sum()) * 0.0
+
         # TODO: what about time-dependent weighting? 
         time_scaled_loss = time_weights is not None
         reduction = 'none' if time_scaled_loss else 'mean'
@@ -147,6 +151,9 @@ class LigPairLoss(nn.Module):
         x_1_pred = dst_dict['lig_x']
         x_diff_gen = x_1_pred[src_idxs[d_mask]] - x_1_pred[dst_idxs[d_mask]]
         dij_pred = _norm_no_nan(x_diff_gen)
+
+        if dij_pred.numel() == 0:
+            return x_1_pred.sum() * 0.0
 
         disable_pair_loss = 'protein_identity' not in task.groups_present
 
