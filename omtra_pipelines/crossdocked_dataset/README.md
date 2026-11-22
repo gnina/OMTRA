@@ -24,7 +24,6 @@ The pipeline uses different entry points based on the split type: `run_crossdock
 
 ### Utilities and Testing
 
-- **`test_crossdocked.py`**: Testing script for inspecting and validating processed dataset outputs
 - **`README.md`**: Documentation for the dataset processing pipeline
 
 ### External Splits
