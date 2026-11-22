@@ -16,7 +16,6 @@ import numpy as np
 import biotite.structure as struc
 from biotite.interface import rdkit as bt_rdkit
 from copy import deepcopy
-from omtra.tasks.modalities import name_to_modality
 from collections import defaultdict
 
 '''
@@ -147,5 +146,3 @@ def build_lig_edge_idxs(n_atoms: int) -> torch.Tensor:
 
     edges = torch.cat((upper_edge_idxs, lower_edge_idxs), dim=1)
     return edges
-
-    

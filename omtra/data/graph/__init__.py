@@ -1,3 +1,4 @@
+from __future__ import annotations
 import torch
 import dgl
 from typing import Dict
@@ -6,7 +7,9 @@ from omegaconf import DictConfig
 import functools
 from omtra.utils import omtra_root
 from pathlib import Path
-from omtra.tasks.tasks import Task
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from omtra.tasks.tasks import Task
 import torch_cluster as tc
 
 
