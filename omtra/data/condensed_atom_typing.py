@@ -36,14 +36,12 @@ class CondensedAtomTyper():
         # Concatenate arrays and find unique atom uncondensed feature tuples
         all_tuples = np.vstack([cond_to_uncond] + plinder_uncond_tuples)
 
-        #if we want to include crossdocked, load unique tuples from .pt file
-        if include_crossdocked:
-            print('WARNING: temporarily disabled loading crossdocked tuples', flush=True)
-
-            # crossdocked_cond_a_path = omtra_root() + '/omtra_pipelines/crossdocked_ligand_properties/outputs/count_lig_feats/combined_unique_feat_tuples.pt'
-            # crossdocked_cond_a_counts = torch.load(crossdocked_cond_a_path)
-            # crossdocked_uncond_tuples = np.array(list(crossdocked_cond_a_counts.keys()), dtype=np.int64)
-            # all_tuples = np.vstack([all_tuples, crossdocked_uncond_tuples])
+        # All datasets share this fixed vocabulary, including CrossDocked.
+        # CrossDocked preprocessing rejects unsupported tuples via
+        # invalid_tuple_check in crossdocked_unlink_zarr.py.
+        # Keep include_crossdocked as a compatibility argument for old callers.
+        # Do not append dataset-specific tuples here: np.unique would reorder
+        # token IDs and invalidate pretrained embeddings and output labels.
 
         cond_to_uncond = np.unique(all_tuples, axis=0)
         self.cond_to_uncond = cond_to_uncond
@@ -96,7 +94,11 @@ class CondensedAtomTyper():
             if uf in self.uncond_tuple_to_cond_idx:
                 unique_cond_feats.append(self.uncond_tuple_to_cond_idx[uf])
             else:
-                raise ValueError(f"Encountered invalid atom feature tuple: {uf}")
+                raise ValueError(
+                    f"Atom feature tuple {uf} is outside the shared Pharmit/PLINDER "
+                    "checkpoint vocabulary. Rebuild/filter unsupported input ligands; "
+                    "do not extend or reorder token IDs without migrating checkpoints."
+                )
 
         cond_feats = np.array(unique_cond_feats)[inverse]
         return cond_feats
