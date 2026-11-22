@@ -102,7 +102,7 @@ class SystemProcessor:
         npnde_atom_map: List[str] = npnde_atom_type_map,
         pocket_cutoff: float = 8.0, # 8.0 is default, but can be set to any value
         n_cpus: int = 1, # 1 is default, but can be set to number of available CPUs
-        raw_data: str = "/net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types"  #!!: double check we want to route to types
+        raw_data: str = "data/crossdocked_raw/types"  # directory holding the CrossDocked .types files; pass your own path
     ):
         logger.debug("Initializing StructureProcessor with cutoff=%f", pocket_cutoff)
         self.ligand_atom_map = ligand_atom_map

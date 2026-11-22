@@ -22,8 +22,8 @@ warnings.filterwarnings("ignore", category=UserWarning, module="zarr.codecs.vlen
 
 
 # Crossdocked Data Directories
-types_file_dir = "/net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types"
-root_dir = "/net/galaxy/home/koes/paf46_shared/cd2020_v1.3"
+types_file_dir = None  # set with --cd_directory
+root_dir = None  # set with --root_dir
 zarr_output_dir = "test_output.zarr" #this is not used for the multiple types files
 test_types_file = "test.types"
 
@@ -34,10 +34,10 @@ types_files_pairs = [("it2_tt_v1.3_0_train0.types", "it2_tt_v1.3_0_test0.types")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Test Crossdocked dataset processing")
-    parser.add_argument("--cd_directory", type=str, default=types_file_dir, help="Crossdocked types file directory")
+    parser.add_argument("--cd_directory", type=str, required=True, help="Crossdocked types file directory")
     parser.add_argument("--pocket_cutoff", type=float, default=8.0, help="Pocket cutoff distance")
     parser.add_argument("--zarr_output_dir", type=str, default=zarr_output_dir, help="Output Zarr directory for testing")
-    parser.add_argument("--root_dir", type=str, default=root_dir, help="Root directory for crossdocked data")
+    parser.add_argument("--root_dir", type=str, required=True, help="Root directory for crossdocked data")
     
     parser.add_argument("--max_batches", type=str, default="None", help="Maximum number of batches to process in each types file")
     parser.add_argument("--batch_size", type=int, default=500, help="Batch size of how many receptor-ligand pairs to process in each batch")
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     
     '''
     ################### ONE TYPES FILE ######################
-    types_file_path = "/net/galaxy/home/koes/jmgupta/omtra_2/omtra_pipelines/crossdocked_dataset/test_types_file.types"
+    types_file_path = "path/to/test_types_file.types"
     # # Create converter
     output_dir = (args.zarr_output_dir)
     converter = CrossdockedNoLinksZarrConverter(output_path=os.path.join(args.zarr_output_dir, "test.zarr"), num_workers=args.n_cpus)

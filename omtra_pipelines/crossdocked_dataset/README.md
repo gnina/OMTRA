@@ -5,7 +5,7 @@ The dataset includes internal splits (created by our lab using `.types` files) a
 
 The fully processed data can be located at: 
 
-**External Splits:** /net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_split
+**External Splits:** /path/to/output/crossdocked/external_split
 
 **Internal Splits:** 
 
@@ -42,7 +42,7 @@ The pipeline uses different entry points based on the split type: `run_crossdock
 
 To process the external splits of the Crossdocked dataset, you must use the `split_by_name.pt` file located at:
 
-/net/galaxy/home/koes/jmgupta/omtra_2/omtra_pipelines/crossdocked_dataset/crossdocked_external_splits/split_by_name.pt
+omtra_pipelines/crossdocked_dataset/crossdocked_external_splits/split_by_name.pt
 
 ### File Structure
 
@@ -80,10 +80,10 @@ The main processing script is `run_crossdocked_processing_external_splits.py` wh
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--cd_directory` | `/net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types` | Crossdocked types file directory |
+| `--cd_directory` | (required) | Crossdocked types file directory |
 | `--pocket_cutoff` | `8.0` | Pocket cutoff distance (Angstroms) |
 | `--zarr_output_dir` | `test_external_output.zarr` | Output directory for processed Zarr files |
-| `--root_dir` | `/net/galaxy/home/koes/paf46_shared/cd2020_v1.3` | Root directory for crossdocked data |
+| `--root_dir` | (required) | Root directory for crossdocked data |
 | `--max_batches` | `None` | Maximum number of batches to process (None = all) |
 | `--batch_size` | `500` | Number of ligand-receptor pairs per batch |
 | `--n_cpus` | `8` | Number of CPUs for parallel processing |
@@ -106,10 +106,10 @@ source ~/.bashrc
 mamba activate omtra
 
 python omtra_pipelines/crossdocked_dataset/run_crossdocked_processing_external_splits.py \
-  --cd_directory /net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types \
+  --cd_directory /path/to/crossdocked2020_v1.3/types \
   --pocket_cutoff 8.0 \
-  --zarr_output_dir /net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_split \
-  --root_dir /net/galaxy/home/koes/paf46_shared/cd2020_v1.3 \
+  --zarr_output_dir /path/to/output/crossdocked/external_split \
+  --root_dir /path/to/crossdocked2020_v1.3 \
   --max_batches None \
   --batch_size 500 \
   --n_cpus 16 \
@@ -120,7 +120,7 @@ python omtra_pipelines/crossdocked_dataset/run_crossdocked_processing_external_s
 
 The internal splits use predefined train/val pairs from the Crossdocked dataset's `.types` files. These files can be located at: 
 
-/net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types
+/path/to/crossdocked2020_v1.3/types
 
 ### File Structure
 
@@ -174,10 +174,10 @@ The main processing script is `run_crossdocked_processing.py` which:
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--cd_directory` | `/net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types` | Crossdocked types file directory |
+| `--cd_directory` | (required) | Crossdocked types file directory |
 | `--pocket_cutoff` | `8.0` | Pocket cutoff distance (Angstroms) |
 | `--zarr_output_dir` | `test_external_output.zarr` | Output directory for processed Zarr files |
-| `--root_dir` | `/net/galaxy/home/koes/paf46_shared/cd2020_v1.3` | Root directory for crossdocked data |
+| `--root_dir` | (required) | Root directory for crossdocked data |
 | `--max_batches` | `None` | Maximum number of batches to process (None = all) |
 | `--batch_size` | `500` | Number of ligand-receptor pairs per batch |
 | `--n_cpus` | `8` | Number of CPUs for parallel processing |
@@ -203,10 +203,10 @@ mamba activate omtra
 
 # write your command line commands here
 python omtra_pipelines/crossdocked_dataset/run_crossdocked_processing_external_splits.py \
-  --cd_directory /net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types \
+  --cd_directory /path/to/crossdocked2020_v1.3/types \
   --pocket_cutoff 8.0 \
-  --zarr_output_dir /net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_split \
-  --root_dir /net/galaxy/home/koes/paf46_shared/cd2020_v1.3 \
+  --zarr_output_dir /path/to/output/crossdocked/external_split \
+  --root_dir /path/to/crossdocked2020_v1.3 \
   --max_batches None \
   --batch_size 500 \
   --n_cpus 16 \
