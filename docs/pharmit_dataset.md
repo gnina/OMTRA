@@ -16,7 +16,7 @@ The pharmit dataset is available for independent use separate from OMTRA. The da
 
 #### Example Usage
 ```console
-dataset = PharmitDataset(data_dir='/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit',
+dataset = PharmitDataset(data_dir='data/pharmit',
                          split='test',
                          return_type='rdkit')
 mol = dataset[0]

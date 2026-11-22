@@ -281,7 +281,7 @@ if __name__ == '__main__':
     else:
         run_parallel(args.n_cpus, spoof_db, db_crawler, chunk_saver, process_args)
 
-    # off load last remaining chunks to masuda
+    # offload the last remaining chunks (no-op unless OMTRA_OFFLOAD_HOST/DIR are set)
     chunk_saver.offload_chunks()
 
     end_time = time.time()

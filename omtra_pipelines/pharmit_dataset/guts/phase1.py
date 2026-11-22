@@ -351,7 +351,7 @@ class ChunkSaver():
 
     def __init__(self, output_dir: Path, 
         register_write_interval: int = 10, # how frequently we record the chunks that have been processed to disk
-        chunk_offload_threshold_mb: int = 1000, # how many MB of data to store locally before offloading to masuda
+        chunk_offload_threshold_mb: int = 1000, # how many MB of data to store locally before offloading to a remote host (see offload_chunks)
         dev_mode: bool = False,
         ):
 
@@ -403,14 +403,22 @@ class ChunkSaver():
         if self.mb_stored_local == 0:
             return
 
-        print("Offloading chunks to masuda")
+        # Offloading is optional: set OMTRA_OFFLOAD_HOST (an ssh host) and OMTRA_OFFLOAD_DIR
+        # (a directory on that host) to copy finished chunks there and free local disk.
+        # Without them, chunks stay in the local output directory.
+        offload_host = os.environ.get("OMTRA_OFFLOAD_HOST")
+        offload_dir = os.environ.get("OMTRA_OFFLOAD_DIR")
+        if not offload_host or not offload_dir:
+            return
+
+        print(f"Offloading chunks to {offload_host}")
 
         data_files = self.chunk_data_dir / '*.npz'
         info_files = self.chunk_info_dir / '*.pkl'
-        data_dst_path = '/home/ian/projects/mol_diffusion/OMTRA/omtra_pipelines/pharmit_dataset/outputs/phase1/chunk_data'
-        info_dst_path = '/home/ian/projects/mol_diffusion/OMTRA/omtra_pipelines/pharmit_dataset/outputs/phase1/chunk_info'
-        scp_transfer(str(data_files), "masuda-tunnel", data_dst_path)
-        scp_transfer(str(info_files), "masuda-tunnel", info_dst_path)
+        data_dst_path = f"{offload_dir}/chunk_data"
+        info_dst_path = f"{offload_dir}/chunk_info"
+        scp_transfer(str(data_files), offload_host, data_dst_path)
+        scp_transfer(str(info_files), offload_host, info_dst_path)
 
         # remove files from local storage
         for f in self.chunk_data_dir.glob('*.npz'):

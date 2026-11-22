@@ -5,7 +5,7 @@ import shutil
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="This script can be run on jabba (where the raw pharmit dataset lives) to build a small dataset for dev purporses.")
+    p = argparse.ArgumentParser(description="Build a small Pharmit dataset for development and testing purposes.")
     p.add_argument('--src_dir', type=Path, default='/')
     p.add_argument('--dst_dir', type=Path, default='./pharmit_small/')
     p.add_argument('--n_data_dirs', type=int, default=3)
