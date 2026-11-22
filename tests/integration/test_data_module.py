@@ -18,7 +18,6 @@ def create_dummy_zarr_store(tmp_path: Path, split: str) -> Path:
     """
     Create a minimal dummy Zarr store for specified `split`. 
     This mimics the basic structure expected by the data module
-        - Currently this code follows the example in notebooks/zarr_dev.ipynb
     """
     store_path = f"{tmp_path}/{split}.zarr"
 
