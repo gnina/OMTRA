@@ -1,6 +1,9 @@
 from typing import Dict, List
 from pathlib import Path
 import argparse
+import json
+import hashlib
+from rdkit import Chem
 import os
 
 import pandas as pd
@@ -49,20 +52,46 @@ def parse_args():
     sampling.add_argument("--sample_start_idx", type=int, default=None, help="Index in the sample directory to start getting samples from.")
     sampling.add_argument("--sys_idx_file", type=str, default=None, help='Path to a file with pre-selected system indices.')
     sampling.add_argument("--plinder_path", type=str, default=None, help="Path to the Plinder dataset (optional).")
+    sampling.add_argument("--pharmit_path", type=str, default=None, help="Path to a Pharmit data dir (the datamodule needs its stats files even for protein tasks). Default: <repo>/data/pharmit.")
     sampling.add_argument("--crossdocked_path", type=str, default=None, help="Path to the Crossdocked dataset (optional).")
 
+    sampling.add_argument('--seed', type=int, default=None, help='Seed conditioning selection, crop, perturbations, and sampling for reproducible evaluation.')
     sampling.add_argument("--n_samples", type=int, default=None, help='Number of samples to evaluate.')
     sampling.add_argument("--n_replicates", type=int, help="Number of replicates per input sample.", required=True)
     sampling.add_argument("--n_timesteps", type=int, default=250, help="Number of integration steps to take when sampling.")
     sampling.add_argument("--n_lig_atom_margin", type=float, default=0.075, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
+    sampling.add_argument("--com_offset_magnitude", type=float, default=0.0, help="Magnitude of random offset applied to the ground-truth ligand center of mass used to define the pocket, before sampling. Set to 0 to disable.")
+    sampling.add_argument("--additional_prot_crop", type=float, default=None, help="Eval-time-only fixed pocket crop distance (Angstroms) from the ligand, applied uniformly regardless of the checkpoint's training-time crop settings. Matches Juhi's methodology for a matched-pocket-size comparison across dynamic-crop and non-dynamic-crop models. Leave unset to keep the existing behavior (crop settings inherited from the checkpoint's own training config).")
 
     sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
+    sampling.add_argument('--pharm_input_noise_std', type=float, default=0.0, help='Simulate pharmacophore input errors with per-point sigma sampled from [0, value]; preserve clean evaluation references.')
+    sampling.add_argument('--fixed_coord_max_std', type=float, default=0.0, help='Simulate errors in supplied partial ligand coordinates.')
+    sampling.add_argument('--fixed_token_max_prob', type=float, default=0.0, help='Simulate corruption of supplied partial ligand chemical tokens.')
+    sampling.add_argument('--site_ligand_json', type=Path, default=None, help="CrossDocked docking diagnostic: JSON {lig_sdf basename: {native_xyz, bench_com}} giving the receptor's native ligand; --site_apply picks whether it defines the pocket crop, the centre, or both (default off).")
+    sampling.add_argument('--site_apply', choices=['pocket', 'centre', 'both'], default='both')
+    sampling.add_argument('--center_source', choices=['ligand', 'pocket'], default='ligand', help='ligand uses the reference ligand COM (oracle); pocket uses the supplied pocket centroid.')
+    sampling.add_argument('--sample_ligand_size', action='store_true', help='Infer de novo ligand size from the dataset prior instead of the reference ligand size.')
+    sampling.add_argument('--oracle_ligand_size', dest='sample_ligand_size',action='store_false',help='Explicit reference-size diagnostic (overrides an earlier --sample_ligand_size).')
+    sampling.add_argument('--partial_mode', choices=['whole_fragments', 'fragment_bernoulli_atom', 'bernoulli_atoms', 'mixed'], default=None, help="Eval-time override of how the fixed (revealed) ligand atoms are chosen for partial tasks. Default: use the checkpoint's training partial_mode. 'bernoulli_atoms' with --partial_bernoulli_p reveals each atom with that probability.")
+    sampling.add_argument('--partial_bernoulli_p', type=float, default=None, help="Eval-time override of the partial-reveal Bernoulli probability. Default: the checkpoint's training value (None = random per example).")
     sampling.add_argument("--noise_scaler", type=float, default=1.0, help="Noise scaling param for stochastic sampling.")
     sampling.add_argument("--eps", type=float, default=0.01, help="g(t) param for stochastic sampling.")
     
     sampling.add_argument("--max_batch_size", type=int, default=500, help='Maximum number of systems to sample per batch.')
     sampling.add_argument("--bs_per_gbmem", type=float, default=None, help='Batch size per GB/EM on the GPU.')
     
+
+    sampling.add_argument('--prot_input_noise_max_std',type=float,default=0.)
+    sampling.add_argument('--prot_input_noise_mode',choices=['atom','residue'],default='atom')
+    sampling.add_argument('--size_prior_path',type=Path,default=None)
+    sampling.add_argument('--allow_oracle_stereo',action='store_true',help='Explicit legacy benchmark adapter: derive requested identity from bound reference geometry.')
+    sampling.add_argument('--stereo_unknown',action='store_true',help='Stereo-unknown mode: supply ligand chemistry only (from the graph tokens, no coordinates), so every stereocentre is "unspecified".')
+    sampling.add_argument('--zero_correction',action='store_true',help='Diagnostic: zero the stereo-correction projection tables of the loaded checkpoint (same weights otherwise) to test inference dependence.')
+    sampling.add_argument('--stereo_guidance_w',type=float,default=None,help='Classifier-free stereo guidance weight (diagnostic): x1 = x1_unknown + w*(x1_given - x1_unknown); w=1 equals ordinary given mode. Requires requested stereo.')
+    sampling.add_argument('--stereo_identity_json',type=Path,default=None,help='Per-system supplied SMILES and optional graph_to_identity atom mapping.')
+    sampling.add_argument('--stereo_hide_fraction',type=float,default=None,help='Diagnostic partial-label mode: after attaching the supplied identity, hide each specified centre/E-Z bond independently with this probability (training-time hide_stereo mechanism). Hidden sets are written to stereo_hidden_centres.json in the output directory.')
+    sampling.add_argument('--stereo_hide_seed',type=int,default=0)
+    sampling.add_argument('--observation_cache_dir',type=Path,default=None,help='Shared immutable conditioning cache used by every model in a paired comparison.')
 
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
@@ -98,6 +127,24 @@ def sample_system(ckpt_path: Path,
                   sys_idx_file: Path = None,
                   plinder_path: Path = None,
                   crossdocked_path: Path = None,
+                  pharmit_path: Path = None,
+                  com_offset_magnitude: float = 0.0,
+                  center_source: str = "ligand",
+                  seed: int = None,
+                  stereo_identity_json: Path = None,
+                  allow_oracle_stereo: bool = False,
+                  stereo_unknown: bool = False,
+                  stereo_guidance_w: float = None,
+                  zero_correction: bool = False,
+                  stereo_hide_fraction: float = None,
+                  stereo_hide_seed: int = 0,
+                  stereo_hidden_report: Path = None,
+                  observation_cache_dir: Path = None,
+                  additional_prot_crop: float = None,
+                  site_ligand_json: Path = None,
+                  site_apply: str = 'both',
+                  partial_mode: str = None,
+                  partial_bernoulli_p: float = None,
                   **kwargs
                   ):
     
@@ -105,7 +152,9 @@ def sample_system(ckpt_path: Path,
         raise FileNotFoundError(f"{ckpt_path} not found")
     
     # 2) load the exact train‐time config
-    train_cfg_path = ckpt_path.parent.parent / '.hydra' / 'config.yaml'
+    train_cfg_path = ckpt_path.parent.parent / 'training_config.yaml'
+    if not train_cfg_path.exists():
+        train_cfg_path = ckpt_path.parent.parent / '.hydra' / 'config.yaml'
     train_cfg = quick_load.load_trained_model_cfg(train_cfg_path)
 
     # apply some changes to the config to enable sampling
@@ -115,6 +164,39 @@ def sample_system(ckpt_path: Path,
     if crossdocked_path:
         train_cfg.crossdocked_path = crossdocked_path
 
+    # Propagate the trained model's actual pocket-definition / dynamic-crop settings into
+    # the eval dataset config below. Without this, quick_load.load_cfg() builds a fresh
+    # config from configs/config.yaml's defaults (alpha=null, beta=null -> no cropping
+    # applied), so a model trained with dynamic cropping would silently be evaluated on
+    # the full, uncropped pocket it never saw during training.
+    def _crop_override_value(v):
+        return 'null' if v is None else v
+    crop_overrides = [
+        f'{field}={_crop_override_value(train_cfg.get(field, None))}'
+        for field in ['crop_min_distance', 'crop_max_distance', 'alpha', 'beta']
+    ]
+    # additional_prot_crop is eval-only (val/test in the dataset classes, never
+    # set during training), so it must come from this CLI arg, not the checkpoint's training
+    # config -- inheriting it from train_cfg (as the other crop fields above do) would always
+    # resolve to null, since no checkpoint's training config ever sets it. Passing this flag
+    # forces the same fixed pocket crop across every model regardless of its own dynamic-crop
+    # training settings; leaving it unset preserves prior behavior exactly (always null).
+    crop_overrides.append(f'additional_prot_crop={_crop_override_value(additional_prot_crop)}')
+    if additional_prot_crop is not None:
+        # A requested fixed crop must be the ONLY crop. Otherwise a dynamic-crop checkpoint's
+        # inherited random 8-12A crop runs first and the fixed crop only shrinks it further,
+        # so e.g. a "10A" eval would give M4-M6 random pockets <=10A while M1-M3 get exactly 10A.
+        crop_overrides = [o for o in crop_overrides
+                          if not o.split('=')[0] in ('crop_min_distance', 'crop_max_distance', 'alpha', 'beta')]
+        crop_overrides += ['crop_min_distance=null', 'crop_max_distance=null', 'alpha=null', 'beta=null']
+
+    # Match training's partial masking recipe; preserve compatibility with older configs.
+    # (CLI --partial_mode / --partial_bernoulli_p override the checkpoint's recipe for eval-time reveal sweeps.)
+    eff_partial_mode = partial_mode if partial_mode is not None else train_cfg.get('partial_mode', 'whole_fragments')
+    eff_partial_p = partial_bernoulli_p if partial_bernoulli_p is not None else train_cfg.get('partial_bernoulli_p', None)
+    crop_overrides += [f"partial_mode={eff_partial_mode}",
+                       f"partial_bernoulli_p={_crop_override_value(eff_partial_p)}"]
+
     # get device
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
@@ -122,6 +204,12 @@ def sample_system(ckpt_path: Path,
     #dm  = quick_load.datamodule_from_config(train_cfg)
     #multitask_dataset = dm.load_dataset(split)
     model = quick_load.omtra_from_checkpoint(ckpt_path).to(device).eval()
+    if zero_correction:
+        if getattr(model.vector_field, 'stereo_correction', None) is None:
+            raise ValueError('--zero_correction needs a checkpoint trained with stereo_correction')
+        with torch.no_grad():
+            model.vector_field.stereo_correction.w_current.zero_()
+            model.vector_field.stereo_correction.w_pred.zero_()
 
     if sys_idx_file is None:
         dataset_idxs = range(dataset_start_idx, dataset_start_idx + n_samples) 
@@ -139,7 +227,7 @@ def sample_system(ckpt_path: Path,
     if dataset == 'plinder':
         plinder_link_version = task.plinder_link_version
         
-        cfg = quick_load.load_cfg(overrides=['task_group=flexible_protein_cond_a'], plinder_path=plinder_path)
+        cfg = quick_load.load_cfg(overrides=['task_group=flexible_protein_cond_a'] + crop_overrides, plinder_path=plinder_path, pharmit_path=pharmit_path)
         plinder_datamodule = datamodule_from_config(cfg)    
         dataset = plinder_datamodule.load_dataset(split).datasets['plinder'][plinder_link_version]
         
@@ -147,7 +235,7 @@ def sample_system(ckpt_path: Path,
         dataset_name = 'plinder'
 
         # system info
-        sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].loc[dataset_idxs].copy()
+        sys_info = dataset.system_lookup.iloc[list(dataset_idxs)].copy()
 
         sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in range(sys_info.shape[0])]
         sys_info['n_gt_lig_atoms'] =  sys_info['lig_atom_end'] - sys_info['lig_atom_start']
@@ -156,7 +244,7 @@ def sample_system(ckpt_path: Path,
 
     elif dataset == 'crossdocked':
 
-        cfg = quick_load.load_cfg(overrides=['task_group=fixed_crossdocked'], crossdocked_path=crossdocked_path)
+        cfg = quick_load.load_cfg(overrides=['task_group=fixed_crossdocked'] + crop_overrides, crossdocked_path=crossdocked_path, pharmit_path=pharmit_path)
         crossdocked_datamodule = datamodule_from_config(cfg)    
         dataset = crossdocked_datamodule.load_dataset(split).datasets['crossdocked']
                                
@@ -164,7 +252,7 @@ def sample_system(ckpt_path: Path,
         dataset_name = 'crossdocked'
 
         # system info
-        sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
+        sys_info = dataset.system_lookup.iloc[list(dataset_idxs)].copy()
         sys_info['n_gt_lig_atoms'] = sys_info['lig_atom_end'] - sys_info['lig_atom_start']
         sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb', 'n_gt_lig_atoms']] 
         sys_info['lig_id'] = sys_info['lig_sdf'].apply(lambda x: Path(Path(x).stem).stem)
@@ -179,18 +267,101 @@ def sample_system(ckpt_path: Path,
         # dataset_idxs = [dataset_idxs[i] for i in sorted_idx]
 
     elif dataset == 'pharmit':
-        raise ValueError(f"Pharmit dataset does not include proteins!")
+        cfg = quick_load.load_cfg(overrides=['task_group=no_protein_cond_a'] + crop_overrides,pharmit_path=pharmit_path)
+        dataset = datamodule_from_config(cfg).load_dataset(split).datasets['pharmit']
+        dataset_name = 'pharmit'
+        sys_info = pd.DataFrame({'system_id':['pharmit']*len(dataset_idxs),
+                                 'ligand_id':[str(i) for i in dataset_idxs],
+                                 'sys_id':[f'sys_{i}_gt' for i in range(len(dataset_idxs))]})
     else:
         raise ValueError(f"Unknown dataset {dataset}")
+
+    if seed is not None:
+        import random
+        import numpy as np
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
+    site = None
+    if site_ligand_json is not None:
+        if dataset_name != 'crossdocked':
+            raise ValueError('--site_ligand_json is only defined for the CrossDocked dataset')
+        import numpy as np
+        site = json.loads(Path(site_ligand_json).read_text())
+        if site_apply in ('pocket', 'both'):
+            dataset.site_ref_coords = {k: np.asarray(v['native_xyz'], dtype=np.float32) for k, v in site.items()}
 
     # get g_list
     g_list = [ dataset[(task.name, i)].to(device) for i in dataset_idxs ]
 
+    from omtra.data.requested_stereo import eligible
+    from omtra.data.inference_stereo import attach_inference_stereo
+    if model.vector_field.stereo_embedder is not None and model.vector_field.stereo_enabled and eligible(task):
+        identities = json.loads(Path(stereo_identity_json).read_text()) if stereo_identity_json else None
+        attach_inference_stereo(g_list, task, sys_info, identities=identities,
+                                allow_oracle=allow_oracle_stereo, unknown=stereo_unknown)
+        if stereo_hide_fraction is not None:
+            if stereo_unknown or not 0.0 < stereo_hide_fraction <= 1.0:
+                raise ValueError('--stereo_hide_fraction needs given mode and a value in (0, 1]')
+            from omtra.data.requested_stereo import hide_stereo
+            from omtra.data.inference_stereo import system_identity_key
+            report = {}
+            for i, g_i in enumerate(g_list):
+                generator = torch.Generator().manual_seed(int(stereo_hide_seed) * 1000003 + i)
+                hide_stereo(g_i, p_all=0.0, p_partial=1.0, partial_rate=float(stereo_hide_fraction), generator=generator)
+                nd_i = g_i.nodes['lig'].data
+                report[str(system_identity_key(sys_info.iloc[i]))] = {
+                    'hidden_atoms': nd_i['stereo_hidden'].nonzero().flatten().tolist(),
+                    'visible_atoms': ((nd_i['stereo_atom'] >= 2) & (nd_i['stereo_atom'] <= 5)).nonzero().flatten().tolist(),
+                    'true_centres': nd_i['stereo_centre'].nonzero().flatten().tolist()}
+            if stereo_hidden_report is not None:
+                Path(stereo_hidden_report).write_text(json.dumps(report))
+        if stereo_guidance_w is not None:
+            if stereo_unknown:
+                raise ValueError('Stereo guidance needs requested (given/oracle) stereo, not --stereo_unknown')
+            from omtra.data.inference_stereo import attach_guidance_alternative
+            attach_guidance_alternative(g_list, task)
+    model.vector_field.stereo_guidance_w = stereo_guidance_w
+
     # set coms if protein is present
     if 'protein_identity' in task.groups_present and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed'])):
-        coms = [ g.nodes['lig'].data['x_1_true'].mean(dim=0) for g in g_list ]
+        # offsetting the COMs, each system in a random direction by the same magnitude
+        coms = []
+        for gi, g in enumerate(g_list):
+            center_type = 'lig' if center_source == 'ligand' else 'prot_atom'
+            com = g.nodes[center_type].data['x_1_true'].mean(dim=0)
+            if site is not None:
+                e = site[Path(str(sys_info.iloc[gi]['lig_sdf'])).name]
+                bench = g.nodes['lig'].data['x_1_true'].mean(dim=0)
+                # the JSON must live in the graph's coordinate frame and ligand-atom convention
+                assert float((bench - torch.as_tensor(e['bench_com'], dtype=bench.dtype, device=bench.device)).norm()) < 0.5, \
+                    f"site JSON benchmark COM does not match the graph for {sys_info.iloc[gi]['lig_sdf']}"
+                if site_apply in ('centre', 'both'):
+                    com = torch.as_tensor(np.asarray(e['native_xyz']), dtype=com.dtype, device=com.device).mean(dim=0)
+            if com_offset_magnitude > 0:
+                direction = torch.randn(3)
+                direction = direction / direction.norm()
+                offset = (direction * com_offset_magnitude).to(com.device)
+                coms.append(com + offset)
+            else:
+                coms.append(com)
     else:
         coms = None
+
+    if observation_cache_dir is not None:
+        from omtra.eval.observations import prepare_shared_observation
+        contract={k:kwargs.get(k,default) for k,default in (
+            ('prot_input_noise_max_std',0.),('prot_input_noise_mode','atom'),
+            ('pharm_input_noise_std',0.),('fixed_coord_max_std',0.),('fixed_token_max_prob',0.))}
+        contract.update(center_source=center_source,com_offset_magnitude=com_offset_magnitude,
+                        partial_mode=eff_partial_mode,partial_bernoulli_p=eff_partial_p,seed=seed)
+        for i,(graph,idx) in enumerate(zip(g_list,dataset_idxs)):
+            center,_=prepare_shared_observation(graph,task,None if coms is None else coms[i],
+                observation_cache_dir,f'{dataset_name}|{split}|{idx}',contract)
+            if coms is not None:coms[i]=center
+        for key in ('prot_input_noise_max_std','pharm_input_noise_std','fixed_coord_max_std','fixed_token_max_prob'):
+            kwargs[key]=0.
     
     # sample the model in batches
     sampled_systems = model.sample_in_batches(g_list=g_list,
@@ -200,6 +371,7 @@ def sample_system(ckpt_path: Path,
                                               unconditional_n_atoms_dist=dataset_name,
                                               device=device,
                                               n_timesteps=n_timesteps,
+                                              allow_oracle_stereo=allow_oracle_stereo,
                                               visualize=False,
                                               coms=coms,
                                               **kwargs,
@@ -250,6 +422,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
         gen_ligs = [s.get_rdkit_ligand() for s in replicates]
 
         for i, lig in enumerate(gen_ligs):
+            if lig is None: continue
             lig.SetProp("_Name", f"gen_ligands_{i}")
 
         true_lig = replicates[0].get_gt_ligand(g=g_list[sys_id].to('cpu')) 
@@ -281,6 +454,7 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
                 # generated protein
                 pair["gen_prot_file"] = sys_gt_dir / f"gen_prot_{i}.pdb"
                 pair["gen_prot_id"] = f"gen_prot_{i}"
+                pair['initial_prot_file']=sys_gt_dir/f'initial_prot_{i}.pdb'
 
                 # true protein
                 pair["true_prot_file"] = true_prot_file
@@ -293,8 +467,9 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
                 sys_pair[f"pair_{i}"] = pair
 
             # write proteins to pdbs
-            proteins = [s.get_protein_array() for s in replicates]
+            proteins = [s.get_receptor_array() for s in replicates]
             write_arrays_to_pdb(proteins, sys_gt_dir, 'gen_prot')
+            write_arrays_to_pdb([s.get_initial_receptor_array() for s in replicates],sys_gt_dir,'initial_prot')
 
         else:  
             pair = {}
@@ -311,7 +486,11 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
             pair['true_lig_file'] = sys_gt_dir / f"ligand.sdf"
 
             # set generated protein to reference protein
-            pair['gen_prot_file'] = true_prot_file
+            if 'protein_identity' in task.groups_present:
+                write_arrays_to_pdb([replicates[0].get_receptor_array(observation=True)],sys_gt_dir,'input_protein')
+                pair['gen_prot_file'] = sys_gt_dir / 'input_protein_0.pdb'
+            else:
+                pair['gen_prot_file'] = None
             pair['gen_prot_id'] = true_prot_id
 
             # true protein
@@ -324,6 +503,21 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
             
             sys_pair['pair_0'] = pair
         
+        if 'pharmacophore' in task.groups_present:
+            input_pharm = replicates[0].get_pharmacophore_from_graph(kind='input')
+            with (sys_gt_dir/'input_pharmacophore.json').open('x') as stream:
+                json.dump({k:v.tolist() if hasattr(v,'tolist') else v for k,v in input_pharm.items()},stream)
+            for pair in sys_pair.values():pair['input_pharm']=input_pharm
+        if 'protein_identity' not in task.groups_present:
+            for pair in sys_pair.values():
+                pair['gen_prot_file']=pair['true_prot_file']=None
+        observations={}
+        for nt in ('prot_atom','pharm','lig','npnde'):
+            for key,value in replicates[0].g.nodes[nt].data.items():
+                if key.endswith('_cond') or key.endswith('_cond_std') or key.startswith('stereo_') or key in ('entity_idx','entity_atom_idx','ccd_code'):
+                    observations[nt+'__'+key]=value.cpu().numpy()
+        import numpy as np
+        np.savez_compressed(sys_gt_dir/'conditioning.npz',**observations)
         system_pairs[sys_name] = sys_pair
 
     return system_pairs
@@ -342,6 +536,8 @@ def get_device_properties_with_retry(dev_idx=0, retries=5, delay=5):
     raise RuntimeError(f"Failed to init CUDA after {retries} retries") from last_err
 
 def main(args):
+    import json
+    _T = {'t_start': time.time()}
     task_name: str = args.task
     task: Task = task_name_to_class(task_name)
 
@@ -364,11 +560,32 @@ def main(args):
             print(f'output file of interest: {metrics_file}')
             sys.exit()
 
+        if metrics_file.exists() or any(output_dir.glob('sys_*_gt')):
+            raise FileExistsError(f'Refusing to overwrite existing evaluation artifacts: {output_dir}')
+        with (output_dir/'evaluation_protocol.json').open('x') as stream:
+            json.dump({k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items()},stream,indent=2)
         # Additional keyword arguments for special types of sampling
         kwargs = {'stochastic_sampling': args.stochastic_sampling,
                   'noise_scaler': args.noise_scaler,
                   'eps': args.eps,
-                  'n_lig_atom_margin': args.n_lig_atom_margin}
+                  'n_lig_atom_margin': None if args.sample_ligand_size else args.n_lig_atom_margin,
+                  'pharm_input_noise_std': args.pharm_input_noise_std,
+                  'prot_input_noise_max_std': args.prot_input_noise_max_std,
+                  'prot_input_noise_mode': args.prot_input_noise_mode,
+                  'size_prior_path': args.size_prior_path,
+                  'allow_oracle_stereo': args.allow_oracle_stereo,
+                  'stereo_unknown': args.stereo_unknown,
+                  'stereo_guidance_w': args.stereo_guidance_w,
+                  'zero_correction': args.zero_correction,
+                  'stereo_hide_fraction': args.stereo_hide_fraction,
+                  'stereo_hide_seed': args.stereo_hide_seed,
+                  'stereo_hidden_report': (output_dir / 'stereo_hidden_centres.json') if args.stereo_hide_fraction is not None else None,
+                  'stereo_identity_json': args.stereo_identity_json,
+                  'observation_cache_dir': args.observation_cache_dir,
+                  'fixed_coord_max_std': args.fixed_coord_max_std,
+                  'fixed_token_max_prob': args.fixed_token_max_prob,
+                  'center_source': args.center_source,
+                  'seed': args.seed}
         
         if args.bs_per_gbmem is not None:
             # gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  
@@ -395,13 +612,21 @@ def main(args):
                                                           dataset_name=args.dataset,
                                                           plinder_path=args.plinder_path,
                                                           crossdocked_path=args.crossdocked_path,
+                                                          pharmit_path=args.pharmit_path,
+                                                          com_offset_magnitude=args.com_offset_magnitude,
+                                                          additional_prot_crop=args.additional_prot_crop,
+                                                          site_ligand_json=args.site_ligand_json,
+                                                          site_apply=args.site_apply,
+                                                          partial_mode=args.partial_mode,
+                                                          partial_bernoulli_p=args.partial_bernoulli_p,
                                                           **kwargs)
         
+        _T['t_sampled'] = time.time()
         print("Finished sampling. Clearing torch GPU cache...\n")
-        torch.cuda.synchronize()
+        if torch.cuda.is_available(): torch.cuda.synchronize()
         gc.collect()
         torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
+        if torch.cuda.is_available(): torch.cuda.ipc_collect()
 
         if isinstance(sys_info, pd.DataFrame) and not sys_info.empty:
             sys_info.to_csv(f"{output_dir}/sys_info.csv", index=False)
@@ -441,6 +666,7 @@ def main(args):
                                               sample_start_idx=args.sample_start_idx,
                                               n_replicates=args.n_replicates)
     
+    _T['t_written'] = time.time()
     if not args.sample_only:
         pb_mode = determine_pb_mode(task)
 
@@ -487,6 +713,14 @@ def main(args):
             metrics.to_csv(f"{output_dir}/eval_metrics.csv", index=False)
         else:
             metrics.to_csv(f"{output_dir}/eval_metrics_{args.sample_start_idx}.csv", index=False)
+        from omtra.eval.metrics.compute import METRIC_TIMES
+        _T['t_end'] = time.time()
+        t0 = _T['t_start']
+        timing = {'sampling_s': _T.get('t_sampled', t0) - t0, 'write_s': _T['t_written'] - _T.get('t_sampled', t0),
+                  'metrics_s': _T['t_end'] - _T['t_written'], 'total_s': _T['t_end'] - t0,
+                  'per_metric_s': {k: round(v, 1) for k, v in METRIC_TIMES.items()},
+                  'n_systems': len(system_pairs), 'n_poses': int(len(metrics))}
+        (Path(output_dir) / 'timing.json').write_text(json.dumps(timing, indent=1))
 
 if __name__ == "__main__":
     args = parse_args()
