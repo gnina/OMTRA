@@ -81,6 +81,12 @@ def main():
     if args.num_systems:
         system_ids = system_ids[: args.num_systems]
 
+    done_ids = {s.get("system_id") for s in converter.system_lookup if isinstance(s, dict)}
+    if done_ids:
+        before = len(system_ids)
+        system_ids = [sid for sid in system_ids if sid not in done_ids]
+        logger.info(f"Resume: skipping {before - len(system_ids)} already-processed systems, {len(system_ids)} remaining")
+
     converter.process_dataset(system_ids, max_pending=args.max_pending)
 
     end_time = time.time()
@@ -88,5 +94,5 @@ def main():
 
 
 if __name__ == "__main__":
-    mp.set_start_method("spawn", force=True)
+    mp.set_start_method(os.environ.get("OMTRA_MP_START_METHOD", "spawn"), force=True)
     main()

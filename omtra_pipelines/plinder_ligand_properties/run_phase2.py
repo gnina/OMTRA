@@ -22,6 +22,8 @@ def parse_args():
 
     p.add_argument('--plinder_path', type=str, help='Path to the Plinder Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/plinder')
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
+    p.add_argument('--versions', type=str, nargs='+', default=['exp', 'no_links', 'pred'], help='Plinder link versions to process.')
+    p.add_argument('--task_group', type=str, default='protein', help='Hydra task_group used to load the datamodule (must include the requested versions).')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
     p.add_argument('--block_size', type=int, default=5000, help='Number of ligands to process in a block.')
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
@@ -104,11 +106,11 @@ def process_block(block_start_idx: int, block_size: int):
 
 
 
-def worker_initializer(plinder_path, version, store_name):
+def worker_initializer(plinder_path, version, store_name, task_group='protein'):
     """ Sets plinder dataset instance as a global variable """
     global plinder_dataset
 
-    cfg = quick_load.load_cfg(overrides=['task_group=protein', 'fake_atom_p=0.0'], plinder_path=plinder_path)
+    cfg = quick_load.load_cfg(overrides=[f'task_group={task_group}', 'fake_atom_p=0.0'], plinder_path=plinder_path)
     datamodule = datamodule_from_config(cfg)
     dataset = datamodule.load_dataset(store_name)
     plinder_dataset = dataset.datasets['plinder'][version]
@@ -162,13 +164,14 @@ def run_parallel(plinder_path: Path,
                  n_cpus: int,
                  block_writer: BlockWriter,
                  output_dir: Path,
+                 task_group: str = 'protein',
                  max_pending: int = None):
-    
-    if max_pending is None:
-        max_pending = n_cpus * 2 
 
-    # Load Plinder dataset 
-    cfg = quick_load.load_cfg(overrides=['task_group=protein', 'fake_atom_p=0.0'], plinder_path=plinder_path)
+    if max_pending is None:
+        max_pending = n_cpus * 2
+
+    # Load Plinder dataset
+    cfg = quick_load.load_cfg(overrides=[f'task_group={task_group}', 'fake_atom_p=0.0'], plinder_path=plinder_path)
     datamodule = datamodule_from_config(cfg)
     dataset = datamodule.load_dataset(store_name)
     plinder_dataset = dataset.datasets['plinder'][version]
@@ -181,7 +184,7 @@ def run_parallel(plinder_path: Path,
  
     error_counter = [0]
 
-    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(plinder_path, version, store_name), maxtasksperchild=5) as pool:
+    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(plinder_path, version, store_name, task_group), maxtasksperchild=5) as pool:
         pending = []
 
         for block_idx in range(n_blocks):
@@ -224,12 +227,13 @@ def run_single(plinder_path: Path,
                store_name: str,
                block_size: int,
                block_writer: BlockWriter,
-               output_dir: Path):
+               output_dir: Path,
+               task_group: str = 'protein'):
 
     # Load Plinder dataset
     global plinder_dataset
 
-    cfg = quick_load.load_cfg(overrides=['task_group=protein', 'fake_atom_p=0.0'], plinder_path=plinder_path)
+    cfg = quick_load.load_cfg(overrides=[f'task_group={task_group}', 'fake_atom_p=0.0'], plinder_path=plinder_path)
     datamodule = datamodule_from_config(cfg)
     dataset = datamodule.load_dataset(store_name)
     plinder_dataset = dataset.datasets['plinder'][version]
@@ -279,7 +283,7 @@ if __name__ == '__main__':
     # Ensure output directory exists
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    for version in ['exp', 'no_links', 'pred']:
+    for version in args.versions:
 
         print("\n–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––")
         print(f"Computing new ligand features for Plinder version '{version}'.")
@@ -291,9 +295,9 @@ if __name__ == '__main__':
         start_time = time.time()
 
         if args.n_cpus == 1:
-            run_single(args.plinder_path, version, args.store_name, args.block_size, block_writer, args.output_dir)
+            run_single(args.plinder_path, version, args.store_name, args.block_size, block_writer, args.output_dir, task_group=args.task_group)
         else:
-            run_parallel(args.plinder_path, version, args.store_name, args.block_size, args.n_cpus, block_writer, args.output_dir)
+            run_parallel(args.plinder_path, version, args.store_name, args.block_size, args.n_cpus, block_writer, args.output_dir, task_group=args.task_group)
 
         end_time = time.time()
 

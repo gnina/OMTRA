@@ -77,13 +77,18 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
     cpt = conf.GetAtomPosition(atom_idx)
     
     if atom.GetAtomicNum() == 8 and len(nbrs) < 3: # two lone pairs
+        if not heavy:
+            return []
         heavy_nbr = heavy[0]
         if len(nbrs) == 1: # sp2
+            heavy_nbr_nbr = None
             for a in heavy_nbr.GetNeighbors():
                 if a.GetIdx() != atom_idx:
                     heavy_nbr_nbr = a # heavy atom's neighbor that isn't the acceptor
                     break
 
+            if heavy_nbr_nbr is None:
+                return []
             pt1 = conf.GetAtomPosition(heavy_nbr_nbr.GetIdx())
             v1 = conf.GetAtomPosition(heavy_nbr.GetIdx())
             pt1 -= v1

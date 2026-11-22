@@ -26,7 +26,6 @@ logger = setup_logger(
     __name__,
 )
 
-
 class PlinderNoLinksZarrConverter:
     def __init__(
         self,
@@ -592,14 +591,37 @@ class PlinderNoLinksZarrConverter:
         successful_count = 0
         failed_count = 0
 
-        for batch_idx, batch in enumerate(batches):
-            logger.info(
-                f"Processing batch {batch_idx + 1}/{len(batches)} with {len(batch)} systems"
-            )
+        # Pre-load ESM3 in parent process before forking.
+        # With fork start method, children inherit this via copy-on-write
+        # so all workers share one ~1.3GB model copy instead of loading their own.
+        from omtra_pipelines.plinder_dataset.plinder_pipeline import _get_esm3_model
+        logger.info("Pre-loading ESM3 model in parent process...")
+        _get_esm3_model()
+        logger.info("ESM3 model loaded, creating worker pool")
 
-            batch_results = []
-            with mp.Pool(processes=self.num_workers) as pool:
-                system_results = pool.map(self._process_system, batch)
+        batch_timeout = 30 * 60  # 30 min per batch of 200 systems
+        pool = mp.Pool(processes=self.num_workers)
+        try:
+            for batch_idx, batch in enumerate(batches):
+                logger.info(
+                    f"Processing batch {batch_idx + 1}/{len(batches)} with {len(batch)} systems"
+                )
+
+                async_result = pool.map_async(self._process_system, batch)
+                try:
+                    system_results = async_result.get(timeout=batch_timeout)
+                except mp.TimeoutError:
+                    logger.error(
+                        f"Batch {batch_idx + 1} timed out after {batch_timeout}s — "
+                        f"terminating pool, skipping batch, recreating workers"
+                    )
+                    pool.terminate()
+                    pool.join()
+                    pool = mp.Pool(processes=self.num_workers)
+                    failed_count += len(batch)
+                    pbar.set_postfix({"success": successful_count, "failed": failed_count})
+                    pbar.update(1)
+                    continue
 
                 valid_results = [r for r in system_results if r is not None]
                 failed_count += len(system_results) - len(valid_results)
@@ -610,8 +632,11 @@ class PlinderNoLinksZarrConverter:
                     if batch_data:
                         self._write_system_batch(batch_data)
 
-            pbar.set_postfix({"success": successful_count, "failed": failed_count})
-            pbar.update(1)
+                pbar.set_postfix({"success": successful_count, "failed": failed_count})
+                pbar.update(1)
+        finally:
+            pool.close()
+            pool.join()
 
         pbar.close()
 

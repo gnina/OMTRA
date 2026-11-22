@@ -20,7 +20,7 @@ from omtra.data.plinder import (
 from omtra.data.pharmacophores import get_pharmacophores
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.misc import bad_mol_reporter
-from omtra.constants import lig_atom_type_map, npnde_atom_type_map, aa_substitutions, residue_to_single
+from omtra.constants import lig_atom_type_map, npnde_atom_type_map, residue_to_single
 from omtra_pipelines.plinder_dataset.utils import _DEFAULT_DISTANCE_RANGE, setup_logger
 from omtra_pipelines.plinder_dataset.filter import filter
 from plinder.core import PlinderSystem
@@ -33,7 +33,16 @@ from esm.sdk.api import (
     ESMProtein,
     LogitsConfig,
     LogitsOutput,
-    )
+)
+
+# Global ESM3 model cache — loaded once per worker process, shared across all systems
+_esm3_model_cache = None
+
+def _get_esm3_model():
+    global _esm3_model_cache
+    if _esm3_model_cache is None:
+        _esm3_model_cache = ESM3.from_pretrained("esm3-open", device=torch.device("cpu"))
+    return _esm3_model_cache
 from esm.utils.structure.protein_chain import ProteinChain
 from esm.utils.structure.protein_complex import ProteinComplex
 
@@ -73,7 +82,7 @@ class SystemProcessor:
         npnde_atom_map: List[str] = npnde_atom_type_map,
         pocket_cutoff: float = 8.0,
         n_cpus: int = 1,
-        raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
+        raw_data: str = "/net/galaxy/home/koes/nduaka1/.local/share/plinder/2024-04/v1",
     ):
         logger.debug("Initializing StructureProcessor with cutoff=%f", pocket_cutoff)
         self.ligand_atom_map = ligand_atom_map
@@ -103,30 +112,47 @@ class SystemProcessor:
         unique_compound_keys = np.unique(compound_keys)
         num_residues = len(unique_compound_keys)
 
-        coords = np.zeros((num_residues, 3, 3))
-        res_ids = np.zeros(num_residues, dtype=int)
+        coords_list = []
+        res_ids_list = []
         res_names_list = []
         chain_ids_list = []
+        dropped = 0
 
-        for i, compound_key in enumerate(unique_compound_keys):
+        for compound_key in unique_compound_keys:
             chain_id, res_id = compound_key.split("_")
             res_id = int(res_id)
 
             res_mask = (backbone.chain_id == chain_id) & (backbone.res_id == res_id)
             res_atoms = backbone[res_mask]
 
-            res_ids[i] = res_id
-            res_names_list.append(res_atoms.res_name[0])
-            chain_ids_list.append(chain_id)
-
+            residue_coords = np.zeros((3, 3))
+            complete = True
             for j, atom_name in enumerate(["N", "CA", "C"]):
                 atom_mask = res_atoms.atom_name == atom_name
                 if np.any(atom_mask):
-                    coords[i, j] = res_atoms.coord[atom_mask][0]
+                    residue_coords[j] = res_atoms.coord[atom_mask][0]
                 else:
-                    logger.warning(f"Error with {self.system_id} backbone extraction")
-                    return None
+                    complete = False
+                    break
 
+            if not complete:
+                dropped += 1
+                continue
+
+            coords_list.append(residue_coords)
+            res_ids_list.append(res_id)
+            res_names_list.append(res_atoms.res_name[0])
+            chain_ids_list.append(chain_id)
+
+        if dropped > 0:
+            logger.warning(f"{self.system_id}: dropped {dropped}/{num_residues} incomplete backbone residues")
+
+        if len(coords_list) == 0:
+            logger.warning(f"No complete backbone residues in {self.system_id}")
+            return None
+
+        coords = np.array(coords_list)
+        res_ids = np.array(res_ids_list, dtype=int)
         res_names = np.array(res_names_list)
         chain_ids = np.array(chain_ids_list)
 
@@ -208,53 +234,38 @@ class SystemProcessor:
     def reorder_backbone_atoms(
         self, receptor: struc.AtomArray, unique_residues
     ) -> struc.AtomArray:
-        reordered_atoms = []
+        all_reordered_indices = []
 
         for chain_id, res_id in unique_residues:
             residue_mask = (receptor.chain_id == chain_id) & (receptor.res_id == res_id)
+            full_indices = np.where(residue_mask)[0]
             residue_atoms = receptor[residue_mask]
 
             n_mask = residue_atoms.atom_name == "N"
             ca_mask = residue_atoms.atom_name == "CA"
             c_mask = residue_atoms.atom_name == "C"
-            backbone_mask = n_mask | ca_mask | c_mask
 
             n_idx = np.where(n_mask)[0][0] if np.any(n_mask) else -1
             ca_idx = np.where(ca_mask)[0][0] if np.any(ca_mask) else -1
             c_idx = np.where(c_mask)[0][0] if np.any(c_mask) else -1
 
+            # Swap backbone atoms into N, CA, C order within their existing slots
+            # while keeping all non-backbone atoms in their original positions
+            bb_slots = sorted([idx for idx in [n_idx, ca_idx, c_idx] if idx != -1])
+            desired_atoms = [idx for idx in [n_idx, ca_idx, c_idx] if idx != -1]
+            slot_to_desired = dict(zip(bb_slots, desired_atoms))
+
             new_order = []
+            for i in range(len(residue_atoms)):
+                if i in slot_to_desired:
+                    new_order.append(slot_to_desired[i])
+                else:
+                    new_order.append(i)
 
-            if n_idx > 0:
-                new_order.extend(list(range(n_idx)))
+            all_reordered_indices.extend(full_indices[new_order])
 
-            if n_idx != -1:
-                new_order.append(n_idx)
-
-            if n_idx != -1 and ca_idx != -1:
-                for i in range(n_idx + 1, ca_idx):
-                    if not backbone_mask[i]:
-                        new_order.append(i)
-
-            if ca_idx != -1:
-                new_order.append(ca_idx)
-
-            if ca_idx != -1 and c_idx != -1:
-                for i in range(ca_idx + 1, c_idx):
-                    if not backbone_mask[i]:
-                        new_order.append(i)
-
-            if c_idx != -1:
-                new_order.append(c_idx)
-
-            if c_idx != -1 and c_idx < len(residue_atoms) - 1:
-                new_order.extend(range(c_idx + 1, len(residue_atoms)))
-
-            for idx in new_order:
-                reordered_atoms.append(residue_atoms[idx])
-
-        if reordered_atoms:
-            return struc.stack(reordered_atoms)
+        if all_reordered_indices:
+            return receptor[all_reordered_indices]
         else:
             logger.warning(f"Failed to reorder backbone {self.system_id}")
             return None
@@ -566,7 +577,7 @@ class SystemProcessor:
 
 
     def embed_protein_complex(self, model: ESM3InferenceClient, protein_complex: ProteinComplex) -> np.ndarray:
-        
+
         device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         model =  model.to(device)
 
@@ -578,7 +589,7 @@ class SystemProcessor:
         return output.embeddings.cpu().numpy()
 
     def embed_chain(self, model: ESM3InferenceClient, protein_chain: ProteinChain) -> np.ndarray:
-        
+
         device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         model =  model.to(device)
 
@@ -590,64 +601,50 @@ class SystemProcessor:
         return output.embeddings.cpu().numpy()
 
 
-    def ESM3_embed(self, res_name:np.ndarray, chain_id:np.ndarray, backbone_data: np.ndarray, bb_mask: np.ndarray[bool]) -> np.ndarray:  
-        
-        model = ESM3.from_pretrained("esm3-open", device=torch.device("cpu")) 
-        
-        residue_names = res_name[bb_mask]
-        chain_ids = chain_id[bb_mask]
-        coords = backbone_data
+    def _res_names_to_sequence(self, res_names: np.ndarray) -> str:
+        """Convert residue names to a single-letter sequence string. One name per residue."""
+        sequence = []
+        for rn in res_names:
+            if rn in residue_to_single:
+                sequence.append(residue_to_single[rn])
+            else:
+                sequence.append(residue_to_single['UNK'])
+        return ''.join(sequence)
+
+    def ESM3_embed(self, res_names:np.ndarray, chain_ids:np.ndarray, coords: np.ndarray) -> np.ndarray:
+
+        model = _get_esm3_model()
+
+        residue_names = res_names
 
         # check if we need to split pocket sequence by chain_id to concatenate for protein_complex
-        if len(set(chain_ids)) > 1:
-            unique_chain_id = set()
-            unique_chain_id = [chain for chain in chain_ids if chain not in unique_chain_id]
-            chain_mask = []
-            split_seq = []
-            for chain in unique_chain_id:
-                chain_mask.append(np.where(chain_ids == chain)[0])
-                split_seq.append(residue_names[chain_mask[-1]])
-        else:
-            chain_mask, split_seq = None, None
+        unique_chains = list(dict.fromkeys(chain_ids))  # preserves order, deduplicates
 
-
-        if split_seq:
-            concat_seq = []
+        if len(unique_chains) > 1:
             esm_chains = []
-            layers = list(coords)
-            for seq in range(len(split_seq)):
-                temp = []
-                if len(layers) == 0: 
-                    break 
-                for i in range(0, len(seq),3):
-                    if residue_names[i] not in aa_substitutions:
-                        temp.append(residue_to_single[seq[i]]) 
-                    else: 
-                        try: 
-                            temp.append(aa_substitutions[seq[i]]) 
-                        except: 
-                            temp.append(residue_to_single['UNK'])
-                concat_seq.append(temp)
+            for chain in unique_chains:
+                mask = np.where(chain_ids == chain)[0]
+                chain_res_names = residue_names[mask]
+                chain_bb_coords = coords[mask]
 
-                esm_chains.append(ProteinChain.from_backbone_atom_coordinates(layers[0:len(temp)], sequence=temp))
-                layers = layers[len(temp)+1:]
+                chain_seq = self._res_names_to_sequence(chain_res_names)
+                if not chain_seq:
+                    continue
 
-            concat_seq = '|'.join(concat_seq)
-            protein_complex = ProteinComplex.from_chains(esm_chains)
-            return self.embed_protein_complex(model, protein_complex)
+                esm_chains.append(ProteinChain.from_backbone_atom_coordinates(
+                    chain_bb_coords, sequence=chain_seq
+                ))
+
+            if esm_chains:
+                protein_complex = ProteinComplex.from_chains(esm_chains)
+                return self.embed_protein_complex(model, protein_complex)
+            else:
+                chain_seq = self._res_names_to_sequence(residue_names)
+                chain = ProteinChain.from_backbone_atom_coordinates(coords, sequence=chain_seq)
+                return self.embed_chain(model, chain)
 
         else:
-            sequence = []
-            for i in range(0, len(residue_names),3):
-                if residue_names[i] not in aa_substitutions:
-                    sequence.append(residue_to_single[residue_names[i]]) 
-                else: 
-                    try: 
-                        sequence.append(aa_substitutions[residue_names[i]]) 
-                    except: 
-                        sequence.append(residue_to_single['UNK'])
-            
-            chain_seq = ''.join(sequence)
+            chain_seq = self._res_names_to_sequence(residue_names)
             chain = ProteinChain.from_backbone_atom_coordinates(coords, sequence=chain_seq)
             return self.embed_chain(model, chain)
 
@@ -695,7 +692,7 @@ class SystemProcessor:
 
         bb_mask = struc.filter_peptide_backbone(pocket)
 
-        embedding = self.ESM3_embed(pocket.res_name, pocket.chain_id, backbone_data.coords, bb_mask)
+        embedding = self.ESM3_embed(backbone_data.res_names, backbone_data.chain_ids, backbone_data.coords)
 
         return StructureData(
             coords=pocket.coord,
@@ -714,7 +711,7 @@ class SystemProcessor:
     ) -> Tuple[Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]]:
         # ligand_mols, npnde_mols = filter(self.system_id)
         filter_parquet = Path(
-            "/net/galaxy/home/koes/tjkatz/OMTRA/omtra_pipelines/plinder_dataset/plinder_filtered.parquet"
+            "/net/galaxy/home/koes/nduaka1/OMTRA/omtra_pipelines/plinder_dataset/plinder_filtered_time.parquet"
         )
         df = pd.read_parquet(filter_parquet)
 

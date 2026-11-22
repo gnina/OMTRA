@@ -26,7 +26,6 @@ logger = setup_logger(
     __name__,
 )
 
-
 class PlinderLinksZarrConverter:
     def __init__(
         self,
