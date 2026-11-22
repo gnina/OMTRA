@@ -1,4 +1,6 @@
 import hydra
+import sys
+from omtra.load.resume import preflight_resume, save_training_config, TrainingConfigCheckpoint
 import os
 from typing import List
 import pytorch_lightning as pl
@@ -62,7 +64,25 @@ def train(cfg: DictConfig):
     # Run at start
     # configure_tensor_cores()
 
+    if cfg.model.get('control_policy_path'):
+        from omtra.load.recipe_check import check_final_recipe
+        manifest = check_final_recipe(cfg, resuming=cfg.get('checkpoint') is not None)
+        if rank_zero_only.rank == 0:
+            print('[recipe_check] OK', manifest, flush=True)
+
     pl.seed_everything(cfg.seed, workers=True)
+
+    # data-parallel sampling: without cfg.task_group.datamodule.distributed every rank draws identical batches
+    n_ranks = int(cfg.trainer.get("devices", 1)) * int(cfg.trainer.get("num_nodes", 1))
+    mode_ds = str(cfg.get("distributed_sampling", "auto")).lower()
+    use_dist_sampling = mode_ds == "true" or (mode_ds == "auto" and n_ranks > 1)
+    if use_dist_sampling and n_ranks > 1:
+        with open_dict(cfg):
+            cfg.task_group.datamodule.distributed = True
+    if rank_zero_only.rank == 0:
+        print(f"[data-parallel] ranks={n_ranks} distributed_sampling={mode_ds} -> "
+              f"datamodule.distributed={cfg.task_group.datamodule.get('distributed', False)}; "
+              f"global batch = {n_ranks} x edges_per_batch({cfg.edges_per_batch}) edges when distributed", flush=True)
 
 
     mode = cfg.get("mode", None)
@@ -80,7 +100,7 @@ def train(cfg: DictConfig):
             raise ValueError("ligand_encoder_checkpoint must be specified if omtra is doing latent ligand generation")
         
         partial_ckpt = cfg.get('partial_ckpt')
-        if partial_ckpt:
+        if partial_ckpt and cfg.get("checkpoint") is None:
             model = quick_load.omtra_from_partial_checkpoint(cfg, partial_ckpt)
         else:
             model = quick_load.omtra_from_config(cfg)
@@ -92,7 +112,11 @@ def train(cfg: DictConfig):
     # figure out if we are resuming a previous run
     resume = cfg.get("checkpoint") is not None
 
-    wandb_config = cfg.wandb_conf
+    run_dir = Path(cfg.og_run_dir) if resume else Path(HydraConfig.get().runtime.output_dir)
+    if rank_zero_only.rank == 0:
+        save_training_config(cfg, run_dir)
+    config_callback = TrainingConfigCheckpoint(cfg)
+    wandb_config = OmegaConf.create(OmegaConf.to_container(cfg.wandb_conf, resolve=True))
     if resume:
         # if we are resuming, we need to read the run_id from the resume_info.yaml file
         # we also set the run dir to be the previous run directory
@@ -152,18 +176,33 @@ def train(cfg: DictConfig):
     trainer = pl.Trainer(
         logger=wandb_logger,
         **cfg.trainer,
-        callbacks=callbacks,
+        callbacks=[*callbacks, config_callback],
     )
     
     torch.cuda.empty_cache()
-    trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("checkpoint"))
+    # Force weights_only=False regardless of what Lightning passes — resume checkpoints
+    # contain OmegaConf types that are not in PyTorch 2.6's safe globals list (same issue
+    # fixed for omtra_from_checkpoint/omtra_from_partial_checkpoint in omtra/load/quick.py).
+    _orig_torch_load = torch.load
+    def _load_unsafe(*args, **kwargs):
+        kwargs['weights_only'] = False
+        return _orig_torch_load(*args, **kwargs)
+    torch.load = _load_unsafe
+    try:
+        trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("checkpoint"))
+    finally:
+        torch.load = _orig_torch_load
 
-    # right after training ends:
-    if trainer.is_global_zero:
-        log_dir = trainer.lightning_module.og_run_dir
-        checkpoint_dir = Path(log_dir) / "checkpoints"
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        trainer.save_checkpoint(str(checkpoint_dir / "last.ckpt"))
+    # Lightning handles rank-zero writes; all ranks must participate in the save.
+    log_dir = trainer.lightning_module.og_run_dir
+    checkpoint_dir = Path(log_dir) / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    trainer.save_checkpoint(str(checkpoint_dir / "last.ckpt"))
+    if hasattr(trainer.lightning_module, "control_finalize"):
+        trainer.lightning_module.control_finalize()
+
+
+_resume_cfg = None
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="config")
@@ -173,39 +212,16 @@ def main(cfg: DictConfig):
     cfg is a DictConfig configuration composed by Hydra.
     """
 
-    resume = cfg.get("checkpoint") is not None
-    if resume:
-        ckpt_path = Path(cfg.checkpoint)
-        run_dir = ckpt_path.parent.parent
-        original_cfg_path = run_dir / ".hydra/config.yaml"
-        original_cfg = OmegaConf.load(original_cfg_path)
-        # Only apply CLI overrides to the original config
-        # Strip Hydra-specific prefixes (+, ~) from overrides
-        overrides = HydraConfig.get().overrides.task
-        cleaned_overrides = []
-        for override in overrides:
-            # Skip config group overrides (e.g., task_group=xxx)
-            if '=' not in override:
-                continue
-            # Strip + prefix (append) and ~ prefix (delete)
-            if override.startswith('+') or override.startswith('~'):
-                override = override[1:]
-            if override.startswith('checkpoint='):
-                continue
-            cleaned_overrides.append(override)
-        cli_cfg = OmegaConf.from_dotlist(cleaned_overrides)
-        cfg = OmegaConf.merge(original_cfg, cli_cfg)
-        with open_dict(cfg):
-            cfg.og_run_dir = str(run_dir)
-            cfg.checkpoint = str(ckpt_path)
-
-    # merge_task_spec populates single_dataset_configs from separate YAML files
-    # This is needed for both fresh runs and resumed runs
-    cfg = merge_task_spec(cfg)
+    if cfg.get("checkpoint") is not None:
+        if _resume_cfg is None:
+            raise RuntimeError("Resume must run through the pre-Hydra entrypoint")
+        cfg = _resume_cfg
+    else:
+        cfg = merge_task_spec(cfg)
 
     # train the model
     _ = train(cfg)
 
 if __name__ == "__main__":
-    # TODO: do we need both of these? perhaps not
+    _resume_cfg = preflight_resume(sys.argv)
     main()
