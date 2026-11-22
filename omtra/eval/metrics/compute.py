@@ -9,10 +9,12 @@ so that ``routines/sample.py`` and the CLI can reuse them without importing
 from the pipelines package.
 """
 
+import time
 from typing import Dict, List, Optional
 from pathlib import Path
 import multiprocessing as mp
 import os
+import queue
 
 import numpy as np
 import pandas as pd
@@ -97,7 +99,7 @@ def determine_applicable_metrics(
     is_partial = len(task.partial_modalities_fixed) > 0
 
     applicable = {
-        "pb_valid": has_protein,
+        "pb_valid": True,
         "gnina": has_protein,
         "posecheck": has_protein,
         "rmsd": has_protein and not lig_identity_generated,
@@ -127,34 +129,46 @@ def determine_applicable_metrics(
 # Timeout / sanitization utilities
 # ---------------------------------------------------------------------------
 
+METRIC_TIMES = {}  # func name -> accumulated wall seconds (read by docking_eval.py for timing.json)
+
+
 def run_with_timeout(func, *args, timeout, **kwargs):
     """Run *func* in a subprocess with a wall-clock *timeout* (seconds).
 
-    Returns ``None`` on timeout or exception.
+    Returns ``None`` on timeout or exception. Wall time is accumulated in METRIC_TIMES[func.__name__].
     """
-    def target(q, *a, **k):
-        try:
-            res = func(*a, **k)
-            q.put(res)
-        except Exception as e:
-            q.put(e)
+    _t0 = time.time()
+    try:
+        return _run_with_timeout(func, *args, timeout=timeout, **kwargs)
+    finally:
+        METRIC_TIMES[func.__name__] = METRIC_TIMES.get(func.__name__, 0.0) + time.time() - _t0
 
+
+def _metric_worker(q,func,args,kwargs):
+    """Module-level target also works when the caller selected spawn."""
+    try:q.put(('ok',func(*args,**kwargs)))
+    except Exception as error:q.put(('error',f'{type(error).__name__}: {error}'))
+
+
+def _run_with_timeout(func, *args, timeout, **kwargs):
     q = mp.Queue()
-    p = mp.Process(target=target, args=(q, *args), kwargs=kwargs)
+    p = mp.Process(target=_metric_worker, args=(q,func,args,kwargs))
     p.start()
-    p.join(timeout)
-
-    if p.is_alive():
-        p.terminate()
-        p.join()
-        print(f"\n[TIMEOUT] {func.__name__} killed after {timeout}s \n", flush=True)
+    try:
+        # Drain before joining: a large result can fill the pipe and keep the
+        # child's queue feeder alive indefinitely while the parent waits to join.
+        status,result=q.get(timeout=timeout)
+        if status=='error':
+            print(f'\n[ERROR] {func.__name__} failed: {result}\n',flush=True)
+            return None
+        return result
+    except queue.Empty:
+        print(f'\n[TIMEOUT] {func.__name__} exceeded {timeout}s\n',flush=True)
         return None
-
-    result = q.get() if not q.empty() else None
-    if isinstance(result, Exception):
-        print(f"\n[ERROR] {func.__name__} failed: {result} \n", flush=True)
-        return None
-    return result
+    finally:
+        p.join(1.)
+        if p.is_alive():p.terminate();p.join()
+        q.close();q.cancel_join_thread()
 
 
 def repair_and_sanitize(lig, i):
@@ -173,6 +187,17 @@ def repair_and_sanitize(lig, i):
 # ---------------------------------------------------------------------------
 # Main compute loop
 # ---------------------------------------------------------------------------
+
+def _assign_float_columns(metrics, index, values):
+    """Write bool/None-valued result columns into float metric columns.
+
+    The pharmacophore columns are pre-created as float 0.; recent pandas refuses to set bool or object
+    values into them through .loc, so cast to float (None -> NaN) and write per column.
+    """
+    for col in values.columns:
+        column = pd.to_numeric(values[col].astype(object).where(values[col].notna(), np.nan), errors='coerce')
+        metrics.loc[index, col] = column.astype(float).values
+
 
 def compute_metrics(
     system_pairs: dict,
@@ -207,6 +232,7 @@ def compute_metrics(
     """
     # Build scaffold dataframe
     rows = []
+    requested_metrics = dict(metrics_to_run)
     for sys_id, pairs in system_pairs.items():
         for _, data in pairs.items():
             for lig_id in data["gen_ligs_ids"]:
@@ -223,6 +249,7 @@ def compute_metrics(
 
     for sys_id, pairs in system_pairs.items():
         for pair_id, data in pairs.items():
+            metrics_to_run = dict(requested_metrics)
 
             print(f"{'–'*32}", flush=True)
             print(f"{sys_id}, {data['gen_ligs_ids']}, {data.get('gen_prot_id', 'none')}", flush=True)
@@ -263,9 +290,20 @@ def compute_metrics(
 
             metrics.loc[all_indices, "RDKit_valid"] = False
             metrics.loc[valid_lig_indices, "RDKit_valid"] = True
+            for prefix,field in [('', 'true_pharm'),('input_','input_pharm')]:
+                if field in data:
+                    metrics.loc[all_indices,prefix+'n_pharms']=len(data[field]['coords'])
+                    for name in ('perfect_pharm_match','one_to_one_pharm_match','frac_true_pharms_matched'):
+                        metrics.loc[all_indices,prefix+name]=0.
+
+            from omtra.eval.metrics.ligand_quality import ligand_quality
+            for lig, lig_id in zip(valid_gen_ligs,valid_gen_lig_ids):
+                quality=ligand_quality(lig,reference=true_lig)
+                for key,value in quality.items():
+                    metrics.loc[(sys_id,data['gen_prot_id'],lig_id),key]=value
 
             # Resolve PB args
-            pb_true_lig = true_lig if pb_mode == "redock" else None
+            pb_true_lig = true_lig if pb_mode in ('redock','regen') else None
 
             # ---- PoseBusters ----
             if metrics_to_run["pb_valid"]:
@@ -320,6 +358,27 @@ def compute_metrics(
                             f"{col}_true" for col in pb_true_results.columns
                         ]
                         metrics.loc[all_indices, pb_true_results.columns] = pb_true_results
+
+            # Separate clean-reference physical checks; operational metrics use supplied/generated receptor.
+            if metrics_to_run['pb_valid'] and data.get('true_prot_file') is not None:
+                operational=data.get('gen_prot_file')
+                same_environment=operational is not None and Path(operational).read_bytes()==Path(data['true_prot_file']).read_bytes()
+                if same_environment:
+                    columns=[c for c in metrics if c.startswith('pb_') and not c.endswith('_true')]
+                    clean=metrics.loc[valid_lig_indices,columns].copy()
+                else:
+                    clean = run_with_timeout(pb_validate,timeout=timeout,gen_ligs=valid_gen_ligs,
+                        mode=pb_mode,true_lig=pb_true_lig,prot_file=data['true_prot_file'])
+                if clean is not None:
+                    clean.index=valid_lig_indices
+                    clean.columns=['clean_'+c for c in clean.columns]
+                    # Create each clean_* column explicitly: assigning a one-row bool frame into new float columns raises in
+                    # recent pandas ('Invalid value [ True] for dtype float64') whenever a system has a single valid ligand.
+                    for col in clean.columns:
+                        values = clean[col]
+                        if values.dtype == bool:
+                            values = values.astype(float)
+                        metrics[col] = pd.Series(values.values, index=valid_lig_indices).reindex(metrics.index)
 
             # ---- PoseCheck ----
             if metrics_to_run["posecheck"]:
@@ -482,6 +541,12 @@ def compute_metrics(
 
             # ---- Pharmacophore matching ----
             if metrics_to_run["pharm_match"]:
+                if data.get('input_pharm') is not None:
+                    supplied=run_with_timeout(pharmacophore_match_from_dict,timeout=timeout,
+                        gen_ligs=valid_gen_ligs,true_pharm=data['input_pharm'])
+                    if supplied is not None:
+                        supplied=pd.DataFrame(supplied,index=valid_lig_indices).add_prefix('input_')
+                        _assign_float_columns(metrics,valid_lig_indices,supplied)
                 pharm_results = run_with_timeout(
                     pharmacophore_match_from_dict,
                     timeout=timeout,
@@ -492,9 +557,7 @@ def compute_metrics(
                     pharm_results = pd.DataFrame(
                         pharm_results, index=valid_lig_indices
                     )
-                    metrics.loc[valid_lig_indices, pharm_results.columns] = (
-                        pharm_results
-                    )
+                    _assign_float_columns(metrics, valid_lig_indices, pharm_results)
 
     # ---- Fixed Fragment Metrics ----
     if metrics_to_run.get("fixed_frag_metrics") and sampled_systems is not None:
@@ -507,6 +570,25 @@ def compute_metrics(
         )
         metrics = metrics.join(frag_df, how="left")
 
+    if sampled_systems is not None and n_replicates:
+        from omtra.eval.metrics.ligand_quality import requested_stereo_quality
+        from omtra.eval.metrics.receptor_quality import receptor_quality
+        for index,system in enumerate(sampled_systems):
+            sys_idx,rep=divmod(index,n_replicates)
+            key=(f'sys_{sys_idx}_gt',f'gen_prot_{rep}' if protein_generated else 'protein_0',
+                 f'gen_ligands_{rep}')
+            if key in metrics.index:
+                for name,value in requested_stereo_quality(system).items():metrics.loc[key,name]=value
+                for name,value in receptor_quality(system).items():metrics.loc[key,name]=value
+                for name in ('requested_ligand_atoms','size_prior_protein_fallback','size_prior_marginal_fallback'):
+                    data=system.g.nodes['lig'].data
+                    if name in data and len(data[name]):metrics.loc[key,name]=int(data[name][0])
+    if 'canonical_smiles' in metrics:
+        physical=metrics.get('pb_physical_valid',pd.Series(False,index=metrics.index)).fillna(False).astype(bool)
+        metrics['valid_unique_yield']=False
+        valid=metrics.loc[physical & metrics.canonical_smiles.notna()]
+        duplicate=valid.reset_index().duplicated(['sys_id','canonical_smiles']).to_numpy()
+        metrics.loc[valid.index,'valid_unique_yield']=~duplicate
     return metrics
 
 
@@ -586,7 +668,9 @@ def system_pairs_from_path(
                 pharm_missing = True
             else:
                 pharm_data = np.loadtxt(true_pharm_file, skiprows=1, dtype=str)
-                if pharm_data.ndim == 1:
+                if pharm_data.size == 0:
+                    pharm_data=np.empty((0,4),dtype=str)
+                elif pharm_data.ndim == 1:
                     pharm_data = pharm_data.reshape(1, -1)
                 pharm["types_idx"] = [
                     ph_idx_to_elem.index(p) for p in pharm_data[:, 0].tolist()
@@ -667,7 +751,8 @@ def system_pairs_from_path(
                     )
                     continue
 
-                pair["gen_prot_file"] = true_prot_file
+                observed_file = sys_dir / "input_protein_0.pdb"
+                pair["gen_prot_file"] = observed_file if observed_file.exists() else true_prot_file
                 pair["gen_prot_id"] = true_prot_id
                 pair["true_prot_file"] = true_prot_file
                 pair["true_prot_id"] = true_prot_id
@@ -680,6 +765,11 @@ def system_pairs_from_path(
 
             sys_pair["pair_0"] = pair
 
+        input_pharm_file = sys_dir/'input_pharmacophore.json'
+        if input_pharm_file.exists():
+            import json
+            input_pharm=json.loads(input_pharm_file.read_text())
+            for pair in sys_pair.values():pair['input_pharm']=input_pharm
         system_pairs[sys_name] = sys_pair
 
     return system_pairs
