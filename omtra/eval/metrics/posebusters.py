@@ -3,11 +3,12 @@ from typing import List, Literal, Optional, Union
 import pandas as pd
 from rdkit import Chem
 import posebusters as pb
+from omtra.data.physical_checks import required_checks, evaluate_checks
 
 
 def pb_validate(
     gen_ligs: Union[List[Chem.Mol], Chem.Mol],
-    mode: Literal["dock", "redock", "mol"] = "dock",
+    mode: Literal["dock", "redock", "mol", "regen"] = "dock",
     true_lig: Optional[Chem.Mol] = None,
     prot_file: Optional[str] = None,
     max_workers: int = 0,
@@ -29,11 +30,17 @@ def pb_validate(
     if isinstance(gen_ligs, list) and not gen_ligs:
         return None
 
-    buster = pb.PoseBusters(config=mode, max_workers=max_workers)
+    identity = mode in ('redock','regen')
+    effective_mode = mode if prot_file is not None else ('regen' if identity else 'mol')
+    buster = pb.PoseBusters(config=effective_mode, max_workers=max_workers)
     df_pb = buster.bust(gen_ligs, true_lig, prot_file)
     df_pb.columns = [f"pb_{col}" for col in df_pb.columns]
-    df_pb["pb_valid"] = (
-        df_pb[df_pb["pb_sanitization"] == True].values.astype(bool).all(axis=1)
-    )
+    required = required_checks(identity=identity, protein=prot_file is not None)
+    physical, missing = evaluate_checks(df_pb, required)
+    df_pb['pb_physical_valid'] = physical
+    df_pb['metric_pb_missing_required'] = missing
+    # Historical pb_valid includes redocking RMSD, while physical_valid does not.
+    full = required + (['pb_rmsd_≤_2å'] if identity else [])
+    df_pb['pb_valid'], _ = evaluate_checks(df_pb, full)
 
     return df_pb
