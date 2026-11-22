@@ -26,6 +26,8 @@ class GraphChunkTracker:
             *args, **kwargs)
         
         self.n_chunks = self.chunk_index.shape[0]
+        if self.n_chunks == 0:
+            raise ValueError('Dataset shard contains no chunks; use a smaller world size or a declared partition policy')
         self.reset_queue()
 
     @property
@@ -49,6 +51,10 @@ class GraphChunkTracker:
         return idxs
 
     def get_batch_idxs(self, task: Task) -> torch.Tensor:
+        if (getattr(self.dataset,'identity_policy',None) is not None
+                or getattr(self.dataset, 'membership_quarantine', None) is not None):
+            from omtra.data.requested_stereo import eligible
+            if eligible(task):return self._get_identity_batch(task)
         start_idx, end_idx = self.current_chunk_idxs()
         n_graphs_in_chunk = end_idx - start_idx
 
@@ -67,6 +73,26 @@ class GraphChunkTracker:
         batch_idxs = start_idx + adaptive_batch_loader(edges_per_graph, self.edges_per_batch, pskip=pskip)
         self.n_samples_served_this_chunk += batch_idxs.size(0)
         return batch_idxs.tolist()
+
+    def _get_identity_batch(self,task):
+        """Skip explicit quarantine entries without random retries or an empty-rank loop."""
+        for _ in range(self.n_chunks+1):
+            start,end=self.current_chunk_idxs()
+            allowed=torch.ones(end-start, dtype=torch.bool)
+            for key in ('identity_policy', 'membership_quarantine'):
+                policy = getattr(self.dataset, key, None)
+                if policy is not None:
+                    allowed &= torch.from_numpy(policy.allowed_mask(start,end))
+            count=int(allowed.sum())
+            if not count or self.n_samples_served_this_chunk >= count:
+                self.step_queue();continue
+            candidates=torch.arange(start,end)[allowed]
+            edges=self.dataset.get_num_edges(task,start,end)[allowed]
+            pskip=self.dataset.get_pskip(start,end)[allowed] if getattr(self.dataset,'weighted_sampling',False) else None
+            selected=candidates[adaptive_batch_loader(edges,self.edges_per_batch,pskip=pskip)]
+            self.n_samples_served_this_chunk += len(selected)
+            return selected.tolist()
+        raise ValueError('No nonquarantined identity-fixed examples in this rank shard')
 
 
 def adaptive_batch_loader(
