@@ -1,3 +1,4 @@
+from omtra.dataset.partial_masking import sample_partial_mask
 import dgl
 import torch
 import numpy as np
@@ -29,6 +30,8 @@ class PharmitDataset(ZarrDataset):
                  prior_config: DictConfig,
                  fake_atom_p: float = 0.0,
                  max_pharms_sampled: int = 8,
+                 partial_mode: str = 'whole_fragments',
+                 partial_bernoulli_p: float = None,
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
@@ -36,6 +39,8 @@ class PharmitDataset(ZarrDataset):
         self.fake_atom_p = fake_atom_p
         self.use_fake_atoms = fake_atom_p > 0
         self.max_pharms_sampled = max_pharms_sampled
+        self.partial_mode = partial_mode
+        self.partial_bernoulli_p = partial_bernoulli_p
 
         # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
         # dists_dict = np.load(dists_file)
@@ -117,16 +122,7 @@ class PharmitDataset(ZarrDataset):
 
         if partial_modality_conditioning:
             frags = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)[:, -1]
-            frag_ids = np.unique(frags)
-            n_frags = frag_ids.shape[0]
-
-            if n_frags <= 1:
-                fixed_frags = []
-            else:
-                # Uniformly sample between 1 and # frags-1 fragments to fix 
-                num_frags_fixed = np.random.randint(1, n_frags)
-                fixed_frags = np.random.choice(frag_ids, size=num_frags_fixed, replace=False)
-            xace_dict['fixed_atom_mask'] = torch.from_numpy(np.isin(frags, fixed_frags).astype(np.int64))
+            xace_dict['fixed_atom_mask'] = torch.from_numpy(sample_partial_mask(frags, self.partial_mode, self.partial_bernoulli_p))
             
         # get slice indicies for ligand-ligand edges
         edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)

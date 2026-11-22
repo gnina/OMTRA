@@ -1,3 +1,4 @@
+import os
 import dgl
 import torch
 import math
@@ -105,10 +106,10 @@ class CrossdockedDataset(ZarrDataset):
             and split in ['train', 'test']
         )
 
-        # Store additional_prot_crop distance if in test split, otherwise None
+        # Honor an explicitly requested fixed crop on both evaluation splits.
         self.additional_prot_crop = (
             additional_prot_crop
-            if additional_prot_crop is not None and split in ["test"]
+            if additional_prot_crop is not None and split in ["val", "test"]
             else None
         )
 
@@ -522,7 +523,11 @@ class CrossdockedDataset(ZarrDataset):
 
         if self.additional_prot_crop is not None and include_protein:
             # Crop the pocket with an additional fixed distance
-            cropped_pocket = crop_structure_data(pocket, ligand.coords, self.additional_prot_crop)
+            crop_ref = ligand.coords
+            site_ref = getattr(self, "site_ref_coords", None)  # eval-only diagnostic: crop around another ligand's site
+            if site_ref is not None:
+                crop_ref = site_ref[os.path.basename(str(system_info["lig_sdf"]))]
+            cropped_pocket = crop_structure_data(pocket, crop_ref, self.additional_prot_crop)
 
             # If cropping results in empty pocket, fall back to original pocket
             if cropped_pocket is not None:
@@ -885,6 +890,9 @@ class CrossdockedDataset(ZarrDataset):
             "x_1_true": torch.empty(0),
             "a_1_true": torch.empty(0),
             "c_1_true": torch.empty(0),
+            "entity_idx": torch.empty(0,dtype=torch.long),
+            "entity_atom_idx": torch.empty(0,dtype=torch.long),
+            "ccd_code": torch.empty((0,8),dtype=torch.long),
         }
         edge_data["npnde_to_npnde"] = {"e_1_true": torch.empty(0)}
         edge_idxs["npnde_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
@@ -907,11 +915,18 @@ class CrossdockedDataset(ZarrDataset):
 
         node_offset = 0
 
-        for npnde_id, ligand_data in npndes.items():
+        entity_ids, entity_atoms, ccd_codes = [], [], []
+        for entity_idx, (npnde_id, ligand_data) in enumerate(npndes.items()):
             coords = torch.from_numpy(ligand_data.coords).float()
             atom_types = torch.from_numpy(ligand_data.atom_types).long()
             atom_charges = torch.from_numpy(ligand_data.atom_charges).long()
 
+            entity_ids.append(torch.full((len(coords),), entity_idx, dtype=torch.long))
+            entity_atoms.append(torch.arange(len(coords)))
+            ccd = str(ligand_data.ccd or 'LIG')
+            ccd = ccd[:8]   # metadata label only (receptor-export residue name); never fail a training fetch over it
+            code = torch.tensor([ord(c) for c in ccd.ljust(8,'\0')],dtype=torch.long)
+            ccd_codes.append(code.expand(len(coords),8).clone())
             all_coords.append(coords)
             all_atom_types.append(atom_types)
             all_atom_charges.append(atom_charges)
@@ -995,6 +1010,10 @@ class CrossdockedDataset(ZarrDataset):
                 "a_1_true": combined_atom_types,
                 "c_1_true": combined_atom_charges,
             }
+
+        node_data['npnde']['entity_idx'] = torch.cat(entity_ids) if entity_ids else torch.empty(0,dtype=torch.long)
+        node_data['npnde']['entity_atom_idx'] = torch.cat(entity_atoms) if entity_atoms else torch.empty(0,dtype=torch.long)
+        node_data['npnde']['ccd_code'] = torch.cat(ccd_codes) if ccd_codes else torch.empty((0,8),dtype=torch.long)
 
         if all_prot_atom_to_npnde_idxs:
             prot_atom_to_npnde_tensor = torch.cat(all_prot_atom_to_npnde_idxs, dim=1)
@@ -1190,6 +1209,14 @@ class CrossdockedDataset(ZarrDataset):
         chunk_index[:, 0] = self.graphs_per_chunk * torch.arange(n_chunks)
         chunk_index[:-1, 1] = chunk_index[1:, 0]
         chunk_index[-1, 1] = n_graphs
+
+        # distributed training: each rank only sees its own contiguous fraction of the chunks
+        if not (frac_start == 0.0 and frac_end == 1.0):
+            start_chunk_idx = math.floor(frac_start * n_chunks)
+            end_chunk_idx = math.floor(frac_end * n_chunks)
+            if end_chunk_idx > start_chunk_idx:
+                chunk_index = chunk_index[start_chunk_idx:end_chunk_idx]
+            # (an empty slice, i.e. fewer chunks than ranks, falls back to all chunks)
 
         return chunk_index
 
