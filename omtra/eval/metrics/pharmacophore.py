@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 import numpy as np
 from rdkit import Chem
 from scipy.spatial.distance import cdist
+from scipy.optimize import linear_sum_assignment
 
 from omtra.data.pharmacophores import get_pharmacophores
 
@@ -29,21 +30,23 @@ def pharmacophore_match(
         "perfect_pharm_match": [],
         "frac_true_pharms_matched": [],
         "n_pharms": [],
+        "one_to_one_pharm_match": [],
     }
 
-    true_coords = np.asarray(true_pharm_coords)
+    true_coords = np.asarray(true_pharm_coords).reshape(-1,3)
     true_types = np.asarray(true_pharm_types)
 
     for gen_lig in gen_ligs:
         try:
             gen_coords, gen_types, _, _ = get_pharmacophores(gen_lig)
-            gen_coords = np.array(gen_coords)
+            gen_coords = np.array(gen_coords).reshape(-1,3)
             gen_types = np.array(gen_types)
         except Exception as e:
             print(f"Failed to get pharmacophores for generated ligand: {e}")
             results["perfect_pharm_match"].append(None)
             results["frac_true_pharms_matched"].append(None)
             results["n_pharms"].append(true_coords.shape[0])
+            results['one_to_one_pharm_match'].append(None)
             continue
 
         d = cdist(true_coords, gen_coords)
@@ -51,7 +54,12 @@ def pharmacophore_match(
         matching_pharms = (d < threshold) & same_type_mask
 
         n_true_pharms = true_coords.shape[0]
-        all_true_matched = matching_pharms.any(axis=1).all()
+        all_true_matched = n_true_pharms > 0 and matching_pharms.any(axis=1).all()
+        if n_true_pharms and matching_pharms.shape[1]:
+            rows, cols = linear_sum_assignment(~matching_pharms)
+            one_to_one = len(rows) == n_true_pharms and matching_pharms[rows,cols].all()
+        else:
+            one_to_one = False
 
         if n_true_pharms == 0:
             n_true_pharms = 1
@@ -61,6 +69,7 @@ def pharmacophore_match(
             matching_pharms.any(axis=1).sum() / n_true_pharms
         )
         results["n_pharms"].append(true_coords.shape[0])
+        results['one_to_one_pharm_match'].append(bool(one_to_one))
 
     return results
 
