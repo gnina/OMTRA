@@ -561,6 +561,11 @@ def create_conditional_graphs_from_files(
             task=task,
             graph_config=graph_config,
         )
+        if ligand_file is not None:
+            from omtra.data.requested_stereo import attach_identity, eligible
+            if eligible(task):
+                identity = next(Chem.SDMolSupplier(str(ligand_file), removeHs=True))
+                attach_identity(g, task, identity, source='supplied')
         graphs.append(g.to(device))
 
     return graphs
