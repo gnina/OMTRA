@@ -23,6 +23,7 @@ import multiprocessing
 from omtra.constants import lig_atom_type_map
 
 from omtra_pipelines.pharmit_dataset.guts.phase2 import *
+from omtra_pipelines.pharmit_dataset.guts.provenance import decode_records, publish_records
 
 
 def parse_args():
@@ -77,8 +78,11 @@ def get_all_locks(arr_name: str, zchunk_ids: List[int]):
             lock.release()
 
 def write_data_to_store(data_file: str, data_info: dict, parallel: bool = False):
-    tensors = np.load(data_file)
-    tensors = tensors
+    tensors = np.load(data_file, allow_pickle=False)
+    # Check before any array mutation. Old chunks need their source join recovered.
+    source_records = decode_records(tensors)
+    if len(source_records) != data_info['lig_node_graph_lookup_end']-data_info['lig_node_graph_lookup_start']:
+        raise ValueError('Source identity range differs from the phase2 write range')
 
     root = global_zstore.root
 
@@ -175,6 +179,10 @@ def write_data_to_store(data_file: str, data_info: dict, parallel: bool = False)
     with get_all_locks('db/db', zchunks_touched):
         root['db/db'][start_idx:end_idx] = tensors['database']
 
+    publish_records(global_zstore.store_path, source_records,
+                    int(data_info['lig_node_graph_lookup_start']), int(data_info['lig_node_offset']),
+                    tensors['node_lookup'], data_file)
+    tensors.close()
 
     return
 
@@ -235,6 +243,9 @@ if __name__ == '__main__':
                                n_chunks_process=args.n_chunks_process,
                                shuffle=True
                                )
+    if ('source_identity_version' not in chunk_info_manager.df or
+            not (chunk_info_manager.df['source_identity_version'] == 1).all()):
+        raise ValueError('Phase1 source identities are missing; refusing an untraceable rebuild')
 
     # create zarr store
     if args.store_dir:
@@ -246,6 +257,8 @@ if __name__ == '__main__':
         zarr_dir.mkdir(parents=True, exist_ok=True)
         store_path = zarr_dir / args.store_name
 
+    if store_path.exists() and not args.overwrite:
+        raise FileExistsError('Choose a new output store; existing data must not be rewritten implicitly')
     zstore = ZarrStore(store_path, chunk_info_manager.totals, args.n_chunks_zarr, overwrite=args.overwrite)
 
     # write relevant distribution info
@@ -275,14 +288,3 @@ if __name__ == '__main__':
 
     end_time = time.time()
     print(f"Total time: {end_time - start_time:.1f} seconds")
-    
-
-
-    
-
-
-    
-    
-
-
-        

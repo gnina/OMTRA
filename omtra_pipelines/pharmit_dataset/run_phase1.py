@@ -13,6 +13,7 @@ from multiprocessing import Pool
 from functools import partial
 
 from omtra.data.xace_ligand import MoleculeTensorizer
+from omtra.utils.misc import combine_tcv_counts
 import time
 
 
@@ -63,103 +64,62 @@ def parse_args():
     return args
 
 def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num_atoms, min_num_atoms):
+    """Filter tensors and original source records together at every processing stage."""
     global name_finder
-    mol_tensorizer = MoleculeTensorizer(atom_map=atom_type_map)
+    if len(chunk_data) != 3:
+        raise ValueError('Pharmit batches must retain database IDs, SMILES and source SDF locators')
+    source_ids, smiles, conformer_files = chunk_data
+    if not len(source_ids) == len(smiles) == len(conformer_files):
+        raise ValueError('Pharmit source columns differ in length')
+    entries = list(zip(source_ids, smiles, conformer_files))
+    names, failures = name_finder.query_name_from_smiles(smiles)
+    if len(names) != len(entries):
+        raise ValueError('Source-library lookup lost row correspondence')
+    keep = [i for i in range(len(entries)) if i not in set(failures)]
+    entries = [entries[i] for i in keep]
+    names = [names[i] for i in keep]
+    databases = generate_library_tensor(names, database_list, filter_unknown=False, other_category=True)
 
-    # chunk data is a list of tuples, each tuple contains (conformer_file, smile)
+    read = [read_mol_from_conf_file(entry[2], return_record_index=True) for entry in entries]
+    keep = [i for i, (mol, _) in enumerate(read) if mol is not None and min_num_atoms <= mol.GetNumAtoms() <= max_num_atoms]
+    entries = [entries[i] for i in keep]
+    mols = [read[i][0] for i in keep]
+    record_indices = [read[i][1] for i in keep]
+    databases = databases[keep]
 
-    smiles, conformer_files = chunk_data
-
-    # (BATCHED) Database source
-    names, failed_names_idxs = name_finder.query_name_from_smiles(smiles)
-
-    # Remove molecules that couldn't get database data
-    if len(failed_names_idxs) > 0:
-        #print("Database sources for", len(failed_names_idxs), "could not be found, removing")
-        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
-
-    # Tensorize database sources
-    databases = generate_library_tensor(
-        names, 
-        database_list, 
-        filter_unknown=False,
-        other_category=True
-    )
-    # databases, failed_idxs = generate_library_tensor(names, database_list, filter_unknown=True)
-    # mols = [  mol for i, mol in enumerate(mols) if i not in failed_idxs]
-    # conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_idxs]
-    # smiles = [smile for i, smile in enumerate(smiles) if i not in failed_idxs]
-
-    # Get RDKit Mol objects
-    mols = [read_mol_from_conf_file(file) for file in conformer_files]
-    # Find molecules that failed to featurize and count them
-    failed_mol_idxs = []
-    for i in range(len(mols)):
-        if mols[i] is None:
-            failed_mol_idxs.append(i)
-
-    if len(failed_mol_idxs) > 0:
-        #print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
-        mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
-        failed_mask = np.zeros(databases.shape[0], dtype=bool)
-        failed_mask[failed_mol_idxs] = True
-        databases = databases[~failed_mask]
-
-    # filter molecules with too many atoms
-    too_big_idxs = []
-    for i, mol in enumerate(mols):
-        num_atoms = mol.GetNumAtoms()
-        if num_atoms > max_num_atoms or num_atoms < min_num_atoms:
-            too_big_idxs.append(i)
-    too_big_idxs = set(too_big_idxs)
-    if len(too_big_idxs) > 0:
-        mols = [mol for i, mol in enumerate(mols) if i not in too_big_idxs]
-        failed_mask = np.zeros(databases.shape[0], dtype=bool)
-        failed_mask[list(too_big_idxs)] = True
-        databases = databases[~failed_mask]
-        
-    
-    # Get XACE data
-    xace_mols, failed_xace_idxs, failure_modes, tcv_counts = mol_tensorizer.featurize_molecules(mols)
-
-    if len(failure_modes) != 0:
+    tensorizer = MoleculeTensorizer(atom_map=atom_type_map)
+    xace, failures, failure_modes, _ = tensorizer.featurize_molecules(mols)
+    if failure_modes:
         print(failure_modes, flush=True)
+    keep = [i for i in range(len(mols)) if i not in set(failures)]
+    entries = [entries[i] for i in keep]
+    mols = [mols[i] for i in keep]
+    record_indices = [record_indices[i] for i in keep]
+    databases = databases[keep]
+    if len(xace) != len(mols):
+        raise ValueError('Tensorizer lost source correspondence')
 
-    # Remove molecules that failed to get xace data
-    if len(failed_xace_idxs) > 0:
-        mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
-        failed_mask = np.zeros(databases.shape[0], dtype=bool)
-        failed_mask[failed_xace_idxs] = True
-        databases = databases[~failed_mask]
+    x_pharm, a_pharm, v_pharm, failures = get_pharmacophore_data(mols)
+    keep = [i for i in range(len(mols)) if i not in set(failures)]
+    entries = [entries[i] for i in keep]
+    mols = [mols[i] for i in keep]
+    record_indices = [record_indices[i] for i in keep]
+    xace = [xace[i] for i in keep]
+    databases = databases[keep]
+    if not len(entries) == len(xace) == len(x_pharm) == len(a_pharm) == len(v_pharm):
+        raise ValueError('Pharmacophore processing lost source correspondence')
 
-    # Get pharmacophore data
-    x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
-    # Remove ligands where pharmacophore generation failed
-    if len(failed_pharm_idxs) > 0:
-        print(f'pharmacophore generation failed for {len(failed_pharm_idxs)} ligands', flush=True)
-        xace_mols = [mol for i, mol in enumerate(xace_mols) if i not in failed_pharm_idxs]
-        failed_mask = np.zeros(databases.shape[0], dtype=bool)
-        failed_mask[failed_pharm_idxs] = True
-        databases = databases[~failed_mask]
-
-    # sanity check
-    assert databases.shape[0] == len(xace_mols) == len(x_pharm) == len(a_pharm) == len(v_pharm)
-        
-    # Save tensors in dictionary
-    tensors = {
-        'positions': [m.positions for m in xace_mols], 
-        'atom_types': [m.atom_types for m in xace_mols], 
-        'atom_charges': [m.atom_charges for m in xace_mols], 
-        'bond_types': [m.bond_types for m in xace_mols], 
-        'bond_idxs': [m.bond_idxs for m in xace_mols], 
-        'x_pharm': x_pharm, 
-        'a_pharm': a_pharm, 
-        'v_pharm': v_pharm,
-        'databases': databases,
-        'tcv_counts': tcv_counts
+    from omtra_pipelines.pharmit_dataset.guts.provenance import source_record
+    records = [source_record(*entry, record_index, mol, tensor, atom_type_map)
+               for entry, record_index, mol, tensor in zip(entries, record_indices, mols, xace)]
+    return {
+        'positions': [m.x for m in xace], 'atom_types': [m.a for m in xace],
+        'atom_charges': [m.c for m in xace], 'bond_types': [m.e for m in xace],
+        'bond_idxs': [m.edge_idxs for m in xace],
+        'x_pharm': x_pharm, 'a_pharm': a_pharm, 'v_pharm': v_pharm,
+        'databases': databases, 'source_records': records,
+        'tcv_counts': combine_tcv_counts([m.tcv_counts for m in xace]),
     }
-    
-    return tensors
 
 def save_and_update(result, chunk_idx, pbar, chunk_saver):
     # Save the result using your existing callback logic.

@@ -255,6 +255,10 @@ def init_zarr_store(store_path: Path, totals: dict, n_chunks: int):
 
     # Create a root group
     root = zarr.group(store=store)
+    root.attrs['source_identity'] = {
+        'version': 1, 'storage': 'identity/<graph_start>_<graph_end>.jsonl',
+        'status': 'original_database_linkage_not_independent_stereo_certification',
+    }
 
     ntypes = ['lig', 'db', 'pharm']
 

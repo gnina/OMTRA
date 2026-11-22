@@ -2,7 +2,10 @@ import argparse
 from pathlib import Path
 import gzip
 from rdkit import Chem
-import pymysql
+try:
+    import pymysql
+except ImportError:
+    pymysql = None  # Offline processing and audits do not require a database client.
 import itertools
 import re
 from typing import Tuple
@@ -24,34 +27,36 @@ from collections import defaultdict
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
 from omtra.utils.misc import bad_mol_reporter
+from omtra_pipelines.pharmit_dataset.guts.provenance import encode_records
 from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
 from omtra.data.pharmacophores import get_pharmacophores
 from tempfile import TemporaryDirectory
 import traceback
 
-def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first conformer
+def read_mol_from_conf_file(conf_file, return_record_index=False):
+    """Read the first valid conformer, optionally retaining its source SDF record index."""
+    def result(mol=None, index=None):
+        return (mol, index) if return_record_index else mol
 
     if conf_file is None:
-        return None
+        return result()
 
     try:
         if not Path(conf_file).exists():
-            return None
+            return result()
     except PermissionError:
-        return None
+        return result()
 
     with gzip.open(conf_file, 'rb') as gzipped_sdf:
         suppl = Chem.ForwardSDMolSupplier(gzipped_sdf)
         try:
-            for mol in suppl:
+            for index, mol in enumerate(suppl):
                 if mol is not None:
-                    return mol # Changed from break
-            if mol is None:
-                #print(f"Failed to parse a molecule from {conf_file}")
-                return None
+                    return result(mol, index)
+            return result()
         except Exception as e:
             #print("Error parsing file", conf_file)
-            return None
+            return result()
 
 
 def crawl_conformer_files(db_dir: Path):
@@ -95,6 +100,8 @@ class PharmitDBConnector():
         if spoof_db:
             self.conn = None
         else:
+            if pymysql is None:
+                raise ImportError('pymysql is required for a live Pharmit database connection')
             self.conn = pymysql.connect(
                 host="localhost",
                 user="pharmit", 
@@ -186,7 +193,7 @@ class DBCrawler(PharmitDBConnector):
                 n_queries = 0
                 
                 while True:
-                    if n_queries >= self.max_num_queries:
+                    if self.max_num_queries is not None and n_queries >= self.max_num_queries:
                         return
 
                     rows = self._fetch_next_batch(cursor, last_id)
@@ -196,7 +203,7 @@ class DBCrawler(PharmitDBConnector):
                     id_vals, smiles, sdf_files = zip(*rows)
                     
                     # Yield current batch
-                    yield (smiles, sdf_files)
+                    yield (id_vals, smiles, sdf_files)
 
                     # Update last_id to the ID of the last row in this batch
                     last_id = id_vals[-1]
@@ -506,6 +513,7 @@ class ChunkSaver():
             'pharm_lookup': pharm_node_lookup,
             'database': databases
         }
+        chunk_data_dict['source_records_json'] = encode_records(tensors['source_records'], node_lookup)
 
         # Convert data types
         chunk_data_dict['lig_x'] = chunk_data_dict['lig_x'].astype(np.float32)
@@ -516,12 +524,13 @@ class ChunkSaver():
 
 
         # Save tensor dictionary to npz file
-        with open(chunk_data_file, 'wb') as f:
+        with open(chunk_data_file, 'xb') as f:
             np.savez_compressed(f, **chunk_data_dict)
         
 
         # Chunk data file info dictionary
         chunk_info_dict = {
+            'source_identity_version': 1,
             'file': chunk_data_file,
             'n_mols': len(node_lookup),
             'n_atoms': len(x),
@@ -533,7 +542,7 @@ class ChunkSaver():
         }
         
         # Dump info dictionary in pickle files
-        with open(chunk_info_file, "wb") as f:
+        with open(chunk_info_file, "xb") as f:
             pickle.dump(chunk_info_dict, f)
 
         self.add_chunk_to_register(chunk_data_file)
