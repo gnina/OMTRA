@@ -1,3 +1,5 @@
+from omtra.models.embeddings.fixed_cond_embed import FixedConditionEmbedder
+import contextlib
 import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
@@ -74,6 +76,14 @@ class VectorField(nn.Module):
         fake_atoms: bool = False,
         res_id_embed_dim: int = 64, 
         pharm_pos_std_flag: bool = False,
+        soft_partial_conditioning: bool = False,
+        stereo_features: bool = False,
+        stereo_enabled: bool = True,
+        stereo_encoding: str = 'categorical',
+        implicit_h_vectors: bool = False,
+        stereo_correction: bool = False,
+        stereo_embedding_init: str = 'normal',
+        stereo_correction_margin: float = 0.2,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -93,6 +103,11 @@ class VectorField(nn.Module):
         self.rebuild_edges = rebuild_edges
         self.fake_atoms = fake_atoms
         self.pharm_pos_std_flag = pharm_pos_std_flag
+        self.soft_partial_conditioning = soft_partial_conditioning
+        self.stereo_enabled = stereo_enabled
+        self.stereo_encoding = stereo_encoding
+        self.implicit_h_vectors = implicit_h_vectors
+        self.stereo_correction_enabled = stereo_correction
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -117,6 +132,10 @@ class VectorField(nn.Module):
         task_classes = [
             task_name_to_class(task_name) for task_name in td_coupling.task_space
         ]
+        self.fixed_cond_embedder = FixedConditionEmbedder(
+            [name for task in task_classes for name in task.partial_modalities_fixed],
+            n_hidden_scalars, n_hidden_edge_feats, n_vec_channels,
+        ) if soft_partial_conditioning else None
         modality_present_space = set()
         modality_generated_space = set()
         for task_class in task_classes:
@@ -361,6 +380,26 @@ class VectorField(nn.Module):
                 fake_atoms=fake_atoms,
             )
 
+        # Zero-initialised scalar gates for the masked implicit-H direction features (S4): exact function preservation at
+        # initialisation; created only when the feature is on so the H-off control has no extra parameters.
+        if implicit_h_vectors:
+            self.h_gate_current = nn.Parameter(torch.zeros(()))
+            self.h_gate_predicted = nn.Parameter(torch.zeros(()))
+
+        # Construct last and isolate RNG so legacy/common parameter initialization is unchanged.
+        self.stereo_embedder = None
+        if stereo_features:
+            from omtra.models.embeddings.stereo import StereoEmbedding
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(193731)
+                self.stereo_embedder = StereoEmbedding(n_hidden_scalars, n_hidden_edge_feats, mode=stereo_encoding, init=stereo_embedding_init)
+
+        # Geometric correction vectors (default off => no extra parameters, state dict unchanged).
+        self.stereo_correction = None
+        if stereo_correction:
+            from omtra.models.embeddings.stereo_correction import StereoCorrection
+            self.stereo_correction = StereoCorrection(n_vec_channels, n_recycles * len(self.conv_layers), stereo_correction_margin)
+
     @g_local_scope
     def forward(
         self,
@@ -385,6 +424,9 @@ class VectorField(nn.Module):
         # the only edges that should be in g at this point are covalent, lig_to_lig, npnde_to_npnde, maybe pharm_to_pharm
         # need to add edges into protein structure, and between differing ntypes (except covalent)
         g = build_edges(g, task_class, node_batch_idx, self.graph_config)
+        self.last_graph_counts={'graphs':int(g.batch_size),
+            'nodes':{nt:int(g.num_nodes(nt)) for nt in g.ntypes},
+            'edges':{et:int(g.num_edges(et)) for et in g.etypes}}
 
         # compose the graph from modalities into the language of the GNN
         # that is node positions, node scalar features, node vector features, and edge features
@@ -495,11 +537,55 @@ class VectorField(nn.Module):
                 node_scalar_features[ntype]
             )
 
+        if self.implicit_h_vectors and 'lig' in node_vec_features and 'lig' in node_positions:
+            from omtra.data.requested_stereo import eligible
+            from omtra.models.embeddings.implicit_h import h_directions
+            # Identity-fixed tasks only (the bond graph is given). Independent of `stereo_enabled`/label hiding: the feature
+            # is chemistry+geometry only and must stay on when requested labels are hidden. Channel 0 holds H(x_t).
+            if eligible(task_class):
+                if 'h_eligible' not in g.nodes['lig'].data:
+                    # Missing metadata would silently turn an H-enabled model into an H-off one.
+                    raise ValueError('implicit_h_vectors requires h_eligible/is_hydrogen metadata on identity-fixed tasks '
+                                     '(attach_identity / clear_stereo)')
+                node_vec_features['lig'] = node_vec_features['lig'].clone()
+                node_vec_features['lig'][:, 0, :] = node_vec_features['lig'][:, 0, :] + (
+                    torch.tanh(self.h_gate_current) * h_directions(g, node_positions['lig'])).to(node_vec_features['lig'].dtype)
+
+        if self.stereo_embedder is not None:
+            stereo_nodes, stereo_edges = self.stereo_embedder(g, task_class, self.stereo_enabled)
+            node_scalar_features['lig'] = node_scalar_features['lig'] + stereo_nodes
+            edge_features['lig_to_lig'] = edge_features['lig_to_lig'] + stereo_edges
+
+        if self.fixed_cond_embedder is not None and task_class.partial_modalities_fixed:
+            fixed_nodes, fixed_edges, fixed_vectors = self.fixed_cond_embedder(g, task_class)
+            for ntype, feats in fixed_nodes.items():
+                node_scalar_features[ntype] = node_scalar_features[ntype] + feats
+            for etype, feats in fixed_edges.items():
+                edge_features[etype] = edge_features[etype] + feats
+            for ntype, feats in fixed_vectors.items():
+                node_vec_features[ntype] = node_vec_features[ntype] + feats
+
+        corr_ctx = None
+        if self.stereo_correction is not None:
+            from omtra.data.requested_stereo import eligible
+            if eligible(task_class):
+                corr_ctx = {'units': self.stereo_correction.units(g), 'f_pred': None}
+                if self.stereo_correction.record:
+                    nd_ = g.nodes['lig'].data
+                    self.stereo_correction.stats = []
+                    self.stereo_correction.coverage = {
+                        'true_centres': int(nd_['stereo_centre'].sum()) if 'stereo_centre' in nd_ else 0,
+                        'visible_signed_units': 0 if corr_ctx['units'] is None else int(corr_ctx['units']['centres'].numel())}
+            elif self.stereo_correction.record:
+                self.stereo_correction.stats = []
+                self.stereo_correction.coverage = {}       # task without a fixed ligand identity: no stale numbers from an earlier update
+
         if self.self_conditioning and prev_dst_dict is None:
             train_self_condition = self.training and (torch.rand(1) > 0.5).item()
             inference_first_step = not self.training and (t == 0).all().item()
 
             # TODO: actually at the first inference step we can just not apply self conditioning, need to test performance effect
+            self.last_bootstrap = bool(train_self_condition or inference_first_step)
             if train_self_condition or inference_first_step:
                 with torch.no_grad():
                     node_scalar_features_clone = {
@@ -529,7 +615,21 @@ class VectorField(nn.Module):
                         upper_edge_mask,
                         apply_softmax=True,
                         remove_com=False,
+                        correction=corr_ctx,
                     )
+
+        if corr_ctx is not None and corr_ctx['units'] is not None and prev_dst_dict is not None and 'lig_x' in prev_dst_dict:
+            # correction force of the (detached) previous endpoint prediction, whether supplied or created by the bootstrap above
+            corr_ctx['f_pred'] = self.stereo_correction.feature(prev_dst_dict['lig_x'].detach(), corr_ctx['units'])
+
+        if self.implicit_h_vectors and prev_dst_dict is not None and 'lig_x' in prev_dst_dict and 'lig' in node_vec_features:
+            from omtra.data.requested_stereo import eligible
+            from omtra.models.embeddings.implicit_h import h_directions
+            if eligible(task_class):
+                # H of the (detached) previous endpoint prediction, whether supplied or created by the bootstrap above.
+                node_vec_features['lig'] = node_vec_features['lig'].clone()
+                node_vec_features['lig'][:, 1, :] = node_vec_features['lig'][:, 1, :] + (
+                    torch.tanh(self.h_gate_predicted) * h_directions(g, prev_dst_dict['lig_x'].detach())).to(node_vec_features['lig'].dtype)
 
         if self.self_conditioning and prev_dst_dict is not None:
             (
@@ -561,6 +661,7 @@ class VectorField(nn.Module):
             apply_softmax,
             remove_com,
             extract_latents_for_confidence=extract_latents_for_confidence,
+            correction=corr_ctx,
         )
 
         # TODO: added this here for testing, but not sure if this is the right place
@@ -586,10 +687,17 @@ class VectorField(nn.Module):
         apply_softmax: bool = False,
         remove_com: bool = False,
         extract_latents_for_confidence=False,
+        correction=None,
     ):
         x_diff, d = self.precompute_distances(g)
         for recycle_idx in range(self.n_recycles):
             for conv_idx, conv in enumerate(self.conv_layers):
+                if correction is not None and correction['units'] is not None and 'lig' in node_vec_features:
+                    # Geometric stereo-correction force of the CURRENT internal coordinates (recomputed whenever they change).
+                    block = recycle_idx * len(self.conv_layers) + conv_idx
+                    f_cur = self.stereo_correction.feature(node_positions['lig'], correction['units'])
+                    node_vec_features = dict(node_vec_features)
+                    node_vec_features['lig'] = self.stereo_correction.inject(node_vec_features['lig'], block, f_cur, correction['f_pred'])
                 # perform a single convolution which updates node scalar and vector features (but not positions)
                 node_scalar_features, node_vec_features = conv(
                     g,
@@ -602,7 +710,7 @@ class VectorField(nn.Module):
                 )
                 # every convs_per_update convolutions, update the node positions and edge features
                 # TODO: this code has gotten hairy, the molecule update operation should be collected into a separate method to make denoise_graph cleaner
-                if conv_idx != 0 and (conv_idx + 1) % self.convs_per_update == 0:
+                if (conv_idx + 1) % self.convs_per_update == 0:
                     if self.separate_mol_updaters:
                         updater_idx = conv_idx // self.convs_per_update
                     else:
@@ -724,7 +832,7 @@ class VectorField(nn.Module):
             if m.data_key == "x":
                 node_pos = node_positions[m.entity_name]
                 # masking for fixed partial modalities of fixed fragments
-                if m.name in task_class.partial_modalities_fixed:
+                if m.name in task_class.partial_modalities_fixed and not self.soft_partial_conditioning:
                     mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
                     gt_pos = g.nodes[m.entity_name].data['x_1_true']
                     node_pos[mask] = gt_pos[mask]
@@ -734,7 +842,7 @@ class VectorField(nn.Module):
                 dst_dict[m.name] = logits[m.name]
 
                 # masking for fixed partial modalities of fixed fragments
-                if m.name in task_class.partial_modalities_fixed:
+                if m.name in task_class.partial_modalities_fixed and not self.soft_partial_conditioning:
                     if m.is_node:
                         mask = g.nodes[m.entity_name].data['atom_mask_1_true'].bool()
                         gt_labels = g.nodes[m.entity_name].data[f'{m.data_key}_1_true']
@@ -919,7 +1027,7 @@ class VectorField(nn.Module):
                 **kwargs,
             )
 
-            if len(task.partial_modalities_fixed) > 0:
+            if len(task.partial_modalities_fixed) > 0 and not self.soft_partial_conditioning:
                 for m_name in task.partial_modalities_fixed:
                     m = name_to_modality(m_name)
                     if m.is_node:
@@ -1016,7 +1124,34 @@ class VectorField(nn.Module):
             prev_dst_dict=prev_dst_dict,
             extract_latents_for_confidence=extract_latents_for_confidence
         )
-        
+
+        # Optional classifier-free stereo guidance (evaluation-only diagnostic, default off): a second forward
+        # pass with the requested stereo labels replaced by "unspecified" (the training hiding mode); only the
+        # continuous predictions are extrapolated: x1 = x1_unknown + w * (x1_given - x1_unknown). Each branch
+        # keeps its own self-conditioning state; the state carried to the next step is the given branch's.
+        guidance_w = getattr(self, 'stereo_guidance_w', None)
+        guided = guidance_w is not None and not extract_latents_for_confidence
+        if guided:
+            if prev_dst_dict is None:
+                self._guidance_prev_unknown = None
+            with self._stereo_hidden_swapped(g):
+                dst_unknown = self(
+                    g,
+                    task,
+                    t=torch.full((g.batch_size,), t_i, device=device),
+                    node_batch_idx=node_batch_idxs,
+                    upper_edge_mask=upper_edge_mask,
+                    apply_softmax=True,
+                    remove_com=False,
+                    prev_dst_dict=self._guidance_prev_unknown,
+                )
+            self._guidance_prev_unknown = dst_unknown
+            state_dict = vf_forward_output
+            vf_forward_output = dict(vf_forward_output)
+            for m in task.modalities_generated:
+                if not m.is_categorical:
+                    vf_forward_output[m.name] = dst_unknown[m.name] + guidance_w * (state_dict[m.name] - dst_unknown[m.name])
+
         if extract_latents_for_confidence:
             dst_dict, model_latents = vf_forward_output
             # if the user requested latents, we rely on the plumbing we have in `forward` and `denoise_graph` to obtain model_latents, and populate it to the graph
@@ -1133,7 +1268,25 @@ class VectorField(nn.Module):
             data_src[f"{m.data_key}_t"] = xt
             data_src[f"{m.data_key}_1_pred"] = x_1_sampled
 
-        return g, dst_dict
+        return g, (state_dict if guided else dst_dict)
+
+    @contextlib.contextmanager
+    def _stereo_hidden_swapped(self, g):
+        """Temporarily swap the requested-stereo tensors for their precomputed hidden ("unspecified") versions."""
+        pairs = (('nodes', 'lig', 'stereo_atom'), ('edges', 'lig_to_lig', 'stereo_bond'), ('edges', 'lig_to_lig', 'stereo_rel'))
+        stores = []
+        for kind, name, key in pairs:
+            data = (g.nodes if kind == 'nodes' else g.edges)[name].data
+            if key + '_unk' not in data:
+                raise ValueError(f'Stereo guidance needs {key}_unk (see attach_guidance_alternative)')
+            stores.append((data, key))
+        for data, key in stores:
+            data[key], data[key + '_unk'] = data[key + '_unk'], data[key]
+        try:
+            yield
+        finally:
+            for data, key in stores:
+                data[key], data[key + '_unk'] = data[key + '_unk'], data[key]
     
     def campbell_step(
         self,
