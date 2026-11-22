@@ -73,7 +73,7 @@ class SystemProcessor:
         npnde_atom_map: List[str] = npnde_atom_type_map,
         pocket_cutoff: float = 8.0,
         n_cpus: int = 1,
-        raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
+        raw_data: str = str(Path.home() / ".local" / "share" / "plinder" / "2024-06" / "v2"),  # default plinder download location
     ):
         logger.debug("Initializing StructureProcessor with cutoff=%f", pocket_cutoff)
         self.ligand_atom_map = ligand_atom_map
@@ -713,9 +713,7 @@ class SystemProcessor:
         self,
     ) -> Tuple[Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]]:
         # ligand_mols, npnde_mols = filter(self.system_id)
-        filter_parquet = Path(
-            "/net/galaxy/home/koes/tjkatz/OMTRA/omtra_pipelines/plinder_dataset/plinder_filtered.parquet"
-        )
+        filter_parquet = Path(__file__).parent / "plinder_filtered.parquet"
         df = pd.read_parquet(filter_parquet)
 
         system_df = df[df["system_id"] == self.system_id]

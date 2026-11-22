@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 from typing import Any, Dict, List, Optional, Tuple
 from biotite.structure.io.pdbx import CIFFile, get_structure
+from omtra.utils import omtra_root
 from omtra_pipelines.plinder_dataset.utils import LIGAND_MAP, NPNDE_MAP, setup_logger
 from plinder.core import PlinderSystem
 from rdkit import Chem
@@ -35,8 +36,8 @@ def check_atom_map(mol: Chem.rdchem.Mol, allowed_atoms: List[str] = LIGAND_MAP) 
 
 def filter(system_id: str) -> (Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]):
     try:
-        output_path = Path(
-            f"/net/galaxy/home/koes/tjkatz/for_omtra/preprocessed_pkls/{system_id}.pkl"
+        output_path = (
+            Path(omtra_root()) / "data" / "plinder_preprocessed_pkls" / f"{system_id}.pkl"
         )
         if output_path.exists():
             with open(output_path, "rb") as f:
