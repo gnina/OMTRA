@@ -140,13 +140,34 @@ export OMTRA_NO_GPU=1
 
 # Model Weights
 
-Download the pre-trained model weights using `wget`:
+Two sets of weights are available. Download either set (or both) with `wget`:
 
 ```bash
+# v0 weights
 wget -r -np -nH --cut-dirs=3 -R "index.html*" -P omtra/trained_models https://bits.csb.pitt.edu/files/OMTRA/omtra_v0_weights/
+
+# v0.1 weights
+wget -r -np -nH --cut-dirs=3 -R "index.html*" -P omtra/trained_models https://bits.csb.pitt.edu/files/OMTRA/omtra_v0.1_weights/
 ```
 
-This will create the `omtra/trained_models/` directory with the checkpoint files. The CLI automatically selects the appropriate checkpoint based on the task. You can also specify a checkpoint explicitly with the `--checkpoint` flag.
+Both commands place the checkpoint folders in the `omtra/trained_models/` directory.
+
+| Weights | Download folder | Multitask checkpoint | Tasks |
+|---------|-----------------|----------------------|-------|
+| v0 | `omtra_v0_weights/` | `mt_plcd_cr_2025-11-26_10-09-673392/checkpoints/last.ckpt` | `rigid_docking_condensed`, `fixed_protein_ligand_denovo_condensed`, `denovo_ligand_condensed`, `ligand_conformer_condensed` |
+| v0.1 | `omtra_v0.1_weights/` | `gnn_prot_cond_2026-02-26_14-57-948005/checkpoints/last.ckpt` | `rigid_docking_condensed`, `fixed_protein_ligand_denovo_condensed`, `denovo_ligand_condensed`, `ligand_conformer_condensed` |
+
+Both multitask checkpoints were trained on the same task mixture. The v0 download also contains the checkpoints for the pharmacophore-conditioned tasks and a separate unconditional checkpoint.
+
+For the v0 weights, the CLI automatically selects the appropriate checkpoint based on the task. To use the v0.1 weights, pass the checkpoint explicitly with the `--checkpoint` flag:
+
+```bash
+omtra --task fixed_protein_ligand_denovo_condensed \
+      --checkpoint omtra/trained_models/gnn_prot_cond_2026-02-26_14-57-948005/checkpoints/last.ckpt \
+      --protein_file protein.pdb --pocket_ligand ligand.sdf --n_samples 100
+```
+
+You can also specify a checkpoint explicitly with the `--checkpoint` flag for any other task.
 
 -----------------------------------------------------------------------------------------------------
 
@@ -343,13 +364,15 @@ OMTRA_DEBUG=1 omtra --task denovo_ligand_condensed --n_samples 10
 
 ## OMTRA Web Application
 
-The web application provides an interactive interface for exploring OMTRA's capabilities.
+The web application provides an interactive interface for exploring OMTRA's capabilities. You can try a hosted version at [bits.csb.pitt.edu/omtra](http://bits.csb.pitt.edu/omtra).
 
 ### Prerequisites
 - Docker, Docker Compose, NVIDIA Container Toolkit installed
 - Model weights downloaded to `omtra/trained_models/` directory (see [Model Weights](#model-weights))
 
 ### Starting the Web Application
+
+> **Note:** The pre-built Docker images on Docker Hub for the web application are currently an older version, but will be updated soon.
 
 ```bash
 cd omtra_webapp
