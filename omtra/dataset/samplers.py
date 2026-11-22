@@ -1,5 +1,7 @@
 
 import torch
+from collections import deque
+from copy import deepcopy
 import torch.distributed
 from torch.utils.data import Sampler, DistributedSampler
 from typing import Dict, List
@@ -21,6 +23,8 @@ class MultiTaskSampler(Sampler):
                  rank: int = None,
                  num_replicas: int = None,
                  max_steps: int = None,
+                 seed: int = 42,
+                 track_consumption: bool = False,
         ):
         super().__init__()
         self.multi_dataset = multi_dataset
@@ -41,6 +45,13 @@ class MultiTaskSampler(Sampler):
         self.tasks = [task_name_to_class(task_name) for task_name in self.task_space]
 
         self.batch_idx = 0
+        self.seed = int(seed)
+        self.track_consumption = track_consumption
+        self._issued = deque()
+        self._consumed = None
+        self._restore = None
+        self.task_generator = torch.Generator().manual_seed(self.seed + 104729)
+        self.data_generator = torch.Generator().manual_seed(self.seed + 130363)
 
         if self.distributed:
             self.num_replicas = num_replicas if num_replicas is not None else torch.distributed.get_world_size()
@@ -68,7 +79,7 @@ class MultiTaskSampler(Sampler):
         flat_p = p.flatten().cpu() # NOTE: changed this to cpu bc cgpt said its not deterministic on gpu?
 
         # Draw a single sample from the flattened distribution
-        index = torch.multinomial(flat_p, 1).item()
+        index = torch.multinomial(flat_p, 1, generator=self.task_generator).item()
 
         # Convert the flat index back to 2D indices
         n, m = p.shape
@@ -124,7 +135,7 @@ class MultiTaskSampler(Sampler):
         # if not hasattr(self, "cpu_group"):
             # self.cpu_group = torch.distributed.new_group(backend="gloo")
             
-        device = torch.device(f"cuda:{self.rank}")
+        device = torch.device("cuda", torch.cuda.current_device()) if torch.distributed.get_backend() == "nccl" else torch.device("cpu")  # local device (global rank != local GPU on >1 node)
         if self.rank == 0:
             task_idx, dataset_idx = self.sample_task_and_dataset()
             task_idx_tensor = torch.tensor(task_idx, dtype=torch.int64, device=device)
@@ -145,36 +156,66 @@ class MultiTaskSampler(Sampler):
         
         return task_idx, dataset_idx
 
-    def __iter__(self):
+    def _snapshot(self):
+        return {'version': 2, 'batch_idx': self.batch_idx,
+                'task_rng': self.task_generator.get_state().clone(),
+                'data_rng': self.data_generator.get_state().clone(),
+                'trackers': {k: {'chunk_queue': v.chunk_queue.clone(),
+                                 'chunk_queue_idx': v.chunk_queue_idx,
+                                 'n_samples_served_this_chunk': v.n_samples_served_this_chunk}
+                             for k, v in self.chunk_trackers.items()}}
 
-        self.build_chunk_trackers()
+    def acknowledge(self):
+        if self.track_consumption:
+            if not self._issued:
+                raise RuntimeError('Consumed a batch that was not issued by this sampler')
+            self._consumed = self._issued.popleft()
+
+    def __iter__(self):
+        # Temporary CPU RNG scope prevents chunk/skip draws from reseeding model RNG.
+        # Task selection uses a separate generator and never depends on batch size/noise.
+        self.data_generator.manual_seed(self.seed + 130363 + 7919*self.rank)
+        with torch.random.fork_rng(devices=[]):
+            torch.set_rng_state(self.data_generator.get_state())
+            self.build_chunk_trackers()
+            self.data_generator.set_state(torch.get_rng_state())
+        if self._restore and self._restore.get('version') == 2:
+            self.task_generator.set_state(self._restore['task_rng'])
+            self.data_generator.set_state(self._restore['data_rng'])
+            for key, state in self._restore['trackers'].items():
+                tracker = self.chunk_trackers[int(key)]
+                for name, value in state.items():
+                    setattr(tracker, name, value.clone() if torch.is_tensor(value) else value)
+            self._restore = None
+        self._issued.clear()
+        self._consumed = self._snapshot()
         while self.batch_idx < len(self):
             if self.distributed:
                 task_idx, dataset_idx = self.get_td_pair_distributed()
             else:
                 task_idx, dataset_idx = self.sample_task_and_dataset()
-
-            # get chunk tracker
-            chunk_tracker_idx = self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)]
-            chunk_tracker: GraphChunkTracker = self.chunk_trackers[chunk_tracker_idx]
-
-            # get next batch of indices
-            batch_idxs = chunk_tracker.get_batch_idxs(self.tasks[task_idx])
-
-            # construct the global indices
-            global_idxs = [ (task_idx, dataset_idx, idx) for idx in batch_idxs ]
-
+            tracker = self.chunk_trackers[self.td_pair_to_chunk_tracker_id[(task_idx,dataset_idx)]]
+            with torch.random.fork_rng(devices=[]):
+                torch.set_rng_state(self.data_generator.get_state())
+                batch_idxs = tracker.get_batch_idxs(self.tasks[task_idx])
+                self.data_generator.set_state(torch.get_rng_state())
+            if not batch_idxs:
+                raise RuntimeError('Sampler produced an empty batch')
             self.batch_idx += 1
-            
-            yield global_idxs
+            if self.track_consumption:
+                self._issued.append(self._snapshot())
+            yield [(task_idx,dataset_idx,idx) for idx in batch_idxs]
 
     def __len__(self):
         return self.max_steps
-    
+
     def state_dict(self):
-        return {
-            'batch_idx': self.batch_idx,
-        }
-    
+        if self.track_consumption and self._consumed is not None:
+            return deepcopy(self._consumed)
+        if hasattr(self,'chunk_trackers'):
+            return self._snapshot()
+        return {'batch_idx': self.batch_idx}
+
     def load_state_dict(self, state_dict):
-        self.batch_idx = state_dict['batch_idx']
+        self.batch_idx = int(state_dict['batch_idx'])
+        self._restore = deepcopy(state_dict)
