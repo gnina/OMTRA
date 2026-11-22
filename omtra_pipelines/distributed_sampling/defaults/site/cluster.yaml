@@ -13,5 +13,5 @@ slurm:
   extra_sbatch_args: ""
 
 paths:
-  plinder: /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/plinder
-  crossdocked: /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/crossdocked/internal_split0
+  plinder: /path/to/data/plinder
+  crossdocked: /path/to/data/crossdocked

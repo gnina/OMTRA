@@ -73,7 +73,7 @@ def parse_args():
     parser.add_argument(
         '--crossdocked_path',
         type=Path,
-        default='/net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_split',
+        default=Path(omtra_root()) / 'data' / 'crossdocked' / 'external_split',
         help='Path to crossdocked dataset'
     )
     parser.add_argument('--dataset_start_idx', 

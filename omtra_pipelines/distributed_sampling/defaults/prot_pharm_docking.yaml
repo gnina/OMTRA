@@ -15,16 +15,16 @@
 # ============================================================
 
 task: rigid_docking_pharmacophore_condensed                    # REQUIRED: task name (e.g. rigid_docking_condensed)
-output_dir: /net/galaxy/home/koes/ltoft/OMTRA/trained_models/mt/gnn_protpharm_cond_cr_2026-03-16_16-35-604479/replicates/docking_pharm4              # REQUIRED: path for pipeline output
+output_dir: /path/to/output_dir              # REQUIRED: path for pipeline output
 
 # Mode is inferred: 'cli' if input_files present, 'dataset' otherwise.
 # Can be set explicitly to override inference.
 # mode: null
 
 # --- Dataset mode ---
-checkpoint: /net/galaxy/home/koes/ltoft/OMTRA/trained_models/mt/gnn_protpharm_cond_cr_2026-03-16_16-35-604479/checkpoints/last.ckpt             # Path to model checkpoint
+checkpoint: /path/to/checkpoint.ckpt             # Path to model checkpoint
 dataset: plinder                # plinder | crossdocked
-sys_idx_file: /net/galaxy/home/koes/ltoft/OMTRA/omtra_pipelines/docking_eval/eval_idx_files/plinder_eval_sys_idxs.csv            # Path to CSV of system indices
+sys_idx_file: omtra_pipelines/docking_eval/eval_idx_files/plinder_eval_sys_idxs.csv            # Path to CSV of system indices
 n_systems: null               # Number of systems (alternative to sys_idx_file)
 dataset_start_idx: 0          # Starting index when using n_systems
 

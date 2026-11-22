@@ -15,16 +15,16 @@
 # ============================================================
 
 task: fixed_protein_ligand_denovo_condensed                    # REQUIRED: task name (e.g. rigid_docking_condensed)
-output_dir: /net/galaxy/home/koes/ltoft/OMTRA/trained_models/mt/gnn_mt_plcd_cr_2026-03-14_15-43-611222/samples_fixed_protein_ligand_denovo_condensed_crossdocked            # REQUIRED: path for pipeline output
+output_dir: /path/to/output_dir            # REQUIRED: path for pipeline output
 
 # Mode is inferred: 'cli' if input_files present, 'dataset' otherwise.
 # Can be set explicitly to override inference.
 # mode: null
 
 # --- Dataset mode ---
-checkpoint: /net/galaxy/home/koes/ltoft/OMTRA/trained_models/mt/gnn_mt_plcd_cr_2026-03-14_15-43-611222/checkpoints/last.ckpt            # Path to model checkpoint
+checkpoint: /path/to/checkpoint.ckpt            # Path to model checkpoint
 dataset: crossdocked                # plinder | crossdocked
-sys_idx_file: /net/galaxy/home/koes/ltoft/OMTRA/omtra_pipelines/docking_eval/eval_idx_files/crossdocked_idxs.csv           # Path to CSV of system indices
+sys_idx_file: omtra_pipelines/docking_eval/eval_idx_files/crossdocked_idxs.csv           # Path to CSV of system indices
 n_systems: null               # Number of systems (alternative to sys_idx_file)
 dataset_start_idx: 0          # Starting index when using n_systems
 
@@ -83,4 +83,4 @@ slurm:
 # Dataset paths
 paths:
   plinder: null
-  crossdocked: /net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_spli
+  crossdocked: /path/to/crossdocked
