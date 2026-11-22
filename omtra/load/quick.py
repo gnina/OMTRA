@@ -141,6 +141,20 @@ def lig_encoder_from_config(cfg: DictConfig):
 
     return lig_encoder
 
+
+def is_primary_process():
+    """True in the process that should write run-level files.
+
+    Called while the model is built, i.e. before Lightning attaches a trainer, so `model.global_rank` is 0 in EVERY DDP process
+    (this made all four ranks write initialization_manifest.json and ranks 1-3 crash with FileExistsError). The subprocess DDP
+    launcher gives every child process its LOCAL_RANK; the original process has none.
+    """
+    import os
+    for key in ('LOCAL_RANK', 'RANK'):
+        if os.environ.get(key) not in (None, ''):
+            return int(os.environ[key]) == 0
+    return True
+
 def omtra_from_partial_checkpoint(cfg: DictConfig, ckpt_path: str, secondary_ckpt_path: Optional[str] = None) -> OMTRA:
     """
     Instantiate an OMTRA model from config, and load compatible weights from primary and optional secondary checkpoint.
@@ -159,36 +173,33 @@ def omtra_from_partial_checkpoint(cfg: DictConfig, ckpt_path: str, secondary_ckp
     ckpt1 = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state_dict1 = ckpt1["state_dict"] if "state_dict" in ckpt1 else ckpt1
 
-    excluded_keys = {"vector_field.task_embedding.weight"}
-    state_dict1 = {k: v for k, v in state_dict1.items() if k not in excluded_keys}
-    missing_keys, unexpected_keys = [], []
-    
-    for k, v in state_dict1.items():
-        try:
-            missing_key, unexpected_key = model.load_state_dict({k: v}, strict=False)
-            missing_keys.extend(missing_key)
-            unexpected_keys.extend(unexpected_key)
-        except Exception as e:
-            print(f"Error loading key {k}: {e}")
-            missing_keys.append(k)
-            continue
-    
-    print(f"Loaded from primary checkpoint: {ckpt_path}")
-    print(f"Missing keys: {len(missing_keys)}")
-
+    from omtra.load.weights import initialize_weights
+    import json
+    manifest_path = cfg.get('partial_load_expected_manifest')
+    if cfg.get('strict_partial_load', False) and not manifest_path:
+        raise ValueError('Strict initialization requires partial_load_expected_manifest; provide a reviewed manifest')
+    expected = json.loads(Path(manifest_path).read_text()) if manifest_path else None
+    manifest = initialize_weights(model, state_dict1, expected=expected,
+        allow_mismatch=cfg.get('partial_load_allow_mismatch', []),
+        excluded=tuple(cfg.get('partial_load_exclude', ['vector_field.task_embedding.weight'])))
+    hash_path=cfg.get('partial_load_expected_tensor_hashes')
+    if hash_path:
+        hashes=json.loads(Path(hash_path).read_text())
+        for key in ('loaded_tensor_sha256','new_initialization_sha256'):
+            if manifest[key]!=hashes[key]:raise ValueError(f'Frozen common initialization differs: {key}')
     if secondary_ckpt_path is not None:
-        ckpt2 = torch.load(secondary_ckpt_path, map_location="cpu", weights_only=False)
-        state_dict2 = ckpt2["state_dict"] if "state_dict" in ckpt2 else ckpt2
-
-        supplemental_state_dict = {
-            k: v for k, v in state_dict2.items()
-            if k in missing_keys and k not in excluded_keys
-        }
-        
-        for k, v in supplemental_state_dict.items():
-            try:
-                model.load_state_dict({k: v}, strict=False)
-            except Exception as e:
-                continue
-
+        ckpt2 = torch.load(secondary_ckpt_path, map_location='cpu', weights_only=False)
+        state2 = ckpt2.get('state_dict', ckpt2)
+        supplement = {k: v for k, v in state2.items() if k in manifest['new'] and k != 'vector_field.task_embedding.weight'}
+        if any(model.state_dict()[k].shape != v.shape for k, v in supplement.items()):
+            raise ValueError('Secondary checkpoint shape mismatch')
+        model.load_state_dict(supplement, strict=False)
+        model.initialization_manifest['secondary_loaded'] = sorted(supplement)
+    if is_primary_process() and model.og_run_dir:
+        output = Path(model.og_run_dir) / 'initialization_manifest.json'
+        if output.exists():
+            raise FileExistsError(output)
+        with output.open('x') as stream:
+            json.dump(model.initialization_manifest, stream, indent=2)
+    print(f"Loaded {len(manifest['loaded'])} exact keys; {len(manifest['new'])} target keys initialized afresh")
     return model
