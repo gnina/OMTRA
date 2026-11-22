@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from omtra.utils import omtra_root
 import numpy as np
 import zarr
 
@@ -7,7 +8,7 @@ import zarr
 def parse_args():
     p = argparse.ArgumentParser(description='Create new Zarr array for additional atom features.')
 
-    p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/pharmit_dev')
+    p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default=str(Path(omtra_root()) / 'data' / 'pharmit'))
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
     p.add_argument('--n_feats', type=int, default=6, help='Number of additional features per molecule.')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')

@@ -9,7 +9,7 @@ Example usage:
 
 ```console
 python phase1.py \
-    --pharmit_path /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit \ # path to the Pharmit dataset
+    --pharmit_path data/pharmit \ # path to the Pharmit dataset
     --store_name train  \ # train/val
     --n_feats 6 \ # number of extra features
     --array_name extra_feats \ # name of the new zarr array
@@ -33,7 +33,7 @@ Example usage:
 
 ```console
 python run_phase2.py \
-    --pharmit_path /net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit \ # path to the Pharmit dataset
+    --pharmit_path data/pharmit \ # path to the Pharmit dataset
     --store_name train  \ # train/val
     --array_name extra_feats \ # name of the new zarr array
     --n_cpus 1 \ # number of cpus. 1 cpu uses run_single (un-parallelized)

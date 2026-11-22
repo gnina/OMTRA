@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from omtra.utils import omtra_root
 from tqdm import tqdm
 import numpy as np
 import time
@@ -9,11 +10,11 @@ import zarr
 def parse_args():
     p = argparse.ArgumentParser(description='Get ligand atom counts, mean x-coord, and x-coord standard deviation for Pharmit ligands.')
 
-    p.add_argument('--pharmit_path', type=Path, help='Path to the Pharmit Zarr store.', default='/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit')
+    p.add_argument('--pharmit_path', type=Path, help='Path to the Pharmit Zarr store.', default=Path(omtra_root()) / 'data' / 'pharmit')
     p.add_argument('--split', type=str, help='Data split: train or val.', default='train')
     p.add_argument('--n_seeds', type=int, help='Number of indices to sample.', default=50)
     p.add_argument('--batch_size', type=int, help='Number of ligands to sample per seed index.', default=100000)
-    p.add_argument('--output_dir', type=Path, help='Output directory for processed data.', default=Path('/net/galaxy/home/koes/ltoft/OMTRA/omtra_pipelines/pharmit_ligand_properties/outputs/lig_x_std'))
+    p.add_argument('--output_dir', type=Path, help='Output directory for processed data.', default=Path('omtra_pipelines/pharmit_ligand_properties/outputs/lig_x_std'))
  
     return p.parse_args()
 

@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from omtra.utils import omtra_root
 import traceback
 from tqdm import tqdm
 import time
@@ -20,7 +21,7 @@ multiprocessing.set_start_method('spawn', force=True)
 def parse_args():
     p = argparse.ArgumentParser(description='Compute new ligand features in parallel and save to Pharmit Zarr store.')
 
-    p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/pharmit_dev')
+    p.add_argument('--pharmit_path', type=str, help='Path to the Pharmit Zarr store.', default=str(Path(omtra_root()) / 'data' / 'pharmit'))
     p.add_argument('--store_name', type=str, help='Name of the Zarr store.', default='train')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
     p.add_argument('--block_size', type=int, default=10000, help='Number of ligands to process in a block.')

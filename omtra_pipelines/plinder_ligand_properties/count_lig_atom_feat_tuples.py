@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from omtra.utils import omtra_root
 import traceback
 from tqdm import tqdm
 import time
@@ -17,7 +18,7 @@ from collections import defaultdict
 def parse_args():
     p = argparse.ArgumentParser(description='Get ligand atom feature tuple counts in Plinder dataset.')
 
-    p.add_argument('--plinder_path', type=str, help='Path to the Plinder Zarr store.', default='/net/galaxy/home/koes/ltoft/OMTRA/data/plinder')
+    p.add_argument('--plinder_path', type=str, help='Path to the Plinder Zarr store.', default=str(Path(omtra_root()) / 'data' / 'plinder'))
     p.add_argument('--split', type=str, help='Data split: train or val.', default='train')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
     p.add_argument('--block_size', type=int, default=1000000, help='Number of ligands to process in a block.')
