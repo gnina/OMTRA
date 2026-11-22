@@ -4,6 +4,8 @@ import pandas as pd
 from rdkit import Chem
 from posecheck import PoseCheck
 
+from omtra.eval.metrics.strain import strain_energies
+
 
 def posecheck_all(
     ligs: List[Chem.Mol],
@@ -30,32 +32,40 @@ def posecheck_all(
     """
     interaction_types = ["HBAcceptor", "HBDonor", "Hydrophobic", "PiStacking"]
 
-    pc = PoseCheck()
-    pc.load_protein_from_pdb(prot_file)
-    pc.load_ligands_from_mols(ligs)
-
     results: Dict[str, list] = {}
 
-    results["clashes"] = pc.calculate_clashes()
-
+    # Strain needs no protein: compute it first and independently, so that a receptor PoseCheck cannot parse (e.g. a Mn/Fe/Pr ion
+    # in the pocket) cannot remove it. Uses omtra.eval.metrics.strain (no spurious hydrogen on 4-coordinate atoms, seeded embeddings).
     if include_strain:
-        results["strain"] = pc.calculate_strain_energy()
+        results["strain"] = strain_energies(ligs)
 
-    interactions = pc.calculate_interactions()
-    n_lig_atoms = [lig.GetNumAtoms() for lig in ligs]
+    try:
+        pc = PoseCheck()
+        pc.load_protein_from_pdb(prot_file)
+        pc.load_ligands_from_mols(ligs)
 
-    for i_type in interaction_types:
-        cols = [col for col in interactions.columns if col[2] == i_type]
-        i_sum = interactions[cols].sum(axis=1)
-        results[i_type] = [
-            n_interactions / n_atoms
-            for (n_interactions, n_atoms) in zip(i_sum, n_lig_atoms)
-        ]
+        results["clashes"] = pc.calculate_clashes()
 
-    if include_interaction_recovery:
-        results["interaction_recovery"] = _interaction_recovery(
-            interactions, ligs, prot_file, true_lig, true_prot_file
-        )
+        interactions = pc.calculate_interactions()
+        n_lig_atoms = [lig.GetNumAtoms() for lig in ligs]
+
+        for i_type in interaction_types:
+            cols = [col for col in interactions.columns if col[2] == i_type]
+            i_sum = interactions[cols].sum(axis=1)
+            results[i_type] = [
+                n_interactions / n_atoms
+                for (n_interactions, n_atoms) in zip(i_sum, n_lig_atoms)
+            ]
+
+        if include_interaction_recovery:
+            results["interaction_recovery"] = _interaction_recovery(
+                interactions, ligs, prot_file, true_lig, true_prot_file
+            )
+    except Exception as e:  # protein-dependent metrics are NaN for this system; strain (above) is kept
+        print(f"[WARN] PoseCheck protein-dependent metrics failed for {prot_file}: {type(e).__name__}: {str(e)[:160]}; strain kept, clashes/interactions NaN", flush=True)
+        nan = [float("nan")] * len(ligs)
+        for key in ["clashes", *interaction_types] + (["interaction_recovery"] if include_interaction_recovery else []):
+            results[key] = list(nan)
 
     return results
 
@@ -103,12 +113,9 @@ def posecheck_clashes(ligs: List[Chem.Mol], prot_file: str) -> List[float]:
     return pc.calculate_clashes()
 
 
-def posecheck_strain(ligs: List[Chem.Mol], prot_file: str) -> List[float]:
-    """Compute strain energy for each ligand."""
-    pc = PoseCheck()
-    pc.load_protein_from_pdb(prot_file)
-    pc.load_ligands_from_mols(ligs)
-    return pc.calculate_strain_energy()
+def posecheck_strain(ligs: List[Chem.Mol], prot_file: Optional[str] = None) -> List[float]:
+    """Compute strain energy for each ligand (does not use the protein; ``prot_file`` is accepted for compatibility)."""
+    return strain_energies(ligs)
 
 
 def posecheck_interactions(
