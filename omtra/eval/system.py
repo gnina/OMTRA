@@ -104,7 +104,7 @@ class SampledSystem:
         # get all node features that are condensed atom types
         cond_a_feats = []
         for feat in lig_ndata_feats:
-            if "cond_a" not in feat:
+            if "cond_a" not in feat or feat.endswith("_cond_noise"):
                 continue
             parts = feat.split("cond_a")
             suffix = parts[1]  # Get the suffix after "cond_a"
@@ -398,6 +398,60 @@ class SampledSystem:
         )
         if g is None and reference and include_bonds:
             self._cached_protein_array = arr
+        return arr
+
+    def get_receptor_array(self, reference=False, observation=False, include_bonds=True):
+        """Protein plus retained environmental entities; ligand atoms are excluded."""
+        protein = self.get_protein_array(reference=reference, include_bonds=include_bonds).copy()
+        protein.set_annotation('charge', np.zeros(len(protein), dtype=int))
+        pd = self.g.nodes['prot_atom'].data
+        if observation and 'x_cond' in pd:
+            protein.coord = pd['x_cond'].cpu().numpy()
+        if 'npnde' not in self.g.ntypes or self.g.num_nodes('npnde') == 0:
+            return protein
+        data = self.g.nodes['npnde'].data
+        suffix = '1_true' if reference else '1'
+        if f'x_{suffix}' not in data:
+            suffix = '1_true'
+        arr = struc.AtomArray(self.g.num_nodes('npnde'))
+        coords = data.get('x_cond', data['x_1_true']) if observation else data[f'x_{suffix}']
+        arr.coord = coords.cpu().numpy()
+        element = np.asarray(self.npnde_atom_type_map)[data['a_1_true'].cpu().numpy()]
+        groups = data.get('entity_idx', torch.zeros(len(arr),dtype=torch.long)).cpu().numpy()
+        arr.element = element
+        arr.res_id = groups + 1
+        arr.chain_id = np.full(len(arr), 'Z')
+        arr.hetero = np.ones(len(arr), dtype=bool)
+        if 'c_1_true' in data:
+            arr.set_annotation('charge', np.asarray(self.charge_map)[data['c_1_true'].cpu().numpy()])
+        else:
+            arr.set_annotation('charge', np.zeros(len(arr), dtype=int))
+        if 'ccd_code' in data:
+            arr.res_name = np.asarray([''.join(chr(int(c)) for c in row if c) for row in data['ccd_code'].cpu().tolist()])
+        else:
+            arr.res_name = np.full(len(arr), 'LIG')
+        names = np.empty(len(arr),dtype='U6')
+        for group in np.unique(groups):
+            mask = groups == group
+            names[mask] = struc.create_atom_names(element[mask])
+        arr.atom_name = names
+        if include_bonds:
+            src, dst = self.g.edges(etype='npnde_to_npnde')
+            ed = self.g.edges['npnde_to_npnde'].data
+            orders = ed.get('e_1_true')
+            if orders is not None:
+                bonds = [[int(a),int(b),9 if int(t)==4 else int(t)] for a,b,t in
+                         zip(src.cpu(),dst.cpu(),orders.cpu()) if a < b and 0 < int(t) <= 4]
+                arr.bonds = struc.BondList(len(arr),np.asarray(bonds,dtype=int).reshape(-1,3))
+        return struc.concatenate([protein,arr])
+
+    def get_initial_receptor_array(self,include_bonds=True):
+        """Actual initial noisy-holo receptor, including its retained cofactors."""
+        arr=self.get_receptor_array(reference=True,include_bonds=include_bonds).copy()
+        n=self.g.num_nodes('prot_atom')
+        arr.coord[:n]=self.g.nodes['prot_atom'].data['x_0'].cpu().numpy()
+        if self.g.num_nodes('npnde'):
+            arr.coord[n:]=self.g.nodes['npnde'].data['x_0'].cpu().numpy()
         return arr
 
     def get_rdkit_ligand(self, show_fake_atoms=False) -> Union[None, Chem.Mol]:
@@ -717,11 +771,19 @@ class SampledSystem:
             suffix = "1"
         elif kind == 'gt':
             suffix = "1_true"
+        elif kind == 'input':
+            suffix = 'cond'
         else:
-            raise ValueError("kind must be either 'predicted' or 'gt'.")
+            raise ValueError("kind must be predicted, gt, or input.")
 
-        coords = g.nodes['pharm'].data[f'x_{suffix}'].numpy()
-        pharm_types_idx = g.nodes['pharm'].data[f'a_{suffix}'].numpy().tolist()
+        data = g.nodes['pharm'].data
+        if g.num_nodes('pharm') == 0:
+            coords = np.empty((0, 3))
+            pharm_types_idx = []
+        else:
+            coords = data[f'x_{suffix}'].detach().cpu().numpy()
+            type_key = 'a_1_true' if kind == 'input' and 'a_cond' not in data else f'a_{suffix}'
+            pharm_types_idx = data[type_key].detach().cpu().numpy().tolist()
         pharm_types = [ constants.ph_idx_to_type[idx] for idx in pharm_types_idx ]
         pharm_types_elems = [ constants.ph_idx_to_elem[idx] for idx in pharm_types_idx ] 
 
@@ -796,7 +858,7 @@ class SampledSystem:
         if trajectory:
             arrs = self.build_traj(ep_traj=endpoint, prot=True)['prot']
         else:
-            arrs = [self.get_protein_array(reference=ground_truth)]
+            arrs = [self.get_receptor_array(reference=ground_truth)]
         
         write_arrays_to_cif(arrs, str(output_file))
         
@@ -809,7 +871,7 @@ class SampledSystem:
         ):
         """Write a protein a PDB file."""
         output_dir = Path(output_dir)
-        arrs = [self.get_protein_array(reference=ground_truth)]
+        arrs = [self.get_receptor_array(reference=ground_truth)]
         write_arrays_to_pdb(arrs, output_dir, filename)
 
 
