@@ -91,6 +91,26 @@ def _fixed_frag_metrics(sys: SampledSystem) -> Dict[str, float]:
     result["frac_fixed_redesigned"] = (n_atom_same + n_edge_same) / n_total
     result["frac_fixed_redesigned_≤2Å"] = (n_atom_same_close + n_edge_same_close) / n_total
 
+    # Explicit whole-fragment chemistry/coordinate success, without changing legacy fields.
+    for reference, suffix in (('clean','1_true'), ('input','cond')):
+        chemical_key = 'cond_a' if 'cond_a_1' in lig_data else 'a'
+        target_key = f'{chemical_key}_{suffix}'
+        if target_key not in lig_data:
+            target_key = f'{chemical_key}_1_true'
+        chemistry = lig_data[f'{chemical_key}_1'][fixed_node_mask] == lig_data[target_key][fixed_node_mask]
+        if chemical_key == 'a' and 'c_1' in lig_data:
+            ckey = f'c_{suffix}' if f'c_{suffix}' in lig_data else 'c_1_true'
+            chemistry = chemistry & (lig_data['c_1'][fixed_node_mask] == lig_data[ckey][fixed_node_mask])
+        xkey = f'x_{suffix}' if f'x_{suffix}' in lig_data else 'x_1_true'
+        displacement = torch.norm(x_pred-lig_data[xkey][fixed_node_mask],dim=-1)
+        edges_ok = True
+        if n_fixed_edges:
+            ekey = f'e_{suffix}' if f'e_{suffix}' in edge_data else 'e_1_true'
+            edges_ok = bool((edge_data['e_1'][fixed_edge_mask] == edge_data[ekey][fixed_edge_mask]).all())
+        result[f'fixed_fragment_{reference}_chemistry'] = float(bool(chemistry.all()) and edges_ok)
+        result[f'fixed_fragment_{reference}_rmsd'] = float(displacement.square().mean().sqrt())
+        result[f'fixed_fragment_{reference}_success'] = float(bool(chemistry.all()) and edges_ok and bool((displacement < 2.).all()))
+
     return result
 
 
@@ -125,7 +145,7 @@ def fixed_frag_metrics(
             sys_id = f"sys_{sys_idx}_gt"
             if protein_generated:
                 protein_id = f"gen_prot_{rep_idx}"
-                gen_ligand_id = "gen_ligands_0"
+                gen_ligand_id = f"gen_ligands_{rep_idx}"
             else:
                 protein_id = "protein_0"
                 gen_ligand_id = f"gen_ligands_{rep_idx}"
