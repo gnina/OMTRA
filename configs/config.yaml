@@ -16,6 +16,12 @@ mode: omtra # mode for training, can be omtra (train omtra) or ligand_encoder (t
 
 seed: 42
 
+# Data-parallel sampling. Each rank must see DIFFERENT batches. 'auto' = distributed sampling whenever
+# trainer.devices * trainer.num_nodes > 1 (ranks draw disjoint chunk fractions; the task/dataset draw is broadcast from rank 0).
+# 'false' reproduces the legacy behaviour (every rank draws the same batches from the same seed => extra GPUs add nothing);
+# only use it to resume a run that was started that way.
+distributed_sampling: auto  # auto | true | false
+
 name: i_forgot_to_name_my_run
 
 # global overrides
@@ -33,9 +39,10 @@ crop_max_distance: 10 # maximum crop distance for Plinder + CrossDocked dynamic 
 alpha: null # beta-distribution alpha for Plinder + CrossDocked dynamic cropping (null -> no dynamic crop)
 beta: null # beta-distribution beta for Plinder + CrossDocked dynamic cropping (null -> no dynamic crop)
 additional_prot_crop: null # additional fixed distance to crop protein pocket during inference (test split)
-pharm_pos_std: 0.0 # standard deviation to sample noise variance from for pharm positions
-prot_pos_std: 0.5 # standard deviation to sample noise std dev from for protein atom positions
-lig_com_offset_std: 0.0 # standard deviation for offsetting ligand center of mass (0 -> no offset)
+pharm_pos_std: 0.0 # maximum per-point Gaussian std; sigma sampled uniformly from [0, value]
+prot_pos_std: 0.0 # optional fixed-pocket input noise; flexible docking has its own 1 A prior
+lig_com_offset_std: 0.0 # maximum uniform radial ligand-prior center offset (not a Gaussian std)
+lig_com_offset_zero_p: 0.0 # fraction of samples that receive no COM offset (0 -> all samples offset)
 offset_std: 0.0 # offset to prior positions
 
 pharmit_path: ${omtra_root:}/data/pharmit
@@ -51,3 +58,7 @@ hydra:
   run:
     # make the timestap use milliseconds
     dir: ./outputs/${now:%Y-%m-%d}/${name}_${now:%Y-%m-%d_%H-%M-%f}
+partial_mode: whole_fragments
+partial_bernoulli_p: null # null samples probability uniformly, matching historical runs
+fixed_coord_max_std: 0.0
+fixed_token_max_prob: 0.0

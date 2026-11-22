@@ -8,3 +8,5 @@ alpha: ${alpha}
 beta: ${beta}
 additional_prot_crop: ${additional_prot_crop} # additional fixed distance to crop protein pocket during inference (test split)
 # graphs_per_chunk: 1000
+partial_mode: ${partial_mode}
+partial_bernoulli_p: ${partial_bernoulli_p}

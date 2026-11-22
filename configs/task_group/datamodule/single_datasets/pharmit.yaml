@@ -3,3 +3,5 @@
 
 processed_data_dir: ${pharmit_path}
 # graphs_per_chunk: 500
+partial_mode: ${partial_mode}
+partial_bernoulli_p: ${partial_bernoulli_p}
