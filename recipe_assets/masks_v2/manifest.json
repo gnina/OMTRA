@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "views": {
+    "plinder/no_links/train": {
+      "key": "plinder",
+      "count": 128572,
+      "fingerprint": "ea6989e295e0cc4cc88f38bb8d6ab1dceca1f650b207b62f8b7f66a76414e5b5",
+      "records_with_independent_identity": 127657,
+      "status_counts": {
+        "ok": 127657,
+        "chemistry_mismatch": 915
+      },
+      "verified_atoms": 488621,
+      "verified_ez_bonds": 13461,
+      "audit_shards_sha256": "f76a6a8a272f3e23a4b4feaa0872caea4badc530c914e41fc2bcb169bf70e5e6"
+    },
+    "crossdocked/default/train": {
+      "key": "crossdocked",
+      "count": 38407,
+      "fingerprint": "03b3c8ac4291043e5d1bf14fca84bb5877c938acfe392bf1fbcb8a108aa1a435",
+      "records_with_independent_identity": 33356,
+      "status_counts": {
+        "ok": 33356,
+        "no_unique_annotation": 5051
+      },
+      "verified_atoms": 54888,
+      "verified_ez_bonds": 2661,
+      "audit_shards_sha256": "06d51bb40c215449a1e3c2e1faea0dd25259d027c36c09f1a81076acd67b55c3"
+    },
+    "plinder/no_links/val": {
+      "key": "plinder_val",
+      "count": 617,
+      "fingerprint": "92884be6dc176039a8a3773e1892e7fcdd210e17b2d1267d0158729b342bed68",
+      "records_with_independent_identity": 614,
+      "status_counts": {
+        "ok": 614,
+        "chemistry_mismatch": 3
+      },
+      "verified_atoms": 2493,
+      "verified_ez_bonds": 78,
+      "audit_shards_sha256": "0bade12de57c24adacf27ae3676f5082efdc439b6f3b9a6e358ad4b1b8ef31b5"
+    },
+    "crossdocked/default/val": {
+      "key": "crossdocked_val",
+      "count": 86,
+      "fingerprint": "9807470130886b3a981db18d5faa9a6d38ac413228671e6e1b71e1ad5e8a4a57",
+      "records_with_independent_identity": 75,
+      "status_counts": {
+        "ok": 75,
+        "no_unique_annotation": 11
+      },
+      "verified_atoms": 191,
+      "verified_ez_bonds": 11,
+      "audit_shards_sha256": "00d2553be73b772027ae2c8dc1ef1466c398e46974e3fe66b62e26a1701fd369"
+    }
+  },
+  "masks_sha256": "06a1a5fe3346163956f00ddf2abaec640acd83e37e9fb836d5d6bf0b57fa5bae",
+  "status_codes": [
+    "ok",
+    "chemistry_mismatch",
+    "no_unique_annotation",
+    "ambiguous_annotation",
+    "annotation_unparseable",
+    "no_mapping",
+    "error"
+  ],
+  "rule": "pose-derived label kept for non-phosphorus centres / E-Z bonds whose independent source agrees under the best atom mapping (<=64 mappings); records WITHOUT an independent identity (missing annotation, chemistry mismatch, ...) keep every pose-derived label (settled policy), with the status recorded separately; Pharmit has no source",
+  "sources": {
+    "plinder": "annotation_table.parquet ligand_smiles (provenance not certified per record)",
+    "crossdocked": "source PDB/CCD annotation ligand_smiles"
+  },
+  "note": "validation views are bound to the resolved filtered membership; exact-PDB validation exclusions are applied by the panel builder before any graph is built"
+}
