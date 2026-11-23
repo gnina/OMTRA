@@ -18,7 +18,7 @@ python ./omtra_pipelines/docking_eval/docking_eval.py \
     --n_replicates 100 \
     --max_batch_size 100 \
     --timeout 2700 \
-    --sys_idx_file omtra_pipelines/docking_eval/plinder_eval_sys_idxs.csv
+    --sys_idx_file omtra_pipelines/docking_eval/eval_idx_files/plinder_eval_sys_idxs.csv
 ```
 
 #### Crossdocked De Novo Design
@@ -45,7 +45,7 @@ python ./omtra_pipelines/docking_eval/docking_eval.py \
     --n_replicates 100 \
     --max_batch_size 100 \
     --timeout 2700 \
-    --sys_idx_file omtra_pipelines/docking_eval/plinder_eval_sys_idxs.csv
+    --sys_idx_file omtra_pipelines/docking_eval/eval_idx_files/plinder_eval_sys_idxs.csv
 ```
 
 #### Posebusters Docking 
@@ -72,7 +72,7 @@ python ./omtra_pipelines/docking_eval/docking_eval.py \
     --n_replicates 100 \
     --max_batch_size 100 \
     --timeout 2700 \
-    --sys_idx_file omtra_pipelines/docking_eval/plinder_eval_sys_idxs.csv
+    --sys_idx_file omtra_pipelines/docking_eval/eval_idx_files/plinder_eval_sys_idxs.csv
 ```
 
 #### Pharmacophore-Conditioned Docking
@@ -86,9 +86,39 @@ python ./omtra_pipelines/docking_eval/docking_eval.py \
     --n_replicates 100 \
     --max_batch_size 100 \
     --timeout 2700 \
-    --sys_idx_file omtra_pipelines/docking_eval/plinder_eval_sys_idxs.csv
+    --sys_idx_file omtra_pipelines/docking_eval/eval_idx_files/plinder_eval_sys_idxs.csv
 ```
 
+
+-----------------------------------------------------------------------------------------------------
+# Sensitivity to the supplied pocket center and other inputs
+By default `docking_eval.py` gives the model the center of the reference ligand (an oracle input) and the size of the reference ligand. The options below change what the model is given, so you can test how much a result depends on it. They are off unless stated.
+
+| Option | Effect |
+|--------|--------|
+| `--com_offset_magnitude <Å>` | Apply a random offset of this magnitude to the ground-truth ligand center of mass that defines the pocket, before sampling. `0` disables it. |
+| `--center_source {ligand,pocket}` | `ligand` (default) uses the reference ligand center (oracle). `pocket` uses the supplied pocket centroid. |
+| `--additional_prot_crop <Å>` | Evaluation-only fixed pocket crop around the ligand, applied regardless of the crop settings stored in the checkpoint. |
+| `--sample_ligand_size` / `--oracle_ligand_size` | Infer the de novo ligand size from the dataset prior, or use the reference ligand size. |
+| `--pharm_input_noise_std`, `--fixed_coord_max_std`, `--fixed_token_max_prob` | Simulate errors in the supplied pharmacophore, partial ligand coordinates, and partial ligand chemistry. |
+| `--seed <int>` | Make the conditioning selection, crop, perturbations and sampling reproducible. |
+
+Example: Plinder docking with the pocket center shifted by 4 Å.
+```console
+python ./omtra_pipelines/docking_eval/docking_eval.py \
+    --ckpt_path <PATH>/last.ckpt \
+    --task rigid_docking_condensed \
+    --dataset plinder \
+    --split test \
+    --n_samples 100 \
+    --n_replicates 100 \
+    --max_batch_size 100 \
+    --timeout 2700 \
+    --com_offset_magnitude 4.0 \
+    --seed 0 \
+    --sys_idx_file omtra_pipelines/docking_eval/eval_idx_files/plinder_eval_sys_idxs.csv
+```
+Run `python omtra_pipelines/docking_eval/docking_eval.py --help` for the full list of options.
 
 # rountines/sample.py
 Models: 
