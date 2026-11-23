@@ -1,11 +1,17 @@
 import pytest
 import numpy as np
 import json
+import shutil
 import subprocess
+from pathlib import Path
 from rdkit import Chem
 from omtra.data.pharmacophores import get_pharmacophores
 from omtra.constants import ph_type_to_idx, ph_idx_to_type
 
+DATA = Path(__file__).parent
+
+
+@pytest.mark.skipif(shutil.which("pharmit") is None, reason="requires the pharmit executable")
 @pytest.mark.parametrize("sdf_path, pdb_path", [
     ("test_lig.sdf", None),
     ("test_lig.sdf", "test_rec.pdb")
@@ -14,6 +20,8 @@ def test_pharmacophores(tmp_path, sdf_path, pdb_path):
     """Test that get_pharmacophores produces the same output as Pharmit."""
     
     ph_out_file = tmp_path / "pharmit_output.json"
+    sdf_path = str(DATA / sdf_path)
+    pdb_path = str(DATA / pdb_path) if pdb_path else None
     lig = Chem.SDMolSupplier(sdf_path)[0]
     
     if pdb_path:

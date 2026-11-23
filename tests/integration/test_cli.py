@@ -73,7 +73,7 @@ def test_cli_protein_conditioned_missing_protein(tmp_path, mock_checkpoint):
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "fixed_protein_ligand_denovo_condensed",
             "--n_samples", "1"
         ],
@@ -96,7 +96,7 @@ def test_cli_protein_conditioned_with_protein(tmp_path, mock_checkpoint, mock_mo
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "fixed_protein_ligand_denovo_condensed",
             "--protein_file", str(test_protein),
             "--n_samples", "2",
@@ -120,7 +120,7 @@ def test_cli_protein_conditioned_warning_no_ligand(tmp_path, mock_checkpoint):
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "fixed_protein_ligand_denovo_condensed",
             "--protein_file", str(test_protein),
             "--n_samples", "1"
@@ -139,7 +139,7 @@ def test_cli_ligand_conditioned_missing_ligand(tmp_path, mock_checkpoint):
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "ligand_conformer_condensed",
             "--n_samples", "1"
         ],
@@ -157,7 +157,7 @@ def test_cli_validation_with_dataset_path(tmp_path, mock_checkpoint):
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "fixed_protein_ligand_denovo_condensed",
             "--pharmit_path", str(tmp_path),
             "--n_samples", "1"
@@ -182,7 +182,7 @@ def test_cli_input_files_validation(tmp_path, mock_checkpoint):
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "expapo_conditioned_ligand_docking_condensed",
             "--protein_file", str(test_protein),
             "--ligand_file", str(test_ligand),
@@ -210,7 +210,7 @@ def test_cli_pharmacophore_conditioned_missing_pharmacophore(tmp_path, mock_chec
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "denovo_ligand_from_pharmacophore_condensed",
             "--n_samples", "1"
         ],
@@ -228,7 +228,7 @@ def test_cli_pharmacophore_conditioned_with_pharmacophore(tmp_path, mock_checkpo
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "denovo_ligand_from_pharmacophore_condensed",
             "--pharmacophore_file", str(test_pharmacophore),
             "--n_samples", "1"
@@ -251,7 +251,7 @@ def test_cli_protein_pharmacophore_conditioned_missing_pharmacophore(tmp_path, m
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "fixed_protein_pharmacophore_ligand_denovo_condensed",
             "--protein_file", str(test_protein),
             "--n_samples", "1"
@@ -270,7 +270,7 @@ def test_cli_protein_pharmacophore_conditioned_missing_protein(tmp_path, mock_ch
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "fixed_protein_pharmacophore_ligand_denovo_condensed",
             "--pharmacophore_file", str(test_pharmacophore),
             "--n_samples", "1"
@@ -293,7 +293,7 @@ def test_cli_protein_pharmacophore_conditioned_with_both(tmp_path, mock_checkpoi
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "fixed_protein_pharmacophore_ligand_denovo_condensed",
             "--protein_file", str(test_protein),
             "--pharmacophore_file", str(test_pharmacophore),
@@ -317,7 +317,7 @@ def test_cli_protein_pharmacophore_conditioned_warning_no_ligand(tmp_path, mock_
     result = subprocess.run(
         [
             sys.executable, str(cli_path),
-            str(mock_checkpoint),
+            "--checkpoint", str(mock_checkpoint),
             "--task", "fixed_protein_pharmacophore_ligand_denovo_condensed",
             "--protein_file", str(test_protein),
             "--pharmacophore_file", str(test_pharmacophore),

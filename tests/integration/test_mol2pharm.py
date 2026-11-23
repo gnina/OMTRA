@@ -191,7 +191,7 @@ def test_omtra_subcommand(tmp_path):
     # Test using 'omtra mol2pharm' command
     result = subprocess.run(
         [
-            "omtra", "mol2pharm",
+            sys.executable, str(Path(__file__).resolve().parents[2] / "cli.py"), "mol2pharm",
             str(test_lig_path),
             "-o", str(output_path),
             "--pretty"
