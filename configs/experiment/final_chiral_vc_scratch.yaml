@@ -1,0 +1,46 @@
+# @package _global_
+# FINAL RECIPE (control layer on top of final_chiral_data) (validation-controlled, from scratch): the balanced 13-task allocation + the chirality fix (final_multitask_balanced_chiral) with
+#   * genuinely random initialization: partial_ckpt is NULL (no trained parent, no inherited optimizer state, no LR split for pretrained parameters);
+#   * the global edge budget stated explicitly: 4 ranks x 55,000 edges = 220,000 per optimizer update, accumulate_grad_batches=1;
+#   * ONE LR owner: base x linear warmup x cumulative controller multiplier (omtra.utils.training_control); no competing scheduler or legacy controller;
+#   * persistent EMA (inside the resumable checkpoint) next to the raw weights; both streams are evaluated by the external CPU evaluator;
+#   * all assets resolved inside this repository (recipe_assets/);
+#   * max_steps is a RESOURCE ceiling only (training ends by the controller's convergence or by this ceiling, which is labelled resource_limited).
+# The numeric control policy comes from a FROZEN calibration file (calibration.json). Startup fails on a provisional/placeholder policy.
+defaults:
+  - final_chiral_data
+  - _self_
+
+name: final_chiral_vc_scratch
+max_steps: 10000000               # resource ceiling, NOT a scientific stopping step
+
+trainer:
+  devices: 4
+  num_nodes: 1
+  accumulate_grad_batches: 1
+  precision: 32-true               # stated explicitly (it is Lightning's default)
+  limit_val_batches: 0            # the old in-training sampling validation loop stays OFF; evaluation is external and asynchronous
+  num_sanity_val_steps: 0
+  val_check_interval: 1.0
+model:
+  lr_warmup_steps: 1000
+  lr_pretrained_mult: 1.0
+  control_policy_path: ${oc.env:OMTRA_CONTROL_POLICY}      # frozen calibration.json; the run refuses to start without a frozen policy
+  control_run_uuid: ${oc.env:OMTRA_RUN_UUID}
+  control_evidence_dir: ${oc.env:OMTRA_EVIDENCE_DIR}
+  control_command_path: ${oc.env:OMTRA_RUN_COMMAND,null}
+  control_resource_flag: ${oc.env:OMTRA_RESOURCE_FLAG,null}
+  control_poll_every: 100
+  control_checkpoint_every: 25000
+  control_production: true
+  control_meta:
+    recipe: final_chiral_vc_scratch
+
+task_group:
+  datamodule:
+    track_consumption: true        # added 2026-11-12 (user decision): bookkeeping only; restores the sampler's consumed-batch state on resume so chained segments continue the data order instead of re-drawing it
+
+callbacks:
+  persistent_ema:
+    _target_: omtra.utils.persistent_ema.PersistentEMACallback
+    decay: 0.9998

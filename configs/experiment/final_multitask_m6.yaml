@@ -1,0 +1,51 @@
+# @package _global_
+# Shared base recipe for the final multitask allocation (used with task_group=final_multitask_balanced).
+defaults:
+  - override /task_group: final_multitask_balanced
+  - override /trainer: distributed
+  - override /graph: more_prot
+  - override /prior: [conformer_indep_offset, denovo_permute_offset, final_partial]
+  - override /model/aux_losses: pairs
+
+name: final_multitask_balanced
+partial_ckpt: null
+max_steps: 400000
+edges_per_batch: 220000
+num_workers: 6
+plinder_pskip_factor: 1.0
+
+trainer:
+  devices: 2
+  val_check_interval: 800
+  limit_val_batches: 5
+
+model:
+  train_t_dist: beta
+  t_alpha: 1.8
+  cat_loss_weight: 0.8
+  time_scaled_loss: true
+  validate_noisy_pharmacophores: true
+  vector_field:
+    soft_partial_conditioning: true
+    pharm_pos_std_flag: true
+
+crop_min_distance: 8.0
+crop_max_distance: 12.0
+alpha: 1.61
+beta: 0.91
+lig_com_offset_std: 4.0
+lig_com_offset_zero_p: 0.0
+
+pharmit_path: ${omtra_root:}/data/pharmit
+plinder_path: ${omtra_root:}/data/plinder_12A_final
+crossdocked_path: ${omtra_root:}/data/crossdocked/External_Split_Pocket12
+plinder_exclude_file: ${omtra_root:}/recipe_assets/leakage_analysis/plinder_train_exclude_cd30_pb30.txt
+crossdocked_exclude_file: ${omtra_root:}/recipe_assets/leakage_analysis/crossdocked_train_exclude_plinder30_pb30.txt
+
+# Input-robustness settings.
+pharm_pos_std: 0.8
+fixed_coord_max_std: 0.5
+fixed_token_max_prob: 0.2
+partial_mode: mixed
+partial_bernoulli_p: null
+prot_pos_std: 0.0 # preserve fixed-pocket M6 behavior; flexible uses a noisy-holo prior

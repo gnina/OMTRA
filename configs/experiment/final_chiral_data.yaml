@@ -1,0 +1,16 @@
+# @package _global_
+# Data and architecture part of the final recipe (no controller, no EMA): shared by training and by the validation-panel / mask builders so they cannot drift.
+# = the balanced 13-task allocation + the chirality fix (final_multitask_balanced_chiral), random initialization, explicit 220,000-edge global budget,
+# all assets resolved inside this repository (recipe_assets/).
+defaults:
+  - final_multitask_balanced_chiral
+  - _self_
+
+partial_ckpt: null
+checkpoint: null
+seed: 42
+edges_per_batch: 55000            # per rank; global = trainer.devices x trainer.num_nodes x this
+expected_global_edges: 220000
+plinder_exclude_file: ${omtra_root:}/recipe_assets/leakage_analysis/plinder_train_exclude_cd30_pb30.txt
+crossdocked_exclude_file: ${omtra_root:}/recipe_assets/leakage_analysis/crossdocked_train_exclude_plinder30_pb30.txt
+matched_mask_path: ${omtra_root:}/recipe_assets/masks_v2

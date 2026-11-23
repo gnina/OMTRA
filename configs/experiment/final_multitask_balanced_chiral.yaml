@@ -1,0 +1,36 @@
+# @package _global_
+# Balanced 13-task allocation with the chirality fix, on top of final_multitask_m6 (task_group=final_multitask_balanced).
+#
+# The chirality fix acts on every task that supplies the ligand identity (7 of the 13 tasks, 56.15% of the steps): rigid docking, rigid docking + pharmacophore,
+# partial rigid docking, flexible docking and the three ligand-conformer tasks. The six ligand-generating tasks are untouched (no labels, no arrows, no margin loss).
+#   - labels: whenever there is a stereo label the model must use it, so every pose-derived label is kept (matched_geometry: dropped only where an independent
+#     identity checked it and DISAGREES with the pose or leaves the centre UNSPECIFIED; sources without an independent identity, e.g. Pharmit, keep all labels);
+#   - phosphorus is never a stereocentre (omtra/data/requested_stereo.py attach_identity): no label, no arrow, no margin loss, in training and at inference;
+#   - 25% of the molecules train with all labels hidden (the unknown mode);
+#   - the correction feature (arrows computed from the requested hand, fed into the ligand vector channels before every layer) and the margin loss (weight 0.3).
+# The new modules are new parameters (zero-initialized where stated in the model code).
+defaults:
+  - final_multitask_m6
+  - override /task_group: final_multitask_balanced
+  - override /model/aux_losses: pairs_chirality_margin     # the two pair-distance losses + the margin handedness loss
+
+name: final_multitask_balanced_chiral
+# Immutable sidecar with the membership fingerprints of the leakage-filtered PLINDER / CrossDocked views.
+matched_mask_path: ${omtra_root:}/recipe_assets/masks_v2
+trainer:
+  limit_val_batches: 0           # validation off: the matched-label sidecar only covers TRAINING views
+  num_sanity_val_steps: 0
+task_group:
+  datamodule:
+    enable_validation: false
+    stereo_features: true
+    stereo_source: matched_geometry
+    matched_mask_path: ${matched_mask_path}
+    stereo_hide_p_all: 0.25
+    stereo_hide_p_partial: 0.0
+    stereo_hide_partial_rate: 0.5
+model:
+  vector_field:
+    stereo_features: true
+    stereo_enabled: true
+    stereo_correction: true
