@@ -414,6 +414,8 @@ See the [Distributed Sampling Pipeline README](omtra_pipelines/distributed_sampl
 
 Refer to [docs/training.md](docs/training.md) for details on training OMTRA models.
 
+The recipe used for the v1 model is described in [The v1 training recipe](docs/training.md#the-v1-training-recipe).
+
 -----------------------------------------------------------------------------------------------------
 
 # Additional Documentation
