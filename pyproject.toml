@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omtra"
-version = "0.0.0"
+version = "1.0.0"
 description = "A multitask model for small-molecule drug discovery"
 readme = "readme.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = {text = "Apache 2.0"}
 authors = [
     {name = "da koes group"}
@@ -40,7 +40,8 @@ dependencies = [
     "pynndescent",
     "duckdb",
     "mols2grid",
-    "posebusters"
+    "posebusters",
+    "posecheck"
 ]
 
 [tool.setuptools.packages.find]
