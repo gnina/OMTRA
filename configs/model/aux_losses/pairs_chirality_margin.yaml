@@ -1,0 +1,15 @@
+prot_lig_pairdist:
+  params:
+    weight: 0.3
+    d_max: 4.5
+
+lig_pairdist:
+  params:
+    weight: 0.3
+    d_max: 4.0
+
+# Margin handedness loss (omtra/aux_losses/chirality_margin.py): molecule-normalised squared hinge, margin 0.2.
+chirality_margin:
+  params:
+    weight: 0.3
+    margin: 0.2

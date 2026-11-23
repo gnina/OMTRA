@@ -18,3 +18,7 @@ cat_loss_weight: 0.8
 time_scaled_loss: False
 pharm_pos_std: ${pharm_pos_std}
 lig_com_offset_std: ${lig_com_offset_std}
+lig_com_offset_zero_p: ${lig_com_offset_zero_p}
+fixed_coord_max_std: ${fixed_coord_max_std}
+fixed_token_max_prob: ${fixed_token_max_prob}
+prot_pos_std: ${prot_pos_std}

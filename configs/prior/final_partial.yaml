@@ -1,0 +1,9 @@
+# Partial tasks use the same ligand priors as their full-information counterparts.
+partial_rigid_docking_condensed:
+  lig_x: ${prior.rigid_docking_condensed.lig_x}
+partial_fixed_protein_ligand_denovo_condensed:
+  lig_x: ${prior.fixed_protein_ligand_denovo_condensed.lig_x}
+partial_denovo_ligand_condensed:
+  lig_x: ${prior.denovo_ligand_condensed.lig_x}
+partial_ligand_conformer_condensed:
+  lig_x: ${prior.ligand_conformer_condensed.lig_x}
