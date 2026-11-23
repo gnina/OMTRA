@@ -5,7 +5,7 @@ from rdkit import Chem
 
 def receptor_quality(system):
     if 'protein_structure' not in system.task.groups_generated:return {}
-    from scripts.refinement_eval.metrics import quality,rmsds
+    from omtra.eval.metrics.refinement import quality,rmsds
     g=system.g;data=g.nodes['prot_atom'].data
     if any(k not in data for k in ('x_0','x_1','x_1_true')):
         return {'receptor_metrics_present':False}
