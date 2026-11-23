@@ -1,0 +1,36 @@
+# Shared dataset assignments for the final multitask allocation.
+# The two existing protein tasks keep a 25/75 CrossDocked/PLINDER mix.
+# Added protein tasks follow their existing PLINDER-only task-group configs.
+defaults:
+  - _self_
+  - datamodule: default
+
+dataset_task_coupling:
+  rigid_docking_condensed:
+    - [crossdocked, 0.25]
+    - [plinder, 0.75]
+  fixed_protein_ligand_denovo_condensed:
+    - [crossdocked, 0.25]
+    - [plinder, 0.75]
+  rigid_docking_pharmacophore_condensed:
+    - [plinder, 1.0]
+  fixed_protein_pharmacophore_ligand_denovo_condensed:
+    - [plinder, 1.0]
+  partial_rigid_docking_condensed:
+    - [plinder, 1.0]
+  partial_fixed_protein_ligand_denovo_condensed:
+    - [plinder, 1.0]
+  flexible_docking_condensed:
+    - [plinder, 1.0]
+  denovo_ligand_condensed:
+    - [pharmit, 1.0]
+  ligand_conformer_condensed:
+    - [pharmit, 1.0]
+  denovo_ligand_from_pharmacophore_condensed:
+    - [pharmit, 1.0]
+  ligand_conformer_from_pharmacophore_condensed:
+    - [pharmit, 1.0]
+  partial_denovo_ligand_condensed:
+    - [pharmit, 1.0]
+  partial_ligand_conformer_condensed:
+    - [pharmit, 1.0]

@@ -1,0 +1,35 @@
+# Balanced allocation. Probabilities are shares of optimizer steps.
+# All 13 tasks participate from the first step; no later task phase.
+defaults:
+  - final_multitask_common
+  - _self_
+
+task_phases:
+  - duration_batches: null
+    tasks:
+      - name: rigid_docking_condensed
+        probability: 0.1500 # 15%
+      - name: fixed_protein_ligand_denovo_condensed
+        probability: 0.1500 # 15%
+      - name: rigid_docking_pharmacophore_condensed
+        probability: 0.1230 # 12.3%
+      - name: fixed_protein_pharmacophore_ligand_denovo_condensed
+        probability: 0.1230 # 12.3%
+      - name: partial_rigid_docking_condensed
+        probability: 0.1230 # 12.3%
+      - name: partial_fixed_protein_ligand_denovo_condensed
+        probability: 0.1230 # 12.3%
+      - name: flexible_docking_condensed
+        probability: 0.1230 # 12.3%
+      - name: denovo_ligand_condensed
+        probability: 0.0200 # 2%
+      - name: ligand_conformer_condensed
+        probability: 0.0200 # 2%
+      - name: denovo_ligand_from_pharmacophore_condensed
+        probability: 0.0125 # 1.25%
+      - name: ligand_conformer_from_pharmacophore_condensed
+        probability: 0.0125 # 1.25%
+      - name: partial_denovo_ligand_condensed
+        probability: 0.0100 # 1%
+      - name: partial_ligand_conformer_condensed
+        probability: 0.0100 # 1%
