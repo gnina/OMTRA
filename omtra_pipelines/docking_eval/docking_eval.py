@@ -61,7 +61,7 @@ def parse_args():
     sampling.add_argument("--n_timesteps", type=int, default=250, help="Number of integration steps to take when sampling.")
     sampling.add_argument("--n_lig_atom_margin", type=float, default=0.075, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
     sampling.add_argument("--com_offset_magnitude", type=float, default=0.0, help="Magnitude of random offset applied to the ground-truth ligand center of mass used to define the pocket, before sampling. Set to 0 to disable.")
-    sampling.add_argument("--additional_prot_crop", type=float, default=None, help="Eval-time-only fixed pocket crop distance (Angstroms) from the ligand, applied uniformly regardless of the checkpoint's training-time crop settings. Matches Juhi's methodology for a matched-pocket-size comparison across dynamic-crop and non-dynamic-crop models. Leave unset to keep the existing behavior (crop settings inherited from the checkpoint's own training config).")
+    sampling.add_argument("--additional_prot_crop", type=float, default=None, help="Eval-time-only fixed pocket crop distance (Angstroms) from the ligand, applied uniformly regardless of the checkpoint's training-time crop settings. Allows a matched-pocket-size comparison across dynamic-crop and non-dynamic-crop models. Leave unset to keep the existing behavior (crop settings inherited from the checkpoint's own training config).")
 
     sampling.add_argument("--stochastic_sampling", action="store_true", help="If set, perform stochastic sampling.")
     sampling.add_argument('--pharm_input_noise_std', type=float, default=0.0, help='Simulate pharmacophore input errors with per-point sigma sampled from [0, value]; preserve clean evaluation references.')
